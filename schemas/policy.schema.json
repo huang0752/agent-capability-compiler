@@ -1,0 +1,108 @@
+{
+  "$defs": {
+    "RedactionRule": {
+      "additionalProperties": false,
+      "description": "A deterministic field redaction rule.",
+      "properties": {
+        "path": {
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "strategy": {
+          "enum": [
+            "remove",
+            "mask",
+            "hash"
+          ],
+          "title": "Strategy",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "strategy"
+      ],
+      "title": "RedactionRule",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Read authorization and disclosure policy for a capability.",
+  "properties": {
+    "denied_fields": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": "Denied Fields",
+      "type": "array"
+    },
+    "id": {
+      "minLength": 1,
+      "title": "Id",
+      "type": "string"
+    },
+    "readable_fields": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": "Readable Fields",
+      "type": "array"
+    },
+    "redaction_rules": {
+      "items": {
+        "$ref": "#/$defs/RedactionRule"
+      },
+      "title": "Redaction Rules",
+      "type": "array"
+    },
+    "required_scopes": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": "Required Scopes",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "tenant_field": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Tenant Field"
+    },
+    "tenant_mode": {
+      "enum": [
+        "none",
+        "required"
+      ],
+      "title": "Tenant Mode",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "id",
+    "required_scopes",
+    "tenant_mode",
+    "readable_fields",
+    "denied_fields",
+    "redaction_rules"
+  ],
+  "title": "Policy",
+  "type": "object"
+}

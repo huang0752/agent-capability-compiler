@@ -1,0 +1,158 @@
+{
+  "$defs": {
+    "ExpectedCall": {
+      "additionalProperties": false,
+      "description": "An operation invocation expected during an eval scenario.",
+      "properties": {
+        "arguments": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Arguments",
+          "type": "object"
+        },
+        "operation": {
+          "minLength": 1,
+          "title": "Operation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation",
+        "arguments"
+      ],
+      "title": "ExpectedCall",
+      "type": "object"
+    },
+    "ExpectedError": {
+      "additionalProperties": false,
+      "description": "A stable structured error expected from an eval scenario.",
+      "properties": {
+        "code": {
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "message_contains": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Message Contains"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "maximum": 599,
+              "minimum": 100,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Status"
+        }
+      },
+      "required": [
+        "code"
+      ],
+      "title": "ExpectedError",
+      "type": "object"
+    },
+    "JsonValue": {}
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A capability scenario backed by fake-system fixtures.",
+  "properties": {
+    "capability": {
+      "minLength": 1,
+      "title": "Capability",
+      "type": "string"
+    },
+    "expected_calls": {
+      "items": {
+        "$ref": "#/$defs/ExpectedCall"
+      },
+      "title": "Expected Calls",
+      "type": "array"
+    },
+    "expected_error": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ExpectedError"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "expected_output_schema": {
+      "anyOf": [
+        {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Expected Output Schema"
+    },
+    "fixtures": {
+      "additionalProperties": {
+        "$ref": "#/$defs/JsonValue"
+      },
+      "title": "Fixtures",
+      "type": "object"
+    },
+    "forbidden_fields": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": "Forbidden Fields",
+      "type": "array"
+    },
+    "id": {
+      "minLength": 1,
+      "title": "Id",
+      "type": "string"
+    },
+    "input": {
+      "additionalProperties": {
+        "$ref": "#/$defs/JsonValue"
+      },
+      "title": "Input",
+      "type": "object"
+    },
+    "schema_version": {
+      "const": "1",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "id",
+    "capability",
+    "input",
+    "fixtures",
+    "expected_calls",
+    "forbidden_fields"
+  ],
+  "title": "Eval",
+  "type": "object"
+}

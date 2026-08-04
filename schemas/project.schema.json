@@ -1,0 +1,122 @@
+{
+  "$defs": {
+    "ProjectIdentity": {
+      "additionalProperties": false,
+      "description": "Stable identity of an ACC project.",
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "version": {
+          "minLength": 1,
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "title": "ProjectIdentity",
+      "type": "object"
+    },
+    "ProviderConfig": {
+      "additionalProperties": false,
+      "description": "Reference to the target REST provider without embedding its URL.",
+      "properties": {
+        "base_url_ref": {
+          "minLength": 1,
+          "title": "Base Url Ref",
+          "type": "string"
+        },
+        "kind": {
+          "const": "http",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "base_url_ref"
+      ],
+      "title": "ProviderConfig",
+      "type": "object"
+    },
+    "RuntimeConfig": {
+      "additionalProperties": false,
+      "description": "Runtime transports emitted by the first ACC release.",
+      "properties": {
+        "transport": {
+          "items": {
+            "const": "stdio",
+            "type": "string"
+          },
+          "maxItems": 1,
+          "minItems": 1,
+          "title": "Transport",
+          "type": "array"
+        }
+      },
+      "required": [
+        "transport"
+      ],
+      "title": "RuntimeConfig",
+      "type": "object"
+    },
+    "SourceWorkspace": {
+      "additionalProperties": false,
+      "description": "Source system location, which milestone one always treats as read-only.",
+      "properties": {
+        "mode": {
+          "const": "read_only",
+          "title": "Mode",
+          "type": "string"
+        },
+        "path": {
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "mode"
+      ],
+      "title": "SourceWorkspace",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "An isolated ACC integration project.",
+  "properties": {
+    "project": {
+      "$ref": "#/$defs/ProjectIdentity"
+    },
+    "provider": {
+      "$ref": "#/$defs/ProviderConfig"
+    },
+    "runtime": {
+      "$ref": "#/$defs/RuntimeConfig"
+    },
+    "schema_version": {
+      "const": "1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_workspace": {
+      "$ref": "#/$defs/SourceWorkspace"
+    }
+  },
+  "required": [
+    "schema_version",
+    "project",
+    "source_workspace",
+    "runtime",
+    "provider"
+  ],
+  "title": "Project",
+  "type": "object"
+}

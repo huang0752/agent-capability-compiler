@@ -3,7 +3,7 @@
 | Milestone | Status | Verification |
 | --- | --- | --- |
 | 0 — workspace and architecture | Complete | `uv lock --check`; Ruff format/lint; mypy (28 files); pytest (4 passed) |
-| 1 — core models and validation | Pending | Pending |
+| 1 — core models and validation | Complete | Ruff format/lint; mypy (37 files); pytest (73 passed); CLI/schema smoke |
 | 2 — compiler and pack | Pending | Pending |
 | 3 — generic runtime | Pending | Pending |
 | 4 — eval and testkit | Pending | Pending |
@@ -22,3 +22,13 @@ This file records fresh command evidence at each milestone. A status changes to 
 - `uv run --frozen ruff check .` — all checks passed
 - `uv run --frozen mypy packages tests` — 28 source files, no issues
 - `uv run --frozen pytest` — 4 passed
+
+### 2026-08-04 — Milestone 1
+
+- TDD red evidence: model tests initially 25 failed; IO tests initially 19 failed; CLI tests initially 7 failed; project validation initially failed import
+- `uv run --frozen acc schema --output schemas --json` — six Draft 2020-12 schemas exported
+- `uv run --frozen acc --help` — `init`, `doctor`, `schema`, and `validate` registered
+- `uv run --frozen ruff format --check .` — 47 files already formatted
+- `uv run --frozen ruff check .` — all checks passed
+- `uv run --frozen mypy packages tests` — 37 source files, no issues
+- `uv run --frozen pytest` — 73 passed

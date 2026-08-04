@@ -382,7 +382,7 @@ uv run ruff format .
 | Milestone | 范围 | 当前状态 |
 | --- | --- | --- |
 | M0 | uv workspace、包骨架、README、LICENSE、ADR、CI、Ruff、mypy、pytest | 已完成 |
-| M1 | Core Models、Schema、`init`、`schema`、`validate` | 未完成 |
+| M1 | Core Models、Schema、`init`、`doctor`、`schema`、`validate` | 已完成 |
 | M2 | Workflow Compiler、Pack、可重复构建、`compile`、`pack`、`diff` | 未完成 |
 | M3 | Generic Runtime、REST Provider、MCP stdio、SecretRef、`run` | 未完成 |
 | M4 | Eval、Testkit、Fake System、Coverage、E2E | 未完成 |
