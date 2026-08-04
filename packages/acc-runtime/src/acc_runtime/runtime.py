@@ -204,7 +204,10 @@ class GenericRuntime:
             self.granted_scopes,
             self.tenant_id,
         )
-        result = await WorkflowExecutor(caller).execute(
+        # Capability output schemas are public contracts. Apply disclosure policy
+        # before validating them so an upstream-only field can never be required
+        # or advertised merely to make the raw workflow result validate.
+        result = await WorkflowExecutor(caller, validate_output=False).execute(
             self.ir,
             capability_id,
             cast(JsonValue, copy.deepcopy(dict(arguments))),

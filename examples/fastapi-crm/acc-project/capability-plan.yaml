@@ -1,0 +1,68 @@
+schema_version: "1"
+goal: Provide safe customer discovery, composed customer context, and overdue followup discovery.
+
+capabilities:
+  - id: search_customers
+    title: Search customers
+    business_outcome: Find tenant-visible customers by name, industry, or owner.
+    operation_dependencies: [crm.search_customers]
+    composition_reason: The source route already represents one business discovery operation.
+    agent_inputs: [query]
+    runtime_only_inputs: [base_url_ref, credential_ref, tenant_id]
+    policy: crm-search-read
+    evals:
+      positive: search-customers-positive
+      permission_negative: search-customers-scope-denied
+      empty: search-customers-empty
+    status: ready
+  - id: get_customer_context
+    title: Get customer context
+    business_outcome: Retrieve the customer, contacts, followups, and todos as one coherent view.
+    operation_dependencies:
+      - crm.get_customer
+      - crm.list_customer_contacts
+      - crm.list_customer_followups
+      - crm.list_customer_todos
+    composition_reason: Four lower-level interfaces are composed into one review-ready business context.
+    agent_inputs: [customer_id]
+    runtime_only_inputs: [base_url_ref, credential_ref, tenant_id]
+    policy: crm-context-read
+    evals:
+      positive: customer-context-positive
+      permission_negative: customer-context-scope-denied
+      empty: not_applicable
+      not_found: customer-context-not-found
+    status: ready
+  - id: find_overdue_followups
+    title: Find overdue followups
+    business_outcome: Find open tenant-visible followups before an explicit date.
+    operation_dependencies: [crm.find_overdue_followups]
+    composition_reason: The source route already implements the deterministic business filter.
+    agent_inputs: [as_of]
+    runtime_only_inputs: [base_url_ref, credential_ref, tenant_id]
+    policy: crm-followup-read
+    evals:
+      positive: overdue-followups-positive
+      permission_negative: overdue-followups-scope-denied
+      empty: overdue-followups-empty
+    status: ready
+
+coverage:
+  high_value_operations:
+    - crm.search_customers
+    - crm.get_customer
+    - crm.list_customer_contacts
+    - crm.list_customer_followups
+    - crm.list_customer_todos
+    - crm.find_overdue_followups
+  deliberately_excluded:
+    - item: write operations
+      reason: The source exposes no write route and ACC MVP is read-only.
+
+risks:
+  - risk: Tenant identifiers are present in upstream responses.
+    mitigation: Policy allowlists omit tenant_id and runtime injects tenant context.
+  - risk: Contact email is personal data.
+    mitigation: The composed context masks the email field and tests the disclosure boundary.
+
+open_questions: []

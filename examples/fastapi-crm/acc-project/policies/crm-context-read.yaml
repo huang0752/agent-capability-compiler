@@ -1,0 +1,33 @@
+schema_version: "1"
+id: crm-context-read
+required_scopes: [customer.read, contact.read, followup.read, todo.read]
+tenant_mode: required
+tenant_field: tenant_id
+readable_fields:
+  - customer.id
+  - customer.name
+  - customer.industry
+  - customer.owner
+  - contacts.id
+  - contacts.customer_id
+  - contacts.name
+  - contacts.email
+  - contacts.role
+  - followups.id
+  - followups.customer_id
+  - followups.summary
+  - followups.due_date
+  - followups.status
+  - todos.id
+  - todos.customer_id
+  - todos.title
+  - todos.due_date
+  - todos.completed
+denied_fields:
+  - customer.tenant_id
+  - contacts.tenant_id
+  - followups.tenant_id
+  - todos.tenant_id
+redaction_rules:
+  - path: contacts.email
+    strategy: mask

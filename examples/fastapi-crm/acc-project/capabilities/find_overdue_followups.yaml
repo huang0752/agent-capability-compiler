@@ -1,0 +1,36 @@
+schema_version: "1"
+id: find_overdue_followups
+title: Find overdue followups
+description: Find open followups due before an explicit date for the current tenant.
+input_schema:
+  type: object
+  additionalProperties: false
+  required: [as_of]
+  properties:
+    as_of: {type: string, format: date}
+output_schema:
+  type: array
+  maxItems: 100
+  items:
+    type: object
+    additionalProperties: false
+    required: [id, customer_id, summary, due_date, status]
+    properties:
+      id: {type: string}
+      customer_id: {type: string}
+      summary: {type: string}
+      due_date: {type: string, format: date}
+      status: {enum: [open, completed]}
+workflow:
+  - id: followups
+    call:
+      operation: crm.find_overdue_followups
+      arguments:
+        as_of: $.input.as_of
+  - emit:
+      value: $.steps.followups
+policy: crm-followup-read
+evals:
+  - overdue-followups-positive
+  - overdue-followups-empty
+  - overdue-followups-scope-denied

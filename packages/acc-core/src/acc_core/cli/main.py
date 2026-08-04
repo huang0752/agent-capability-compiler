@@ -9,11 +9,12 @@ import os
 import re
 import sys
 import tempfile
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Never, cast
 
 import yaml
+from pydantic import JsonValue
 
 from acc_core.compiler import compile_project
 from acc_core.compiler.diff import semantic_diff
@@ -608,9 +609,7 @@ async def _run_runtime_eval_report(
 ) -> Any:
     """Compose Eval with Runtime lazily so ``acc-core`` has no package cycle."""
 
-    from collections.abc import Mapping
-
-    from pydantic import JsonValue, ValidationError
+    from pydantic import ValidationError
 
     from acc_core.evals import RuntimeEvalRunner
     from acc_core.models import Project
@@ -633,20 +632,16 @@ async def _run_runtime_eval_report(
     )
     runtime_ir = compiled_ir
     loaded_pack = None
+    context = _EvalRuntimeContext(
+        granted_scopes=_runtime_scopes(()),
+        tenant_id=os.environ.get("ACC_TENANT_ID"),
+    )
     if through_mcp:
         with tempfile.TemporaryDirectory(prefix="acc-e2e-") as temporary_directory:
             pack_path = Path(temporary_directory) / "eval.accpkg"
             build_pack(project_root, pack_path, compiled_ir=compiled_ir)
             loaded_pack = load_pack(pack_path)
             runtime_ir = cast(dict[str, Any], loaded_pack.ir)
-            runtime = GenericRuntime(
-                runtime_ir,
-                provider=provider,
-                granted_scopes=_runtime_scopes(()),
-                tenant_id=os.environ.get("ACC_TENANT_ID"),
-                loaded_pack=loaded_pack,
-            )
-            adapter = CapabilityMcpServer(runtime)
 
             class McpCaller:
                 async def call(
@@ -654,6 +649,15 @@ async def _run_runtime_eval_report(
                     capability_id: str,
                     input_data: Mapping[str, JsonValue],
                 ) -> JsonValue:
+                    granted_scopes, tenant_id = context.take()
+                    runtime = GenericRuntime(
+                        runtime_ir,
+                        provider=provider,
+                        granted_scopes=granted_scopes,
+                        tenant_id=tenant_id,
+                        loaded_pack=loaded_pack,
+                    )
+                    adapter = CapabilityMcpServer(runtime)
                     result = await adapter.call_tool(capability_id, input_data)
                     structured = result.structuredContent or {}
                     if result.isError:
@@ -670,17 +674,71 @@ async def _run_runtime_eval_report(
 
             return await RuntimeEvalRunner(
                 McpCaller(),
+                fixture_loader=context,
                 call_recorder=provider,
             ).run(runtime_ir)
 
-    runtime = GenericRuntime(
-        runtime_ir,
-        provider=provider,
-        granted_scopes=_runtime_scopes(()),
-        tenant_id=os.environ.get("ACC_TENANT_ID"),
-        loaded_pack=loaded_pack,
-    )
-    return await RuntimeEvalRunner(runtime, call_recorder=provider).run(runtime_ir)
+    class RuntimeCaller:
+        async def call(
+            self,
+            capability_id: str,
+            input_data: Mapping[str, JsonValue],
+        ) -> JsonValue:
+            granted_scopes, tenant_id = context.take()
+            runtime = GenericRuntime(
+                runtime_ir,
+                provider=provider,
+                granted_scopes=granted_scopes,
+                tenant_id=tenant_id,
+                loaded_pack=loaded_pack,
+            )
+            return await runtime.call(capability_id, input_data)
+
+    return await RuntimeEvalRunner(
+        RuntimeCaller(),
+        fixture_loader=context,
+        call_recorder=provider,
+    ).run(runtime_ir)
+
+
+class _EvalRuntimeContext:
+    """Strict, non-secret runtime context fixture for one eval case."""
+
+    def __init__(self, *, granted_scopes: frozenset[str], tenant_id: str | None) -> None:
+        self._default_scopes = granted_scopes
+        self._default_tenant = tenant_id
+        self._next_scopes = granted_scopes
+        self._next_tenant = tenant_id
+
+    def take(self) -> tuple[frozenset[str], str | None]:
+        """Consume one case override so it cannot leak into a later eval."""
+
+        result = self._next_scopes, self._next_tenant
+        self._next_scopes = self._default_scopes
+        self._next_tenant = self._default_tenant
+        return result
+
+    async def load(self, fixtures: Mapping[str, JsonValue]) -> None:
+        if set(fixtures) != {"runtime_context"}:
+            raise ValueError("CLI eval fixtures permit only runtime_context")
+        raw_context = fixtures.get("runtime_context")
+        if not isinstance(raw_context, Mapping) or set(raw_context) - {
+            "granted_scopes",
+            "tenant_id",
+        }:
+            raise ValueError("runtime_context contains unsupported fields")
+
+        raw_scopes = raw_context.get("granted_scopes")
+        if not isinstance(raw_scopes, list) or not all(
+            isinstance(scope, str) and scope for scope in raw_scopes
+        ):
+            raise ValueError("runtime_context.granted_scopes must be a string array")
+        raw_tenant = raw_context.get("tenant_id")
+        if raw_tenant is not None and not isinstance(raw_tenant, str):
+            raise ValueError("runtime_context.tenant_id must be a string or null")
+
+        self._next_scopes = frozenset(cast(list[str], raw_scopes))
+        self._next_tenant = raw_tenant
 
 
 class _McpEvalFailure(Exception):

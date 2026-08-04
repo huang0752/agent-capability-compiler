@@ -5,7 +5,7 @@ ACC 是一个**零代码侵入式 Agent 能力接入工具链**。它帮助 Codi
 ACC 不修改已有业务系统，不要求业务系统嵌入 Agent SDK 或接入 MCP。运行时只访问已有 REST API，或访问独立部署的旁路 Adapter。
 
 > [!IMPORTANT]
-> 本项目正在从零实现首个 MVP。下文同时描述已确定的产品契约和目标使用方式；它不表示所有命令已经可用。请先查看[开发状态](#开发状态)，不要将未完成的里程碑用于生产环境。
+> 首个 MVP 已完成本地端到端验收，但尚不代表生产发布或生产安全认证。请结合[开发状态](#开发状态)、示例交接报告和后续发布说明判断使用范围。
 
 ## 为什么需要 ACC
 
@@ -101,7 +101,7 @@ uv sync --all-packages --group dev
 uv run acc --help
 ```
 
-在首个可用版本中，一个典型的只读接入流程将是：
+当前 MVP 的典型只读接入流程如下：
 
 ```bash
 # 在独立目录创建 ACC 项目；不要在原系统目录中生成文件
@@ -127,7 +127,7 @@ acc pack --json
 acc run example-crm-0.1.0.accpkg
 ```
 
-以上 ACC 命令的可用性取决于对应里程碑；当前检出版本请以 `uv run acc --help` 和[开发状态](#开发状态)为准。开发仓库中也可以统一写成 `uv run acc ...`。
+以上命令均已在当前检出版本实现；开发仓库中可以统一写成 `uv run acc ...`。
 
 ## CLI 契约
 
@@ -336,7 +336,7 @@ Fake CRM 覆盖客户、联系人、跟进记录、待办、Bearer 认证、Scop
 | `get_customer_context` | 组合客户、联系人、跟进与待办等多个底层 Operation |
 | `find_overdue_followups` | 查找当前租户内逾期且允许读取的跟进事项 |
 
-完整验收需要同时覆盖正常、空数据、404、403、跨租户拒绝、字段脱敏、超时、响应过大、错误映射，以及 MCP `tools/list` 和 `tools/call`。在 Milestone 6 完成前，此目录和上述能力属于验收目标，不应被视为已经跑通的生产示例。
+完整本地验收覆盖正常、空数据、404、403、跨租户拒绝、字段脱敏、超时、响应过大、错误映射，以及 MCP `tools/list` 和 `tools/call`。验证证据与限制见 `examples/fastapi-crm/acc-project/HANDOFF.md`；该结果不代表生产部署已完成。
 
 ## 开发
 
@@ -349,16 +349,16 @@ uv sync --all-packages --group dev
 常用质量门禁：
 
 ```bash
-uv run ruff format --check .
-uv run ruff check .
-uv run mypy packages tests
+uv run ruff format --check packages tests skills
+uv run ruff check packages tests skills
+uv run mypy packages tests skills/acc-engineer/scripts
 uv run pytest
 ```
 
 如需自动格式化：
 
 ```bash
-uv run ruff format .
+uv run ruff format packages tests skills
 ```
 
 每个 Milestone 完成后都应运行完整测试、lint 和类型检查，并检查 `git diff`。提交应保持单一目的；不要把多个里程碑压入一个提交。
@@ -387,13 +387,13 @@ uv run ruff format .
 | M3 | Generic Runtime、REST Provider、MCP stdio、SecretRef、`run` | 已完成 |
 | M4 | Eval、Testkit、Fake System、Coverage、E2E | 已完成 |
 | M5 | 完整 ACC Engineer Skill | 已完成 |
-| M6 | FastAPI CRM 端到端验收 | 未完成 |
+| M6 | FastAPI CRM 端到端验收 | 已完成 |
 
 更细的检出版本进度记录在 `docs/progress.md`。生产可用性必须以发布说明、对应 Pack/Runtime 测试证据和安全评审为准。
 
 ## 路线图原则
 
-首个 MVP 完成后再评估写操作、更多 Provider 或分发能力。在此之前，以下规则保持不变：运行期无 LLM、原系统零代码修改、正式 Operation 必须证据绑定、Runtime 通用且确定、生产写入为零。
+后续版本再评估写操作、更多 Provider 或分发能力。在此之前，以下规则保持不变：运行期无 LLM、原系统零代码修改、正式 Operation 必须证据绑定、Runtime 通用且确定、生产写入为零。
 
 ## License
 

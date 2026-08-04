@@ -1,0 +1,13 @@
+schema_version: '1'
+project:
+  id: fastapi-crm
+  version: 0.1.0
+source_workspace:
+  path: ../system
+  mode: read_only
+runtime:
+  transport:
+  - stdio
+provider:
+  kind: http
+  base_url_ref: CRM_BASE_URL

@@ -1,0 +1,47 @@
+{
+  "artifact_kind": "acc_engineer_test_report",
+  "status": "passed_with_documented_risks",
+  "acc_suites": [
+    {"command": "acc test contract --json", "total": 9, "passed": 9, "failed": 0},
+    {"command": "acc test runtime --json", "total": 9, "passed": 9, "failed": 0},
+    {"command": "acc test e2e --json", "total": 9, "passed": 9, "failed": 0}
+  ],
+  "repository_gates": {
+    "pytest": {"total": 281, "passed": 281, "failed": 0},
+    "ruff_format": {"files_checked": 84, "passed": true},
+    "ruff_lint": {"passed": true},
+    "mypy": {"source_files": 84, "passed": true},
+    "uv_lock_check": {"passed": true}
+  },
+  "source_system_gates": {
+    "pytest": {"total": 34, "passed": 34, "failed": 0},
+    "ruff_lint": {"passed": true},
+    "mypy": {"source_files": 6, "passed": true}
+  },
+  "acceptance_checks": {
+    "real_rest_system": true,
+    "pack_loaded": true,
+    "mcp_stdio_tools_list": true,
+    "mcp_stdio_tools_call": true,
+    "secret_ref_only": true,
+    "token_in_tool_arguments": false,
+    "token_in_mcp_stderr": false,
+    "output_schema_enforced_after_policy": true,
+    "stable_404": true,
+    "stable_403": true,
+    "stable_timeout": true,
+    "stable_oversize": true,
+    "llm_runtime_calls": 0
+  },
+  "deterministic_pack": {
+    "builds": 2,
+    "byte_identical": true,
+    "sha256": "d6670760bc1d690f6e34e57cc9dff029c258f91a4912486fd7032345724fc6ae"
+  },
+  "resolved_iterations": [
+    "Runtime eval fixtures initially lacked per-case scope and tenant context; a strict runtime_context fixture was added and tested.",
+    "Hidden tenant input was initially required before runtime injection; schemas now constrain it without exposing it as an Agent input.",
+    "Raw workflow output was initially checked against the public schema before policy filtering; GenericRuntime now filters first and then validates the public contract.",
+    "An initial freeze invocation omitted the required operation id; all six operations were subsequently frozen individually."
+  ]
+}

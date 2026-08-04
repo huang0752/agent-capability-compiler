@@ -1,0 +1,8 @@
+schema_version: "1"
+id: crm-search-read
+required_scopes: [customer.read]
+tenant_mode: required
+tenant_field: tenant_id
+readable_fields: [id, name, industry, owner]
+denied_fields: [tenant_id]
+redaction_rules: []

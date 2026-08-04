@@ -115,6 +115,7 @@ dev = [
     { name = "ruff" },
     { name = "types-jsonschema" },
     { name = "types-pyyaml" },
+    { name = "uvicorn" },
 ]
 
 [package.metadata]
@@ -134,6 +135,7 @@ dev = [
     { name = "ruff", specifier = ">=0.9,<1" },
     { name = "types-jsonschema", specifier = ">=4.23" },
     { name = "types-pyyaml", specifier = ">=6" },
+    { name = "uvicorn", specifier = ">=0.52,<1" },
 ]
 
 [[package]]

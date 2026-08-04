@@ -1,0 +1,15 @@
+schema_version: "1"
+id: search-customers-empty
+capability: search_customers
+input: {query: no-such-customer}
+fixtures:
+  runtime_context:
+    granted_scopes: [customer.read]
+    tenant_id: tenant-a
+expected_calls:
+  - operation: crm.search_customers
+    arguments: {query: no-such-customer, tenant_id: tenant-a}
+expected_output_schema:
+  type: array
+  maxItems: 0
+forbidden_fields: [tenant_id]

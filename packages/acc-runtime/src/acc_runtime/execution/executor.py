@@ -84,8 +84,14 @@ class _ExecutionContext:
 class WorkflowExecutor:
     """Execute one capability from deterministic compiler IR."""
 
-    def __init__(self, operation_caller: AsyncOperationCaller) -> None:
+    def __init__(
+        self,
+        operation_caller: AsyncOperationCaller,
+        *,
+        validate_output: bool = True,
+    ) -> None:
         self._operation_caller = operation_caller
+        self._validate_output = validate_output
 
     async def execute(
         self,
@@ -128,13 +134,14 @@ class WorkflowExecutor:
             capability_id,
         )
         safe_result = _copy_json(result, code="ACC_RUNTIME_OUTPUT_INVALID")
-        _validate_schema(
-            capability.get("output_schema"),
-            safe_result,
-            code="ACC_RUNTIME_OUTPUT_INVALID",
-            capability_id=capability_id,
-            schema_role="capability_output",
-        )
+        if self._validate_output:
+            _validate_schema(
+                capability.get("output_schema"),
+                safe_result,
+                code="ACC_RUNTIME_OUTPUT_INVALID",
+                capability_id=capability_id,
+                schema_role="capability_output",
+            )
         return safe_result
 
     async def _run_workflow(

@@ -8,7 +8,7 @@
 | 3 — generic runtime | Complete | Ruff format/lint; mypy (56 files); pytest (182 passed); real MCP stdio handshake |
 | 4 — eval and testkit | Complete | Ruff format/lint; mypy (77 files); pytest (252 passed); runtime and pack/MCP E2E CLI |
 | 5 — engineer skill | Complete | skill-creator validation; Ruff/mypy; pytest (274 passed); independent Phase 0–3 forward test |
-| 6 — CRM acceptance | Pending | Pending |
+| 6 — CRM acceptance | Complete | ACC gates 9/9 each; source 34 passed; repository 281 passed; deterministic Pack and real MCP stdio |
 
 This file records fresh command evidence at each milestone. A status changes to complete only after its focused tests, the full test suite, lint, type checking, diff review, and milestone commit have succeeded.
 
@@ -80,3 +80,15 @@ This file records fresh command evidence at each milestone. A status changes to 
 - `uv run pytest -q` — 274 passed
 - Independent minimal-context forward test completed Phases 0–3 against an unfamiliar read-only adapter package, produced a source-stable blocked plan, and correctly refused implementation without user-goal/auth/scope/tenant evidence
 - Forward-test findings were incorporated: explicit `acc init` cold start, Python 3 invocation, canonical macOS paths, preflight/coverage-baseline templates, conditional permission-negative/empty scenarios, blocked-plan semantics, and whole-file evidence digest documentation
+
+### 2026-08-04 — Milestone 6
+
+- Applied `skills/acc-engineer` through Preflight, Analyze, Model, Plan, Implement, Validate, Test, Refine, and Handoff against an independent synthetic FastAPI CRM
+- Source system: six GET-only routes, Bearer auth, four read scopes, token/request tenant equality, strict response models, synthetic A/B tenant data, runtime OpenAPI checks, and 34 passing isolated tests
+- ACC project: six frozen evidence-bound Operations, three Policies, nine Evals, and three business capabilities; `get_customer_context` composes customer, contacts, followups, and todos
+- `acc validate --json` and `acc compile --check --json` passed; Coverage has no orphans or missing eval/permission-negative coverage and retains two documented low-risk one-interface heuristics
+- Contract, Runtime, and E2E CLI suites each passed 9/9 against the real local CRM HTTP boundary
+- E2E tests verify policy-before-public-schema validation, masked contact email, omitted tenant fields, stable 404/403/timeout/oversize errors, SecretRef isolation, and real MCP stdio list/call
+- Two CLI-built Packs were byte-identical with SHA-256 `d6670760bc1d690f6e34e57cc9dff029c258f91a4912486fd7032345724fc6ae`
+- Final source snapshot matched the Preflight digest with zero source changes; formal Operations without Evidence: 0; invented endpoints: 0; runtime LLM calls: 0
+- `uv lock --check`; Ruff format/lint; strict mypy; repository `pytest -q` — 281 passed

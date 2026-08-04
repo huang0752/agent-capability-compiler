@@ -1,0 +1,95 @@
+schema_version: "1"
+id: get_customer_context
+title: Get customer context
+description: Compose a customer, contacts, followups, and todos into one tenant-safe context.
+input_schema:
+  type: object
+  additionalProperties: false
+  required: [customer_id]
+  properties:
+    customer_id: {type: string, minLength: 1}
+output_schema:
+  type: object
+  additionalProperties: false
+  required: [customer, contacts, followups, todos]
+  properties:
+    customer:
+      type: object
+      additionalProperties: false
+      required: [id, name, industry, owner]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        industry: {type: string}
+        owner: {type: string}
+    contacts:
+      type: array
+      maxItems: 100
+      items:
+        type: object
+        additionalProperties: false
+        required: [id, customer_id, name, email, role]
+        properties:
+          id: {type: string}
+          customer_id: {type: string}
+          name: {type: string}
+          email: {type: string}
+          role: {type: string}
+    followups:
+      type: array
+      maxItems: 100
+      items:
+        type: object
+        additionalProperties: false
+        required: [id, customer_id, summary, due_date, status]
+        properties:
+          id: {type: string}
+          customer_id: {type: string}
+          summary: {type: string}
+          due_date: {type: string, format: date}
+          status: {enum: [open, completed]}
+    todos:
+      type: array
+      maxItems: 100
+      items:
+        type: object
+        additionalProperties: false
+        required: [id, customer_id, title, due_date, completed]
+        properties:
+          id: {type: string}
+          customer_id: {type: string}
+          title: {type: string}
+          due_date: {type: string, format: date}
+          completed: {type: boolean}
+workflow:
+  - id: customer
+    call:
+      operation: crm.get_customer
+      arguments:
+        customer_id: $.input.customer_id
+  - id: contacts
+    call:
+      operation: crm.list_customer_contacts
+      arguments:
+        customer_id: $.input.customer_id
+  - id: followups
+    call:
+      operation: crm.list_customer_followups
+      arguments:
+        customer_id: $.input.customer_id
+  - id: todos
+    call:
+      operation: crm.list_customer_todos
+      arguments:
+        customer_id: $.input.customer_id
+  - emit:
+      value:
+        customer: $.steps.customer
+        contacts: $.steps.contacts
+        followups: $.steps.followups
+        todos: $.steps.todos
+policy: crm-context-read
+evals:
+  - customer-context-positive
+  - customer-context-not-found
+  - customer-context-scope-denied

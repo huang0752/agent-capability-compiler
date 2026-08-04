@@ -1,0 +1,22 @@
+{
+  "command": "coverage",
+  "diagnostics": [],
+  "ok": true,
+  "result": {
+    "capabilities_without_evals": [],
+    "capabilities_without_negative_evals": [],
+    "capabilities_without_permission_negative_evals": [],
+    "coverage_version": "1",
+    "one_interface_one_tool_risks": [
+      "find_overdue_followups",
+      "search_customers"
+    ],
+    "orphan_operations": [],
+    "summary": {
+      "capabilities": 3,
+      "evals": 9,
+      "findings": 2,
+      "operations": 6
+    }
+  }
+}

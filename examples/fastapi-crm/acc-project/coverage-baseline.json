@@ -1,0 +1,24 @@
+{
+  "artifact_kind": "phase_3_planning_baseline",
+  "status": "ready",
+  "note": "This planning artifact is not acc coverage --json output.",
+  "candidate_operations": {
+    "total": 6,
+    "planned": [
+      "crm.find_overdue_followups",
+      "crm.get_customer",
+      "crm.list_customer_contacts",
+      "crm.list_customer_followups",
+      "crm.list_customer_todos",
+      "crm.search_customers"
+    ],
+    "deliberately_excluded": []
+  },
+  "planned_capabilities": {
+    "total": 3,
+    "positive_evals": 3,
+    "not_found_or_empty_evals": 3,
+    "permission_negative_evals": 3
+  },
+  "blocking_gaps": []
+}

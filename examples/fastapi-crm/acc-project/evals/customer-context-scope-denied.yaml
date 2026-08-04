@@ -1,0 +1,13 @@
+schema_version: "1"
+id: customer-context-scope-denied
+capability: get_customer_context
+input: {customer_id: cust-a-001}
+fixtures:
+  runtime_context:
+    granted_scopes: [customer.read, contact.read, followup.read]
+    tenant_id: tenant-a
+expected_calls: []
+expected_error:
+  code: ACC_RUNTIME_POLICY_SCOPE_DENIED
+  status: 403
+forbidden_fields: [tenant_id]

@@ -1,0 +1,78 @@
+schema_version: '1'
+id: crm.search_customers
+title: Search customers
+kind: http
+input_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    query:
+      type:
+      - string
+      - 'null'
+      maxLength: 100
+    tenant_id:
+      type: string
+      minLength: 1
+output_schema:
+  type: array
+  maxItems: 100
+  items:
+    type: object
+    additionalProperties: false
+    required:
+    - id
+    - tenant_id
+    - name
+    - industry
+    - owner
+    properties:
+      id:
+        type: string
+      tenant_id:
+        type: string
+      name:
+        type: string
+      industry:
+        type: string
+      owner:
+        type: string
+http:
+  method: GET
+  path: /customers
+  path_parameters: {}
+  query_parameters:
+    q: query
+    tenant_id: tenant_id
+  credential_ref: CRM_DEMO_TOKEN
+  scopes:
+  - customer.read
+  timeout_seconds: 5
+  max_response_bytes: 32768
+safety:
+  effect: read
+evidence:
+- source_id: crm-app-search
+  kind: source_file
+  path: src/fastapi_crm_system/app.py
+  line_start: 50
+  line_end: 68
+  digest: sha256:ecb11507024ad7fd9324a741a08d6265452beb5bd5177a3ff465c60c0798aeb0
+- source_id: crm-auth-policy
+  kind: source_file
+  path: src/fastapi_crm_system/auth.py
+  line_start: 12
+  line_end: 90
+  digest: sha256:edde4365158b2786bdf027515c45707d1855ddcc6ea1c3bc9c4198a5bddbce7e
+- source_id: crm-response-models
+  kind: source_file
+  path: src/fastapi_crm_system/models.py
+  line_start: 15
+  line_end: 20
+  digest: sha256:b32c4a9392f0d7bc1ef94bc53d129a0d738cdeca90aed71b3d3ce7b584731ad7
+- source_id: crm-route-tests
+  kind: source_file
+  path: tests/test_app.py
+  line_start: 77
+  line_end: 101
+  digest: sha256:3496fd968a3eec360539e43d7f691f5d52ac0fbd7207bc5e0c915b6d35c39450

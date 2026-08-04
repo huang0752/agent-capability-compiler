@@ -1,0 +1,8 @@
+schema_version: "1"
+id: crm-followup-read
+required_scopes: [followup.read]
+tenant_mode: required
+tenant_field: tenant_id
+readable_fields: [id, customer_id, summary, due_date, status]
+denied_fields: [tenant_id]
+redaction_rules: []

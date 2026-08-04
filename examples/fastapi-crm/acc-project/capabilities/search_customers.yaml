@@ -1,0 +1,35 @@
+schema_version: "1"
+id: search_customers
+title: Search customers
+description: Find customers visible to the current tenant by name, industry, or owner.
+input_schema:
+  type: object
+  additionalProperties: false
+  required: [query]
+  properties:
+    query: {type: [string, "null"], maxLength: 100}
+output_schema:
+  type: array
+  maxItems: 100
+  items:
+    type: object
+    additionalProperties: false
+    required: [id, name, industry, owner]
+    properties:
+      id: {type: string}
+      name: {type: string}
+      industry: {type: string}
+      owner: {type: string}
+workflow:
+  - id: customers
+    call:
+      operation: crm.search_customers
+      arguments:
+        query: $.input.query
+  - emit:
+      value: $.steps.customers
+policy: crm-search-read
+evals:
+  - search-customers-positive
+  - search-customers-empty
+  - search-customers-scope-denied

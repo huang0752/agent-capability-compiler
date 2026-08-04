@@ -1,0 +1,27 @@
+schema_version: "1"
+id: customer-context-positive
+capability: get_customer_context
+input: {customer_id: cust-a-001}
+fixtures:
+  runtime_context:
+    granted_scopes: [customer.read, contact.read, followup.read, todo.read]
+    tenant_id: tenant-a
+expected_calls:
+  - operation: crm.get_customer
+    arguments: {customer_id: cust-a-001, tenant_id: tenant-a}
+  - operation: crm.list_customer_contacts
+    arguments: {customer_id: cust-a-001, tenant_id: tenant-a}
+  - operation: crm.list_customer_followups
+    arguments: {customer_id: cust-a-001, tenant_id: tenant-a}
+  - operation: crm.list_customer_todos
+    arguments: {customer_id: cust-a-001, tenant_id: tenant-a}
+expected_output_schema:
+  type: object
+  additionalProperties: false
+  required: [customer, contacts, followups, todos]
+  properties:
+    customer: {type: object}
+    contacts: {type: array, minItems: 1}
+    followups: {type: array, minItems: 1}
+    todos: {type: array, minItems: 1}
+forbidden_fields: [tenant_id]

@@ -1,0 +1,118 @@
+schema_version: "1"
+system:
+  id: synthetic-fastapi-crm
+  name: Synthetic FastAPI CRM
+  source_workspace:
+    path: ../system
+    mode: read_only
+
+evidence_sources:
+  - id: crm-app
+    kind: source_file
+    location: src/fastapi_crm_system/app.py
+  - id: crm-auth
+    kind: source_file
+    location: src/fastapi_crm_system/auth.py
+  - id: crm-models
+    kind: source_file
+    location: src/fastapi_crm_system/models.py
+  - id: crm-tests
+    kind: source_file
+    location: tests/test_app.py
+
+domains:
+  - id: crm
+    purpose: Read-only customer relationship context and followup tracking.
+
+entities:
+  - id: customer
+    domain: crm
+    evidence_sources: [crm-models]
+  - id: contact
+    domain: crm
+    evidence_sources: [crm-models]
+  - id: followup
+    domain: crm
+    evidence_sources: [crm-models]
+  - id: todo
+    domain: crm
+    evidence_sources: [crm-models]
+
+candidate_operations:
+  - id: crm.search_customers
+    purpose: Search customers visible to the authenticated tenant.
+    method: GET
+    path: /customers
+    permission:
+      scopes: [customer.read]
+      tenant_boundary: Request tenant must equal the tenant derived from the Bearer token.
+    evidence_sources: [crm-app, crm-auth, crm-tests]
+    confirmation: confirmed
+  - id: crm.get_customer
+    purpose: Retrieve one tenant-visible customer.
+    method: GET
+    path: /customers/{customer_id}
+    permission:
+      scopes: [customer.read]
+      tenant_boundary: Request tenant must equal token tenant; cross-tenant records resolve as 404.
+    evidence_sources: [crm-app, crm-auth, crm-tests]
+    confirmation: confirmed
+  - id: crm.list_customer_contacts
+    purpose: List contacts for one tenant-visible customer.
+    method: GET
+    path: /customers/{customer_id}/contacts
+    permission:
+      scopes: [contact.read]
+      tenant_boundary: Request tenant must equal token tenant and the parent customer must be visible.
+    evidence_sources: [crm-app, crm-auth, crm-tests]
+    confirmation: confirmed
+  - id: crm.list_customer_followups
+    purpose: List followups for one tenant-visible customer.
+    method: GET
+    path: /customers/{customer_id}/followups
+    permission:
+      scopes: [followup.read]
+      tenant_boundary: Request tenant must equal token tenant and the parent customer must be visible.
+    evidence_sources: [crm-app, crm-auth, crm-tests]
+    confirmation: confirmed
+  - id: crm.list_customer_todos
+    purpose: List todos for one tenant-visible customer.
+    method: GET
+    path: /customers/{customer_id}/todos
+    permission:
+      scopes: [todo.read]
+      tenant_boundary: Request tenant must equal token tenant and the parent customer must be visible.
+    evidence_sources: [crm-app, crm-auth, crm-tests]
+    confirmation: confirmed
+  - id: crm.find_overdue_followups
+    purpose: Find open followups due before a caller-supplied deterministic date.
+    method: GET
+    path: /followups/overdue
+    permission:
+      scopes: [followup.read]
+      tenant_boundary: Request tenant must equal the tenant derived from the Bearer token.
+    evidence_sources: [crm-app, crm-auth, crm-tests]
+    confirmation: confirmed
+
+relationships:
+  - from: customer
+    to: contact
+    evidence_sources: [crm-models, crm-app]
+  - from: customer
+    to: followup
+    evidence_sources: [crm-models, crm-app]
+  - from: customer
+    to: todo
+    evidence_sources: [crm-models, crm-app]
+
+existing_tests:
+  - path: tests/test_app.py
+    covers:
+      - crm.search_customers
+      - crm.get_customer
+      - crm.list_customer_contacts
+      - crm.list_customer_followups
+      - crm.list_customer_todos
+      - crm.find_overdue_followups
+
+unconfirmed: []

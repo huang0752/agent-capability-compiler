@@ -1,0 +1,15 @@
+schema_version: "1"
+id: overdue-followups-empty
+capability: find_overdue_followups
+input: {as_of: "2026-01-01"}
+fixtures:
+  runtime_context:
+    granted_scopes: [followup.read]
+    tenant_id: tenant-a
+expected_calls:
+  - operation: crm.find_overdue_followups
+    arguments: {as_of: "2026-01-01", tenant_id: tenant-a}
+expected_output_schema:
+  type: array
+  maxItems: 0
+forbidden_fields: [tenant_id]

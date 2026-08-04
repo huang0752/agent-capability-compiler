@@ -1,0 +1,16 @@
+{
+  "algorithm": "sha256",
+  "digest": "sha256:fc9ef130276ca53951bf651ed6718469bf3db7267e499277e2072d945cb5c498",
+  "files": [
+    {"path": "README.md", "sha256": "sha256:907577c9306e5704f97744aac3dc08af647727f098d294ffa4faf453e3ebe642", "size": 906},
+    {"path": "pyproject.toml", "sha256": "sha256:aa0375955c7351b4da9368f994ef037779eaf69e696930b9c3f26ea9b7a3a599", "size": 980},
+    {"path": "src/fastapi_crm_system/__init__.py", "sha256": "sha256:fd9f4f53b066b40d4c791ba76d056600229555c8dfdb8e2e94dda53d51583040", "size": 114},
+    {"path": "src/fastapi_crm_system/app.py", "sha256": "sha256:ecb11507024ad7fd9324a741a08d6265452beb5bd5177a3ff465c60c0798aeb0", "size": 4425},
+    {"path": "src/fastapi_crm_system/auth.py", "sha256": "sha256:edde4365158b2786bdf027515c45707d1855ddcc6ea1c3bc9c4198a5bddbce7e", "size": 3398},
+    {"path": "src/fastapi_crm_system/data.py", "sha256": "sha256:1d6ac446c2b62bda895aa89b61453cb5fcb8addcaf9332710aed7950fe067331", "size": 2301},
+    {"path": "src/fastapi_crm_system/models.py", "sha256": "sha256:b32c4a9392f0d7bc1ef94bc53d129a0d738cdeca90aed71b3d3ce7b584731ad7", "size": 870},
+    {"path": "tests/test_app.py", "sha256": "sha256:3496fd968a3eec360539e43d7f691f5d52ac0fbd7207bc5e0c915b6d35c39450", "size": 6091}
+  ],
+  "sensitive_paths": [],
+  "symlinks": []
+}

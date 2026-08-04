@@ -146,16 +146,28 @@ def _make_project(root: Path) -> Path:
             "evals": ["normal", "forbidden"],
         },
     )
-    for eval_id, expected in (
-        ("normal", {"expected_output_schema": {"type": "object"}}),
+    for eval_id, expected, runtime_context, expected_calls in (
+        (
+            "normal",
+            {"expected_output_schema": {"type": "object"}},
+            {"granted_scopes": ["customer.read"], "tenant_id": "tenant-a"},
+            [
+                {
+                    "operation": "crm.get_customer",
+                    "arguments": {"customer_id": "c-1", "tenant_id": "tenant-a"},
+                }
+            ],
+        ),
         (
             "forbidden",
             {
                 "expected_error": {
-                    "code": "ACC_RUNTIME_HTTP_FORBIDDEN",
+                    "code": "ACC_RUNTIME_POLICY_SCOPE_DENIED",
                     "status": 403,
                 }
             },
+            {"granted_scopes": [], "tenant_id": "tenant-a"},
+            [],
         ),
     ):
         _write_yaml(
@@ -165,13 +177,8 @@ def _make_project(root: Path) -> Path:
                 "id": eval_id,
                 "capability": "get_customer",
                 "input": {"customer_id": "c-1"},
-                "fixtures": {},
-                "expected_calls": [
-                    {
-                        "operation": "crm.get_customer",
-                        "arguments": {"customer_id": "c-1", "tenant_id": "tenant-a"},
-                    }
-                ],
+                "fixtures": {"runtime_context": runtime_context},
+                "expected_calls": expected_calls,
                 "forbidden_fields": ["internal_note"],
                 **expected,
             },
@@ -254,25 +261,17 @@ def test_contract_eval_cli_returns_structured_case_report(tmp_path: Path) -> Non
 
 @contextmanager
 def _fake_crm_server() -> Iterator[str]:
-    call_count = 0
-
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
-            nonlocal call_count
-            call_count += 1
             if self.headers.get("authorization") != "Bearer test-token":
                 self.send_response(401)
                 self.end_headers()
                 return
-            if call_count % 2 == 1:
-                body = b'{"error":{"code":"FORBIDDEN"}}'
-                self.send_response(403)
-            else:
-                body = (
-                    b'{"id":"c-1","name":"Example","tenant_id":"tenant-a",'
-                    b'"internal_note":"must-be-filtered"}'
-                )
-                self.send_response(200)
+            body = (
+                b'{"id":"c-1","name":"Example","tenant_id":"tenant-a",'
+                b'"internal_note":"must-be-filtered"}'
+            )
+            self.send_response(200)
             self.send_header("content-type", "application/json")
             self.send_header("content-length", str(len(body)))
             self.end_headers()

@@ -1,0 +1,40 @@
+{
+  "artifact_kind": "acc_engineer_risk_report",
+  "status": "review_ready",
+  "high_severity_unresolved": 0,
+  "risks": [
+    {
+      "area": "capability_design",
+      "severity": "low",
+      "status": "accepted",
+      "risk": "Coverage flags search_customers and find_overdue_followups as one-interface-one-tool candidates.",
+      "mitigation": "Both source routes already implement business-level queries. Artificial composition would add low-value N+1 calls; the composed get_customer_context capability covers the multi-interface context goal."
+    },
+    {
+      "area": "openapi_evidence",
+      "severity": "low",
+      "status": "accepted",
+      "risk": "FastAPI generates OpenAPI at runtime; no checked-in OpenAPI document is frozen.",
+      "mitigation": "Routes, strict response models, authorization code, and source tests are digest-bound, and the source test asserts the runtime OpenAPI path/method/security shape."
+    },
+    {
+      "area": "fault_testing",
+      "severity": "low",
+      "status": "accepted",
+      "risk": "Timeout and oversize responses are simulated at the HTTP transport boundary rather than produced by the normal CRM app.",
+      "mitigation": "The same compiled Operations and generic HttpProvider are exercised, while real CRM calls cover success, 403, and 404."
+    },
+    {
+      "area": "deployment",
+      "severity": "informational",
+      "status": "not_in_scope",
+      "risk": "No production deployment, production credential, rate limit, or availability behavior was tested.",
+      "mitigation": "This is an intentionally local synthetic example; no production claim is made."
+    }
+  ],
+  "secret_review": {
+    "production_secrets_found": 0,
+    "pack_secret_values_found": 0,
+    "note": "Documented demo Bearer strings are synthetic test credentials and are not embedded in the Pack."
+  }
+}

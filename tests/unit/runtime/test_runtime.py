@@ -144,6 +144,30 @@ async def test_generic_runtime_injects_context_enforces_scopes_and_filters_outpu
     assert "must-not-leave-runtime" not in repr(result)
 
 
+@pytest.mark.asyncio
+async def test_generic_runtime_filters_before_validating_public_output_schema() -> None:
+    ir = _ir()
+    policy = ir["policies"]["crm-read"]
+    policy["readable_fields"] = ["id", "name"]
+    capability = ir["capabilities"]["get_customer"]["definition"]
+    capability["output_schema"] = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["id", "name"],
+        "properties": {"id": {"type": "string"}, "name": {"type": "string"}},
+    }
+    runtime = GenericRuntime(
+        ir,
+        provider=FakeProvider(),
+        granted_scopes={"customer.read", "customer.detail"},
+        tenant_id="tenant-a",
+    )
+
+    result = await runtime.call("get_customer", {"customer_id": "c-1"})
+
+    assert result == {"id": "c-1", "name": "Ada"}
+
+
 def test_generic_runtime_exposes_stable_tool_contracts() -> None:
     runtime = GenericRuntime(
         _ir(),
