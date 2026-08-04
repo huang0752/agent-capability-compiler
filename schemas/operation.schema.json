@@ -173,6 +173,17 @@
           "title": "Path Parameters",
           "type": "object"
         },
+        "query_parameters": {
+          "additionalProperties": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "propertyNames": {
+            "minLength": 1
+          },
+          "title": "Query Parameters",
+          "type": "object"
+        },
         "scopes": {
           "items": {
             "minLength": 1,

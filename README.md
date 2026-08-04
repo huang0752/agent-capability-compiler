@@ -384,7 +384,7 @@ uv run ruff format .
 | M0 | uv workspace、包骨架、README、LICENSE、ADR、CI、Ruff、mypy、pytest | 已完成 |
 | M1 | Core Models、Schema、`init`、`doctor`、`schema`、`validate` | 已完成 |
 | M2 | Workflow Compiler、Pack、Coverage、Freeze、可重复构建、`compile`、`pack`、`diff` | 已完成 |
-| M3 | Generic Runtime、REST Provider、MCP stdio、SecretRef、`run` | 未完成 |
+| M3 | Generic Runtime、REST Provider、MCP stdio、SecretRef、`run` | 已完成 |
 | M4 | Eval、Testkit、Fake System、Coverage、E2E | 未完成 |
 | M5 | 完整 ACC Engineer Skill | 未完成 |
 | M6 | FastAPI CRM 端到端验收 | 未完成 |

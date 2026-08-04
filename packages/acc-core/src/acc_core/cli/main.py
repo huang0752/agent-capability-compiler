@@ -100,6 +100,21 @@ def _parser() -> AccArgumentParser:
     pack_parser.add_argument("--output")
     _add_json_argument(pack_parser)
     pack_parser.set_defaults(handler=_pack_command)
+
+    run_parser = subparsers.add_parser("run", help="serve a capability pack over MCP stdio")
+    run_parser.add_argument("pack")
+    run_parser.add_argument(
+        "--scope",
+        action="append",
+        default=[],
+        help="grant one runtime scope (repeatable)",
+    )
+    run_parser.add_argument(
+        "--tenant-id",
+        help="runtime tenant context (defaults to ACC_TENANT_ID)",
+    )
+    _add_json_argument(run_parser)
+    run_parser.set_defaults(handler=_run_command)
     return parser
 
 
@@ -433,6 +448,54 @@ def _pack_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope]:
     )
 
 
+def _runtime_scopes(command_line_scopes: Sequence[str]) -> frozenset[str]:
+    configured = os.environ.get("ACC_GRANTED_SCOPES", "")
+    environment_scopes = configured.replace(",", " ").split()
+    return frozenset([*environment_scopes, *command_line_scopes])
+
+
+def _run_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope]:
+    """Load one verified pack and either inspect or serve its capabilities."""
+
+    try:
+        import anyio
+
+        from acc_runtime import GenericRuntime
+        from acc_runtime.errors import RuntimeError as AccRuntimeError
+        from acc_runtime.mcp import CapabilityMcpServer
+
+        tenant_id = arguments.tenant_id or os.environ.get("ACC_TENANT_ID")
+        runtime = GenericRuntime.from_pack(
+            Path(str(arguments.pack)),
+            environment=os.environ,
+            granted_scopes=_runtime_scopes(cast(Sequence[str], arguments.scope)),
+            tenant_id=tenant_id,
+        )
+        adapter = CapabilityMcpServer(runtime)
+        if not bool(arguments.json_output):
+            anyio.run(adapter.run_stdio)
+        return EXIT_SUCCESS, _success(
+            "run",
+            {
+                "pack": str(Path(str(arguments.pack)).resolve()),
+                "transport": "stdio",
+                "tools": runtime.tools(),
+            },
+        )
+    except (AccRuntimeError, OSError, ValueError) as exc:
+        code = getattr(exc, "code", "ACC_RUNTIME_START_FAILED")
+        return EXIT_RUNTIME, _failure(
+            "run",
+            Diagnostic(
+                code=str(code),
+                severity="error",
+                message="ACC runtime could not start.",
+                path=None,
+                pointer=None,
+            ),
+        )
+
+
 def _render(envelope: ResultEnvelope, *, json_output: bool) -> None:
     if json_output:
         print(json.dumps(envelope.model_dump(mode="json"), ensure_ascii=False, sort_keys=True))
@@ -471,7 +534,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     handler = cast(CommandHandler, arguments.handler)
     exit_code, envelope = handler(arguments)
-    _render(envelope, json_output=bool(arguments.json_output))
+    if arguments.command != "run" or bool(arguments.json_output):
+        _render(envelope, json_output=bool(arguments.json_output))
+    elif not envelope.ok:
+        _render(envelope, json_output=False)
     return exit_code
 
 

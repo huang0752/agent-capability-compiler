@@ -206,6 +206,46 @@ def test_operation_rejects_non_environment_secret_reference() -> None:
         models.Operation.model_validate(document)
 
 
+def test_operation_supports_declared_query_parameters() -> None:
+    document = operation_document()
+    input_schema = deepcopy(document["input_schema"])
+    assert isinstance(input_schema, dict)
+    properties = input_schema["properties"]
+    assert isinstance(properties, dict)
+    properties["include_contacts"] = {"type": "boolean"}
+    document["input_schema"] = input_schema
+    http = deepcopy(document["http"])
+    assert isinstance(http, dict)
+    http["query_parameters"] = {"include_contacts": "include_contacts"}
+    document["http"] = http
+
+    operation = models.Operation.model_validate(document)
+
+    assert operation.http.query_parameters == {"include_contacts": "include_contacts"}
+
+
+def test_operation_parameter_mappings_must_reference_declared_inputs() -> None:
+    document = operation_document()
+    http = deepcopy(document["http"])
+    assert isinstance(http, dict)
+    http["query_parameters"] = {"q": "undeclared"}
+    document["http"] = http
+
+    with pytest.raises(ValidationError, match="declared input"):
+        models.Operation.model_validate(document)
+
+
+def test_operation_path_placeholders_require_an_exact_mapping() -> None:
+    document = operation_document()
+    http = deepcopy(document["http"])
+    assert isinstance(http, dict)
+    http["path_parameters"] = {}
+    document["http"] = http
+
+    with pytest.raises(ValidationError, match="path_parameters"):
+        models.Operation.model_validate(document)
+
+
 def test_evidence_digest_must_be_a_complete_sha256() -> None:
     document = evidence_document()
     document["digest"] = "sha256:abcd"

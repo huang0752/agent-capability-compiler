@@ -28,6 +28,7 @@
       "properties": {
         "base_url_ref": {
           "minLength": 1,
+          "pattern": "^[A-Z][A-Z0-9_]*$",
           "title": "Base Url Ref",
           "type": "string"
         },

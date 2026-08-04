@@ -5,9 +5,13 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from tempfile import TemporaryFile
 from typing import Any, cast
 
+import pytest
 import yaml
+from mcp import ClientSession
+from mcp.client.stdio import StdioServerParameters, stdio_client
 
 from acc_core.packaging import verify_pack
 
@@ -170,12 +174,67 @@ def test_milestone_two_cli_compiles_analyzes_packs_diffs_and_freezes(tmp_path: P
     assert verification.manifest.project_id == "example-crm"
     assert "compiled/ir.json" in {record.path for record in verification.files}
 
+    runtime = _payload(_run_acc("run", str(pack_path), "--json", cwd=project))
+    assert runtime["command"] == "run"
+    assert runtime["result"] == {
+        "pack": str(pack_path.resolve()),
+        "tools": [
+            {
+                "description": "Get one visible customer.",
+                "input_schema": {"additionalProperties": False, "type": "object"},
+                "name": "get_customer",
+                "output_schema": {"type": "object"},
+                "title": "Get customer",
+            }
+        ],
+        "transport": "stdio",
+    }
+
     before = (project / "operations" / "crm.get_customer.yaml").read_text(encoding="utf-8")
     frozen = _payload(_run_acc("freeze", "crm.get_customer", "--json", cwd=project))
     after = (project / "operations" / "crm.get_customer.yaml").read_text(encoding="utf-8")
     assert frozen["result"]["updated"] == 1
     assert before != after
     assert f"sha256:{'0' * 64}" not in after
+
+
+def test_run_reports_pack_failures_as_stable_json(tmp_path: Path) -> None:
+    completed = _run_acc("run", str(tmp_path / "missing.accpkg"), "--json", cwd=tmp_path)
+
+    assert completed.returncode == 6
+    payload = json.loads(completed.stdout)
+    assert payload["ok"] is False
+    assert payload["diagnostics"][0]["code"] == "ACC_RUNTIME_PACK_VERIFICATION_FAILED"
+
+
+@pytest.mark.asyncio
+async def test_run_serves_real_mcp_stdio_tool_listing(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    packed = _payload(_run_acc("pack", "--output", "runtime.accpkg", "--json", cwd=project))
+    pack_path = Path(packed["result"]["path"])
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = os.pathsep.join(
+        [str(ACC_CORE_SRC), environment.get("PYTHONPATH", "")]
+    )
+    server = StdioServerParameters(
+        command=sys.executable,
+        args=["-m", "acc_core.cli.main", "run", str(pack_path)],
+        env=environment,
+        cwd=project,
+    )
+    with TemporaryFile(mode="w+", encoding="utf-8") as error_log:
+        async with (
+            stdio_client(server, errlog=error_log) as streams,
+            ClientSession(*streams) as session,
+        ):
+            initialized = await session.initialize()
+            result = await session.list_tools()
+        error_log.seek(0)
+        error_output = error_log.read()
+
+    assert initialized.serverInfo.name == "acc-runtime"
+    assert [tool.name for tool in result.tools] == ["get_customer"]
+    assert error_output == ""
 
 
 def test_compile_refuses_to_overwrite_project_contracts(tmp_path: Path) -> None:

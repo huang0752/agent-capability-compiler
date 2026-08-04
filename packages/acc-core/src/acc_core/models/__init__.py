@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Annotated, Literal
 from urllib.parse import unquote, urlsplit
 
@@ -74,7 +75,7 @@ class ProviderConfig(StrictModel):
     """Reference to the target REST provider without embedding its URL."""
 
     kind: Literal["http"]
-    base_url_ref: NonEmptyString
+    base_url_ref: EnvironmentReference
 
 
 class Project(StrictModel):
@@ -145,6 +146,7 @@ class HttpOperation(StrictModel):
     method: Literal["GET", "HEAD"]
     path: NonEmptyString
     path_parameters: dict[NonEmptyString, NonEmptyString] = Field(default_factory=dict)
+    query_parameters: dict[NonEmptyString, NonEmptyString] = Field(default_factory=dict)
     credential_ref: EnvironmentReference
     scopes: list[NonEmptyString] = Field(default_factory=list)
     timeout_seconds: Annotated[int, Field(ge=1, le=300)] = 15
@@ -195,6 +197,23 @@ class Operation(StrictModel):
     @classmethod
     def validate_json_schema(cls, value: JsonObject) -> JsonObject:
         return _checked_json_schema(value)
+
+    @model_validator(mode="after")
+    def validate_parameter_mappings(self) -> Operation:
+        properties = self.input_schema.get("properties", {})
+        declared_inputs = set(properties) if isinstance(properties, dict) else set()
+        mapped_inputs = set(self.http.path_parameters.values()) | set(
+            self.http.query_parameters.values()
+        )
+        undeclared = sorted(mapped_inputs - declared_inputs)
+        if undeclared:
+            raise ValueError(
+                "HTTP parameter mappings must reference a declared input: " + ", ".join(undeclared)
+            )
+        placeholders = set(re.findall(r"\{([A-Za-z_][A-Za-z0-9_-]*)\}", self.http.path))
+        if placeholders != set(self.http.path_parameters):
+            raise ValueError("path_parameters must exactly match HTTP path placeholders")
+        return self
 
 
 class RedactionRule(StrictModel):
