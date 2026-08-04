@@ -1,0 +1,1 @@
+"""Strict ACC public contracts."""

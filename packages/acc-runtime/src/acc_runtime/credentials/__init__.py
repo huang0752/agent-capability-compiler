@@ -1,0 +1,1 @@
+"""Secret reference resolution."""

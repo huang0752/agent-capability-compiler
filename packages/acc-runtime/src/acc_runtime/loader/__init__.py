@@ -1,0 +1,1 @@
+"""Verified capability pack loading."""

@@ -1,0 +1,81 @@
+[project]
+name = "agent-capability-compiler"
+version = "0.1.0"
+description = "Deterministic toolchain for compiling evidence-bound agent capabilities"
+requires-python = ">=3.12,<3.13"
+license = "Apache-2.0"
+dependencies = [
+    "acc-adapter-sdk==0.1.0",
+    "acc-core==0.1.0",
+    "acc-runtime==0.1.0",
+    "acc-testkit==0.1.0",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.15,<2",
+    "pytest>=8.3,<10",
+    "pytest-asyncio>=0.25,<2",
+    "pytest-cov>=6,<8",
+    "ruff>=0.9,<1",
+    "types-PyYAML>=6",
+]
+
+[tool.uv]
+package = false
+required-version = ">=0.10.10,<0.12"
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv.sources]
+acc-adapter-sdk = { workspace = true }
+acc-core = { workspace = true }
+acc-runtime = { workspace = true }
+acc-testkit = { workspace = true }
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-config --strict-markers"
+asyncio_mode = "strict"
+testpaths = ["tests"]
+pythonpath = [
+    "packages/acc-core/src",
+    "packages/acc-runtime/src",
+    "packages/acc-adapter-sdk/src",
+    "packages/acc-testkit/src",
+]
+markers = [
+    "integration: tests that exercise multiple ACC components",
+    "e2e: end-to-end tests through the generic runtime",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = [
+    "packages/acc-core/src",
+    "packages/acc-runtime/src",
+    "packages/acc-adapter-sdk/src",
+    "packages/acc-testkit/src",
+    "tests",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+show_error_codes = true
+pretty = true
+mypy_path = [
+    "packages/acc-core/src",
+    "packages/acc-runtime/src",
+    "packages/acc-adapter-sdk/src",
+    "packages/acc-testkit/src",
+]
+exclude = ["(^|/)(build|dist)/"]
