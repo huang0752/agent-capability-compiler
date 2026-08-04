@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 import tempfile
 from collections.abc import Callable, Sequence
@@ -18,6 +19,7 @@ from acc_core.compiler import compile_project
 from acc_core.compiler.diff import semantic_diff
 from acc_core.coverage import analyze_coverage
 from acc_core.diagnostics import Diagnostic, ResultEnvelope
+from acc_core.evals import ContractEvalRunner
 from acc_core.evidence import EvidenceFreezeError, freeze_operation_evidence
 from acc_core.packaging import CapabilityPackError, build_pack
 from acc_core.schemas import export_schemas
@@ -115,6 +117,27 @@ def _parser() -> AccArgumentParser:
     )
     _add_json_argument(run_parser)
     run_parser.set_defaults(handler=_run_command)
+
+    adapter_parser = subparsers.add_parser("adapter", help="manage out-of-process adapters")
+    adapter_subparsers = adapter_parser.add_subparsers(
+        dest="adapter_command",
+        required=True,
+    )
+    adapter_init_parser = adapter_subparsers.add_parser(
+        "init",
+        help="initialize a read-only adapter project",
+    )
+    adapter_init_parser.add_argument("path", nargs="?", default=".")
+    _add_json_argument(adapter_init_parser)
+    adapter_init_parser.set_defaults(handler=_adapter_init_command)
+
+    test_parser = subparsers.add_parser("test", help="run ACC evaluation suites")
+    test_subparsers = test_parser.add_subparsers(dest="test_suite", required=True)
+    for suite in ("contract", "runtime", "e2e"):
+        suite_parser = test_subparsers.add_parser(suite, help=f"run {suite} evaluations")
+        suite_parser.add_argument("path", nargs="?", default=".")
+        _add_json_argument(suite_parser)
+        suite_parser.set_defaults(handler=_test_command)
     return parser
 
 
@@ -452,6 +475,221 @@ def _runtime_scopes(command_line_scopes: Sequence[str]) -> frozenset[str]:
     configured = os.environ.get("ACC_GRANTED_SCOPES", "")
     environment_scopes = configured.replace(",", " ").split()
     return frozenset([*environment_scopes, *command_line_scopes])
+
+
+def _adapter_module_name(name: str) -> str:
+    module = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") or "acc_adapter"
+    if module[0].isdigit():
+        module = f"adapter_{module}"
+    return module
+
+
+def _adapter_init_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope]:
+    target = Path(str(arguments.path)).expanduser().resolve()
+    if target.exists() and (not target.is_dir() or any(target.iterdir())):
+        return EXIT_INPUT, _failure(
+            "adapter init",
+            Diagnostic(
+                code="ACC_ADAPTER_EXISTS",
+                severity="error",
+                message="Adapter project directory already contains files.",
+                path=None,
+                pointer=None,
+            ),
+        )
+    target.mkdir(parents=True, exist_ok=True)
+    module = _adapter_module_name(target.name)
+    source = target / "src" / module
+    source.mkdir(parents=True)
+    (source / "__init__.py").write_text('"""Generated ACC adapter."""\n', encoding="utf-8")
+    (source / "main.py").write_text(
+        '"""Read-only ACC adapter entrypoint."""\n\n'
+        "from acc_adapter_sdk import AdapterServer\n\n"
+        'server = AdapterServer.from_contract_file("contract.yaml")\n'
+        "app = server.app\n",
+        encoding="utf-8",
+    )
+    (target / "contract.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": "1",
+                "id": target.name,
+                "version": "0.1.0",
+                "base_path": "/adapter",
+                "operations": [],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (target / "pyproject.toml").write_text(
+        "[project]\n"
+        f'name = "{target.name}"\n'
+        'version = "0.1.0"\n'
+        'requires-python = ">=3.12,<3.13"\n'
+        'dependencies = ["acc-adapter-sdk==0.1.0"]\n\n'
+        "[build-system]\n"
+        'requires = ["hatchling>=1.27"]\n'
+        'build-backend = "hatchling.build"\n',
+        encoding="utf-8",
+    )
+    return EXIT_SUCCESS, _success(
+        "adapter init",
+        {"path": str(target), "module": module},
+    )
+
+
+def _test_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope]:
+    suite = str(arguments.test_suite)
+    command = f"test {suite}"
+    compilation = compile_project(Path(str(arguments.path)).resolve())
+    if not compilation.ok or compilation.ir is None:
+        return EXIT_TEST, _compilation_failure(command, compilation.diagnostics)
+    if suite == "contract":
+        report = ContractEvalRunner().run(compilation.ir)
+    else:
+        try:
+            import anyio
+
+            from acc_runtime.errors import RuntimeError as AccRuntimeError
+
+            report = anyio.run(
+                _run_runtime_eval_report,
+                compilation.ir,
+                Path(str(arguments.path)).resolve(),
+                suite == "e2e",
+            )
+        except (AccRuntimeError, CapabilityPackError, OSError, ValueError) as exc:
+            return EXIT_TEST, _failure(
+                command,
+                Diagnostic(
+                    code=str(getattr(exc, "code", "ACC_TEST_RUNTIME_FAILED")),
+                    severity="error",
+                    message="The runtime evaluation suite could not start.",
+                    path=None,
+                    pointer=None,
+                ),
+            )
+    if report.ok:
+        return EXIT_SUCCESS, _success(command, report.to_dict())
+    diagnostics: list[Diagnostic] = [
+        Diagnostic(
+            code=item.code,
+            severity="error",
+            message=item.message,
+            path=None,
+            pointer=None,
+        )
+        for item in report.diagnostics
+    ]
+    for case in report.cases:
+        diagnostics.extend(
+            Diagnostic(
+                code=item.code,
+                severity="error",
+                message=item.message,
+                path=f"evals/{case.case_id}",
+                pointer=None,
+            )
+            for item in case.diagnostics
+        )
+    return EXIT_TEST, ResultEnvelope(
+        ok=False,
+        command=command,
+        result=None,
+        diagnostics=diagnostics,
+    )
+
+
+async def _run_runtime_eval_report(
+    compiled_ir: dict[str, Any],
+    project_root: Path,
+    through_mcp: bool,
+) -> Any:
+    """Compose Eval with Runtime lazily so ``acc-core`` has no package cycle."""
+
+    from collections.abc import Mapping
+
+    from pydantic import JsonValue, ValidationError
+
+    from acc_core.evals import RuntimeEvalRunner
+    from acc_core.models import Project
+    from acc_runtime import GenericRuntime
+    from acc_runtime.loader import load_pack
+    from acc_runtime.mcp import CapabilityMcpServer
+    from acc_runtime.providers import HttpProvider
+    from acc_testkit import RecordingOperationProvider
+
+    try:
+        project = Project.model_validate(compiled_ir.get("project"))
+    except ValidationError as exc:
+        raise ValueError("compiled project contract is invalid") from exc
+
+    provider = RecordingOperationProvider(
+        HttpProvider(
+            base_url_ref=project.provider.base_url_ref,
+            environment=os.environ,
+        )
+    )
+    runtime_ir = compiled_ir
+    loaded_pack = None
+    if through_mcp:
+        with tempfile.TemporaryDirectory(prefix="acc-e2e-") as temporary_directory:
+            pack_path = Path(temporary_directory) / "eval.accpkg"
+            build_pack(project_root, pack_path, compiled_ir=compiled_ir)
+            loaded_pack = load_pack(pack_path)
+            runtime_ir = cast(dict[str, Any], loaded_pack.ir)
+            runtime = GenericRuntime(
+                runtime_ir,
+                provider=provider,
+                granted_scopes=_runtime_scopes(()),
+                tenant_id=os.environ.get("ACC_TENANT_ID"),
+                loaded_pack=loaded_pack,
+            )
+            adapter = CapabilityMcpServer(runtime)
+
+            class McpCaller:
+                async def call(
+                    self,
+                    capability_id: str,
+                    input_data: Mapping[str, JsonValue],
+                ) -> JsonValue:
+                    result = await adapter.call_tool(capability_id, input_data)
+                    structured = result.structuredContent or {}
+                    if result.isError:
+                        error = structured.get("error")
+                        if not isinstance(error, dict):
+                            raise _McpEvalFailure("ACC_RUNTIME_PROTOCOL_ERROR", 500)
+                        code = error.get("code")
+                        status = error.get("status")
+                        raise _McpEvalFailure(
+                            code if isinstance(code, str) else "ACC_RUNTIME_PROTOCOL_ERROR",
+                            status if isinstance(status, int) else 500,
+                        )
+                    return cast(JsonValue, structured.get("result"))
+
+            return await RuntimeEvalRunner(
+                McpCaller(),
+                call_recorder=provider,
+            ).run(runtime_ir)
+
+    runtime = GenericRuntime(
+        runtime_ir,
+        provider=provider,
+        granted_scopes=_runtime_scopes(()),
+        tenant_id=os.environ.get("ACC_TENANT_ID"),
+        loaded_pack=loaded_pack,
+    )
+    return await RuntimeEvalRunner(runtime, call_recorder=provider).run(runtime_ir)
+
+
+class _McpEvalFailure(Exception):
+    """Internal structured MCP failure consumed by RuntimeEvalRunner."""
+
+    def __init__(self, code: str, status: int) -> None:
+        super().__init__("MCP tool returned a structured runtime error")
+        self.code = code
+        self.status = status
 
 
 def _run_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope]:

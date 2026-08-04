@@ -292,3 +292,30 @@ def test_cli_usage_error_has_json_envelope_and_exit_code_two() -> None:
     payload = _json_envelope(completed, command="validate", ok=False)
     assert payload["diagnostics"][0]["code"] == "ACC_CLI_USAGE"
     assert payload["diagnostics"][0]["severity"] == "error"
+
+
+def test_adapter_init_creates_isolated_read_only_adapter_skeleton(tmp_path: Path) -> None:
+    target = tmp_path / "customer-adapter"
+
+    completed = _run_acc("adapter", "init", str(target), "--json")
+
+    payload = _json_envelope(completed, command="adapter init", ok=True)
+    assert payload["result"]["path"] == str(target.resolve())
+    assert (target / "pyproject.toml").is_file()
+    assert (target / "contract.yaml").is_file()
+    main = (target / "src" / "customer_adapter" / "main.py").read_text(encoding="utf-8")
+    assert "AdapterServer" in main
+    assert "POST" not in main
+
+    repeated = _run_acc("adapter", "init", str(target), "--json")
+    repeated_payload = _json_envelope(repeated, command="adapter init", ok=False)
+    assert repeated.returncode == 3
+    assert repeated_payload["diagnostics"][0]["code"] == "ACC_ADAPTER_EXISTS"
+
+    occupied_file = tmp_path / "occupied"
+    occupied_file.write_text("keep", encoding="utf-8")
+    occupied = _run_acc("adapter", "init", str(occupied_file), "--json")
+    occupied_payload = _json_envelope(occupied, command="adapter init", ok=False)
+    assert occupied.returncode == 3
+    assert occupied_payload["diagnostics"][0]["code"] == "ACC_ADAPTER_EXISTS"
+    assert occupied_file.read_text(encoding="utf-8") == "keep"

@@ -6,7 +6,7 @@
 | 1 — core models and validation | Complete | Ruff format/lint; mypy (37 files); pytest (73 passed); CLI/schema smoke |
 | 2 — compiler and pack | Complete | Ruff format/lint; mypy (46 files); pytest (113 passed); deterministic/safety cases |
 | 3 — generic runtime | Complete | Ruff format/lint; mypy (56 files); pytest (182 passed); real MCP stdio handshake |
-| 4 — eval and testkit | Pending | Pending |
+| 4 — eval and testkit | Complete | Ruff format/lint; mypy (77 files); pytest (252 passed); runtime and pack/MCP E2E CLI |
 | 5 — engineer skill | Pending | Pending |
 | 6 — CRM acceptance | Pending | Pending |
 
@@ -53,3 +53,16 @@ This file records fresh command evidence at each milestone. A status changes to 
 - `uv run pytest -q` — 182 passed
 - The MCP integration test launches `acc run <pack>`, completes an SDK stdio handshake, and lists the compiled capability with empty stderr
 - Runtime tests cover verified pack loading, stable errors, secret redaction, all ten workflow actions, schema checks, fixed-origin GET/HEAD requests, bounded responses, tenant/scope policy, output filtering, and protocol-safe errors
+
+### 2026-08-04 — Milestone 4
+
+- TDD red evidence: contract/runtime Eval APIs, Adapter SDK contracts, Fake REST transport, faults, assertions, recorder interoperability, adapter scaffolding, and all three `acc test` suites began from focused failing tests
+- `uv lock --check` — lockfile is current after direct PyYAML/jsonschema dependencies
+- `uv run ruff format --check packages tests` — 77 files already formatted
+- `uv run ruff check packages tests` — all checks passed
+- `uv run mypy packages tests` — 77 source files, no issues
+- `uv run pytest -q` — 252 passed
+- `acc test contract --json` statically checks bindings, schemas, operation dependencies, positive cases, and permission-negative coverage
+- `acc test runtime --json` executes both expected-success and expected-403 cases against a real local HTTP boundary; `acc test e2e --json` additionally verifies a generated pack and calls through the MCP adapter
+- Testkit tests cover FastAPI and no-socket transports, fixture loading, deterministic 403/404/timeout/oversize faults, call recording, MCP stdio client cleanup, output/error/forbidden-field assertions, and domain-neutral example data
+- Adapter SDK tests cover strict GET/HEAD contracts, health metadata, safe paths, exact route registration, write-route rejection, YAML loading, generated scaffolds, and a deployable domain-neutral fake adapter

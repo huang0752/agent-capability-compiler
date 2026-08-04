@@ -4,6 +4,10 @@ import json
 import os
 import subprocess
 import sys
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from tempfile import TemporaryFile
 from typing import Any, cast
@@ -19,15 +23,20 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 ACC_CORE_SRC = REPOSITORY_ROOT / "packages" / "acc-core" / "src"
 
 
-def _run_acc(*arguments: str, cwd: Path) -> subprocess.CompletedProcess[str]:
-    environment = os.environ.copy()
-    environment["PYTHONPATH"] = os.pathsep.join(
-        [str(ACC_CORE_SRC), environment.get("PYTHONPATH", "")]
+def _run_acc(
+    *arguments: str,
+    cwd: Path,
+    environment: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    process_environment = os.environ.copy()
+    process_environment.update(environment or {})
+    process_environment["PYTHONPATH"] = os.pathsep.join(
+        [str(ACC_CORE_SRC), process_environment.get("PYTHONPATH", "")]
     )
     return subprocess.run(
         [sys.executable, "-m", "acc_core.cli.main", *arguments],
         cwd=cwd,
-        env=environment,
+        env=process_environment,
         capture_output=True,
         check=False,
         text=True,
@@ -71,7 +80,10 @@ def _make_project(root: Path) -> Path:
             "input_schema": {
                 "type": "object",
                 "additionalProperties": False,
-                "properties": {"customer_id": {"type": "string"}},
+                "properties": {
+                    "customer_id": {"type": "string"},
+                    "tenant_id": {"type": "string"},
+                },
             },
             "output_schema": {"type": "object"},
             "http": {
@@ -113,7 +125,12 @@ def _make_project(root: Path) -> Path:
             "id": "get_customer",
             "title": "Get customer",
             "description": "Get one visible customer.",
-            "input_schema": {"type": "object", "additionalProperties": False},
+            "input_schema": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["customer_id"],
+                "properties": {"customer_id": {"type": "string"}},
+            },
             "output_schema": {"type": "object"},
             "workflow": [
                 {
@@ -131,7 +148,15 @@ def _make_project(root: Path) -> Path:
     )
     for eval_id, expected in (
         ("normal", {"expected_output_schema": {"type": "object"}}),
-        ("forbidden", {"expected_error": {"code": "FORBIDDEN", "status": 403}}),
+        (
+            "forbidden",
+            {
+                "expected_error": {
+                    "code": "ACC_RUNTIME_HTTP_FORBIDDEN",
+                    "status": 403,
+                }
+            },
+        ),
     ):
         _write_yaml(
             project / "evals" / f"{eval_id}.yaml",
@@ -142,7 +167,10 @@ def _make_project(root: Path) -> Path:
                 "input": {"customer_id": "c-1"},
                 "fixtures": {},
                 "expected_calls": [
-                    {"operation": "crm.get_customer", "arguments": {"customer_id": "c-1"}}
+                    {
+                        "operation": "crm.get_customer",
+                        "arguments": {"customer_id": "c-1", "tenant_id": "tenant-a"},
+                    }
                 ],
                 "forbidden_fields": ["internal_note"],
                 **expected,
@@ -181,7 +209,12 @@ def test_milestone_two_cli_compiles_analyzes_packs_diffs_and_freezes(tmp_path: P
         "tools": [
             {
                 "description": "Get one visible customer.",
-                "input_schema": {"additionalProperties": False, "type": "object"},
+                "input_schema": {
+                    "additionalProperties": False,
+                    "properties": {"customer_id": {"type": "string"}},
+                    "required": ["customer_id"],
+                    "type": "object",
+                },
                 "name": "get_customer",
                 "output_schema": {"type": "object"},
                 "title": "Get customer",
@@ -205,6 +238,85 @@ def test_run_reports_pack_failures_as_stable_json(tmp_path: Path) -> None:
     payload = json.loads(completed.stdout)
     assert payload["ok"] is False
     assert payload["diagnostics"][0]["code"] == "ACC_RUNTIME_PACK_VERIFICATION_FAILED"
+
+
+def test_contract_eval_cli_returns_structured_case_report(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+
+    completed = _run_acc("test", "contract", "--json", cwd=project)
+
+    payload = _payload(completed)
+    assert payload["command"] == "test contract"
+    assert payload["result"]["kind"] == "contract"
+    assert payload["result"]["summary"] == {"total": 2, "passed": 2, "failed": 0}
+    assert [case["id"] for case in payload["result"]["cases"]] == ["forbidden", "normal"]
+
+
+@contextmanager
+def _fake_crm_server() -> Iterator[str]:
+    call_count = 0
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            nonlocal call_count
+            call_count += 1
+            if self.headers.get("authorization") != "Bearer test-token":
+                self.send_response(401)
+                self.end_headers()
+                return
+            if call_count % 2 == 1:
+                body = b'{"error":{"code":"FORBIDDEN"}}'
+                self.send_response(403)
+            else:
+                body = (
+                    b'{"id":"c-1","name":"Example","tenant_id":"tenant-a",'
+                    b'"internal_note":"must-be-filtered"}'
+                )
+                self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: object) -> None:
+            del format, args
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = cast(tuple[str, int], server.server_address)
+        yield f"http://{host}:{port}"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+def test_runtime_and_e2e_eval_cli_execute_declared_cases(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    with _fake_crm_server() as base_url:
+        environment = {
+            "CRM_BASE_URL": base_url,
+            "CRM_USER_TOKEN": "test-token",
+            "ACC_GRANTED_SCOPES": "customer.read",
+            "ACC_TENANT_ID": "tenant-a",
+        }
+        for suite in ("runtime", "e2e"):
+            completed = _run_acc(
+                "test",
+                suite,
+                "--json",
+                cwd=project,
+                environment=environment,
+            )
+            payload = _payload(completed)
+            assert payload["command"] == f"test {suite}"
+            assert payload["result"]["summary"] == {
+                "total": 2,
+                "passed": 2,
+                "failed": 0,
+            }
 
 
 @pytest.mark.asyncio

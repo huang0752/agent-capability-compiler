@@ -1,1 +1,53 @@
 """Test support for ACC components and end-to-end capability workflows."""
+
+from acc_testkit.assertions import (
+    E2EAssertionError,
+    OperationCallLike,
+    assert_e2e,
+    assert_expected_calls,
+    assert_forbidden_fields_absent,
+    assert_output_schema,
+    assert_stable_error,
+)
+from acc_testkit.fake_system import (
+    CallRecord,
+    FakeRestSystem,
+    FixtureConfigurationError,
+    ResponseSpec,
+    RouteFixture,
+    SimulatedTimeoutError,
+)
+from acc_testkit.faults import Fault
+from acc_testkit.mcp_client import McpStdioTestClient
+from acc_testkit.recording import (
+    CallRecorder,
+    OperationCallRecord,
+    OperationProvider,
+    RecordedOperationCall,
+    RecordingConfigurationError,
+    RecordingOperationProvider,
+)
+
+__all__ = [
+    "CallRecord",
+    "CallRecorder",
+    "E2EAssertionError",
+    "FakeRestSystem",
+    "Fault",
+    "FixtureConfigurationError",
+    "McpStdioTestClient",
+    "OperationCallLike",
+    "OperationCallRecord",
+    "OperationProvider",
+    "RecordedOperationCall",
+    "RecordingConfigurationError",
+    "RecordingOperationProvider",
+    "ResponseSpec",
+    "RouteFixture",
+    "SimulatedTimeoutError",
+    "assert_e2e",
+    "assert_expected_calls",
+    "assert_forbidden_fields_absent",
+    "assert_output_schema",
+    "assert_stable_error",
+]
