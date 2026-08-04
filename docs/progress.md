@@ -7,7 +7,7 @@
 | 2 — compiler and pack | Complete | Ruff format/lint; mypy (46 files); pytest (113 passed); deterministic/safety cases |
 | 3 — generic runtime | Complete | Ruff format/lint; mypy (56 files); pytest (182 passed); real MCP stdio handshake |
 | 4 — eval and testkit | Complete | Ruff format/lint; mypy (77 files); pytest (252 passed); runtime and pack/MCP E2E CLI |
-| 5 — engineer skill | Pending | Pending |
+| 5 — engineer skill | Complete | skill-creator validation; Ruff/mypy; pytest (274 passed); independent Phase 0–3 forward test |
 | 6 — CRM acceptance | Pending | Pending |
 
 This file records fresh command evidence at each milestone. A status changes to complete only after its focused tests, the full test suite, lint, type checking, diff review, and milestone commit have succeeded.
@@ -66,3 +66,17 @@ This file records fresh command evidence at each milestone. A status changes to 
 - `acc test runtime --json` executes both expected-success and expected-403 cases against a real local HTTP boundary; `acc test e2e --json` additionally verifies a generated pack and calls through the MCP adapter
 - Testkit tests cover FastAPI and no-socket transports, fixture loading, deterministic 403/404/timeout/oversize faults, call recording, MCP stdio client cleanup, output/error/forbidden-field assertions, and domain-neutral example data
 - Adapter SDK tests cover strict GET/HEAD contracts, health metadata, safe paths, exact route registration, write-route rejection, YAML loading, generated scaffolds, and a deployable domain-neutral fake adapter
+
+### 2026-08-04 — Milestone 5
+
+- Initialized `skills/acc-engineer` with the canonical `skill-creator` script and generated deterministic `agents/openai.yaml` metadata
+- Implemented the platform-neutral `HARNESS.md`, nine phase guides, eight templates, focused schema/example references, and five standalone JSON safety scripts
+- Added thin Codex and Claude Code installers/commands that delegate to the single Skill/Harness method and refuse overwrite
+- `quick_validate.py skills/acc-engineer` — `Skill is valid!`
+- `uv run pytest tests/unit/skill -q` — 22 passed
+- `uv run ruff format --check .` — 116 files already formatted
+- `uv run ruff check .` — all checks passed
+- `uv run mypy packages tests skills/acc-engineer/scripts` — 88 source files, no issues
+- `uv run pytest -q` — 274 passed
+- Independent minimal-context forward test completed Phases 0–3 against an unfamiliar read-only adapter package, produced a source-stable blocked plan, and correctly refused implementation without user-goal/auth/scope/tenant evidence
+- Forward-test findings were incorporated: explicit `acc init` cold start, Python 3 invocation, canonical macOS paths, preflight/coverage-baseline templates, conditional permission-negative/empty scenarios, blocked-plan semantics, and whole-file evidence digest documentation

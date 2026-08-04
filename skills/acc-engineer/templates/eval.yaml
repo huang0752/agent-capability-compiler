@@ -1,0 +1,27 @@
+# Positive Eval. Pair it with references/examples/permission-negative-eval.yaml
+# whenever the policy declares scopes or a required tenant boundary.
+schema_version: "1"
+id: replace_capability_positive
+capability: REPLACE_WITH_CAPABILITY_ID
+
+input:
+  resource_id: REPLACE_WITH_FAKE_RESOURCE_ID
+
+# Populate only with synthetic data accepted by the selected fake-system loader.
+fixtures: {}
+
+expected_calls:
+  - operation: REPLACE_WITH_OPERATION_ID
+    arguments:
+      resource_id: REPLACE_WITH_FAKE_RESOURCE_ID
+
+expected_output_schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  required:
+    - id
+  properties:
+    id:
+      type: string
+
+forbidden_fields: []

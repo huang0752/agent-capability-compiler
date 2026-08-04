@@ -1,0 +1,49 @@
+schema_version: "1"
+id: REPLACE_WITH_OPERATION_ID
+title: REPLACE_WITH_OPERATION_TITLE
+kind: http
+
+input_schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  required:
+    - resource_id
+  properties:
+    resource_id:
+      type: string
+      minLength: 1
+
+output_schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  required:
+    - id
+  properties:
+    id:
+      type: string
+
+http:
+  # MVP accepts GET or HEAD only.
+  method: GET
+  path: /REPLACE_WITH_EVIDENCED_RESOURCE/{resource_id}
+  path_parameters:
+    resource_id: resource_id
+  query_parameters: {}
+  # This is an environment-variable reference, never a credential value.
+  credential_ref: SOURCE_SYSTEM_READ_TOKEN
+  scopes:
+    - REPLACE_WITH_EVIDENCED_READ_SCOPE
+  timeout_seconds: 15
+  max_response_bytes: 1048576
+
+safety:
+  effect: read
+
+evidence:
+  - source_id: REPLACE_WITH_EVIDENCE_SOURCE_ID
+    kind: source_file
+    path: REPLACE_WITH_SOURCE_RELATIVE_PATH
+    # Replace only with a digest calculated from the captured evidence content.
+    digest: "{{ CAPTURED_SHA256_DIGEST }}"

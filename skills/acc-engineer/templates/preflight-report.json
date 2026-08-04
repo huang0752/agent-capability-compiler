@@ -1,0 +1,22 @@
+{
+  "phase": "0-preflight",
+  "decision": "stop_until_verified",
+  "source_workspace": "REPLACE_WITH_CANONICAL_READ_ONLY_SOURCE_PATH",
+  "acc_project": "REPLACE_WITH_CANONICAL_ACC_PROJECT_PATH",
+  "source_mode": "read_only",
+  "source_snapshot_digest": "REPLACE_WITH_REAL_SNAPSHOT_DIGEST",
+  "acc_doctor": {
+    "ok": false,
+    "python": "REPLACE_WITH_PYTHON_VERSION",
+    "project": "REPLACE_WITH_CANONICAL_ACC_PROJECT_PATH"
+  },
+  "inventory": {
+    "regular_files": 0,
+    "openapi_candidates": [],
+    "test_candidates": [],
+    "sensitive_paths": [],
+    "symlinks": [],
+    "oversized_paths": []
+  },
+  "limitations": []
+}

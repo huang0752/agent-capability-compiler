@@ -1,0 +1,19 @@
+{
+  "artifact_kind": "phase_3_planning_baseline",
+  "status": "blocked_on_evidence",
+  "note": "This planning artifact is not acc coverage --json output.",
+  "candidate_operations": {
+    "total": 0,
+    "planned": [],
+    "deliberately_excluded": []
+  },
+  "planned_capabilities": {
+    "total": 0,
+    "positive_evals": 0,
+    "not_found_or_empty_evals": 0,
+    "permission_negative_evals": 0
+  },
+  "blocking_gaps": [
+    "REPLACE_WITH_EVIDENCE_OR_USER_DECISION_GAP"
+  ]
+}

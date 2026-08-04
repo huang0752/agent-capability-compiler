@@ -1,0 +1,52 @@
+# Planning artifact: do not place this file in operations/, capabilities/, policies/, or evals/.
+schema_version: "1"
+system:
+  id: REPLACE_WITH_SYSTEM_ID
+  name: REPLACE_WITH_SYSTEM_NAME
+  source_workspace:
+    path: REPLACE_WITH_READ_ONLY_SOURCE_PATH
+    mode: read_only
+
+evidence_sources:
+  - id: REPLACE_WITH_EVIDENCE_SOURCE_ID
+    kind: source_file
+    location: REPLACE_WITH_SOURCE_RELATIVE_PATH
+
+domains:
+  - id: REPLACE_WITH_DOMAIN_ID
+    purpose: REPLACE_WITH_EVIDENCED_DOMAIN_PURPOSE
+
+entities:
+  - id: REPLACE_WITH_ENTITY_ID
+    domain: REPLACE_WITH_DOMAIN_ID
+    evidence_sources:
+      - REPLACE_WITH_EVIDENCE_SOURCE_ID
+
+candidate_operations:
+  - id: REPLACE_WITH_OPERATION_ID
+    purpose: REPLACE_WITH_EVIDENCED_OPERATION_PURPOSE
+    method: GET
+    path: /REPLACE_WITH_EVIDENCED_RESOURCE/{resource_id}
+    permission:
+      scopes:
+        - REPLACE_WITH_EVIDENCED_READ_SCOPE
+      tenant_boundary: REPLACE_WITH_EVIDENCED_TENANT_RULE
+    evidence_sources:
+      - REPLACE_WITH_EVIDENCE_SOURCE_ID
+    confirmation: pending
+
+relationships:
+  - from: REPLACE_WITH_SOURCE_ENTITY_ID
+    to: REPLACE_WITH_TARGET_ENTITY_ID
+    evidence_sources:
+      - REPLACE_WITH_EVIDENCE_SOURCE_ID
+
+existing_tests:
+  - path: REPLACE_WITH_EXISTING_TEST_PATH
+    covers:
+      - REPLACE_WITH_OPERATION_ID
+
+unconfirmed:
+  - question: REPLACE_WITH_OPEN_QUESTION
+    blocks:
+      - REPLACE_WITH_OPERATION_ID

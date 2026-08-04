@@ -1,0 +1,16 @@
+# Pair with templates/eval.yaml after replacing identifiers and synthetic input.
+schema_version: "1"
+id: replace_capability_permission_denied
+capability: REPLACE_WITH_CAPABILITY_ID
+
+input:
+  resource_id: REPLACE_WITH_FAKE_RESOURCE_ID
+
+fixtures: {}
+expected_calls: []
+
+expected_error:
+  code: ACC_RUNTIME_POLICY_SCOPE_DENIED
+  status: 403
+
+forbidden_fields: []

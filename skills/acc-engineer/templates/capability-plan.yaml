@@ -1,0 +1,38 @@
+# Planning artifact: every capability remains blocked until its operations and policy have evidence.
+schema_version: "1"
+goal: REPLACE_WITH_USER_OUTCOME
+
+capabilities:
+  - id: REPLACE_WITH_CAPABILITY_ID
+    title: REPLACE_WITH_CAPABILITY_TITLE
+    business_outcome: REPLACE_WITH_BUSINESS_OUTCOME
+    operation_dependencies:
+      - REPLACE_WITH_OPERATION_ID
+    composition_reason: REPLACE_WITH_REASON_THIS_IS_NOT_ONE_INTERFACE_ONE_TOOL
+    agent_inputs:
+      - resource_id
+    runtime_only_inputs:
+      - base_url_ref
+      - credential_ref
+    policy: REPLACE_WITH_POLICY_ID
+    evals:
+      positive: replace_capability_positive
+      # Required only for scoped/tenant-protected capabilities; otherwise leave null.
+      permission_negative: null
+      # For singular APIs where 404 is absence, use not_applicable and add a not-found Eval.
+      empty: not_applicable
+    status: blocked_on_evidence
+
+coverage:
+  high_value_operations:
+    - REPLACE_WITH_OPERATION_ID
+  deliberately_excluded:
+    - item: REPLACE_WITH_EXCLUDED_ITEM
+      reason: REPLACE_WITH_EXCLUSION_REASON
+
+risks:
+  - risk: REPLACE_WITH_PERMISSION_OR_DISCLOSURE_RISK
+    mitigation: REPLACE_WITH_POLICY_OR_EVAL_MITIGATION
+
+open_questions:
+  - REPLACE_WITH_QUESTION_THAT_MUST_BE_RESOLVED_BEFORE_IMPLEMENTATION

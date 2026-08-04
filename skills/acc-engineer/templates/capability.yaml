@@ -1,0 +1,39 @@
+schema_version: "1"
+id: REPLACE_WITH_CAPABILITY_ID
+title: REPLACE_WITH_CAPABILITY_TITLE
+description: REPLACE_WITH_AGENT_FACING_BUSINESS_OUTCOME
+
+input_schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  required:
+    - resource_id
+  properties:
+    resource_id:
+      type: string
+      minLength: 1
+
+output_schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  required:
+    - id
+  properties:
+    id:
+      type: string
+
+workflow:
+  - id: record
+    call:
+      operation: REPLACE_WITH_OPERATION_ID
+      arguments:
+        resource_id: $.input.resource_id
+  - emit:
+      value: $.steps.record
+
+policy: REPLACE_WITH_POLICY_ID
+evals:
+  - replace_capability_positive
+  - replace_capability_permission_denied

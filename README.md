@@ -386,7 +386,7 @@ uv run ruff format .
 | M2 | Workflow Compiler、Pack、Coverage、Freeze、可重复构建、`compile`、`pack`、`diff` | 已完成 |
 | M3 | Generic Runtime、REST Provider、MCP stdio、SecretRef、`run` | 已完成 |
 | M4 | Eval、Testkit、Fake System、Coverage、E2E | 已完成 |
-| M5 | 完整 ACC Engineer Skill | 未完成 |
+| M5 | 完整 ACC Engineer Skill | 已完成 |
 | M6 | FastAPI CRM 端到端验收 | 未完成 |
 
 更细的检出版本进度记录在 `docs/progress.md`。生产可用性必须以发布说明、对应 Pack/Runtime 测试证据和安全评审为准。

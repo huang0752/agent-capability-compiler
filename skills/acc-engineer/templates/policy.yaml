@@ -1,0 +1,14 @@
+schema_version: "1"
+id: REPLACE_WITH_POLICY_ID
+
+required_scopes:
+  - REPLACE_WITH_EVIDENCED_READ_SCOPE
+
+# Use "required" only when evidence establishes a tenant field; then replace null with that field.
+tenant_mode: none
+tenant_field: null
+
+readable_fields:
+  - REPLACE_WITH_ALLOWED_OUTPUT_FIELD
+denied_fields: []
+redaction_rules: []
