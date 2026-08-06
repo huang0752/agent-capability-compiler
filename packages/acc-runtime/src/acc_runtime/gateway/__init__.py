@@ -1,5 +1,11 @@
 """Multi-user Streamable HTTP Gateway primitives."""
 
+from acc_runtime.gateway.app import (
+    DEFAULT_GATEWAY_BODY_LIMIT,
+    DEFAULT_MCP_SESSION_IDLE_TIMEOUT_SECONDS,
+    GatewaySessionApplicationService,
+    create_gateway_app,
+)
 from acc_runtime.gateway.audit import (
     AuditCollector,
     AuditEvent,
@@ -16,11 +22,6 @@ from acc_runtime.gateway.auth import (
     GatewayPrincipalResolver,
     GatewaySessionLookup,
     GatewayTokenVerifier,
-)
-from acc_runtime.gateway.app import (
-    DEFAULT_GATEWAY_BODY_LIMIT,
-    GatewaySessionApplicationService,
-    create_gateway_app,
 )
 from acc_runtime.gateway.models import (
     GatewaySessionRecord,
@@ -40,20 +41,21 @@ from acc_runtime.gateway.sessions import (
 )
 
 __all__ = [
+    "DEFAULT_GATEWAY_BODY_LIMIT",
+    "DEFAULT_MCP_SESSION_IDLE_TIMEOUT_SECONDS",
     "AuditCollector",
     "AuditEvent",
     "AuditEventKind",
     "AuditResultCategory",
     "AuditSink",
     "AuditSpan",
-    "DEFAULT_GATEWAY_BODY_LIMIT",
     "GatewayPrincipalResolver",
     "GatewayReauthRequiredError",
+    "GatewaySessionApplicationService",
     "GatewaySessionCapacityError",
     "GatewaySessionExpiredError",
     "GatewaySessionInvalidError",
     "GatewaySessionLookup",
-    "GatewaySessionApplicationService",
     "GatewaySessionRecord",
     "GatewaySessionService",
     "GatewaySessionStatus",

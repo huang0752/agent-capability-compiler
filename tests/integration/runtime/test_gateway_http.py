@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import time
 from collections.abc import Awaitable, Callable, Mapping
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from mcp import types
+from mcp.server.lowlevel import Server
 from pydantic import JsonValue, SecretStr
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -105,6 +107,35 @@ class ContextRuntime:
         assert capability_id == "records_list"
         assert arguments == {}
         return {"principal": principal_context.principal_id}
+
+
+class TrackingPrincipalMcpServer(PrincipalCapabilityMcpServer):
+    def __init__(
+        self,
+        runtime: ContextRuntime,
+        *,
+        resolver: GatewayPrincipalResolver,
+    ) -> None:
+        super().__init__(runtime, resolver=resolver)
+        self.active_runs = 0
+        self.max_active_runs = 0
+        self.finished_runs = 0
+
+    def create_server(self) -> Server[object]:
+        server = super().create_server()
+        original_run = server.run
+
+        async def tracked_run(*args: Any, **kwargs: Any) -> None:
+            self.active_runs += 1
+            self.max_active_runs = max(self.max_active_runs, self.active_runs)
+            try:
+                await original_run(*args, **kwargs)
+            finally:
+                self.active_runs -= 1
+                self.finished_runs += 1
+
+        server.run = tracked_run  # type: ignore[method-assign]
+        return server
 
 
 def _build_app(
@@ -382,3 +413,133 @@ async def test_login_cancellation_traceback_does_not_retain_credentials() -> Non
         traceback = traceback.tb_next
     assert identity not in traceback_text
     assert password not in traceback_text
+
+
+def _wait_for_no_active_mcp_runs(adapter: TrackingPrincipalMcpServer) -> None:
+    deadline = time.monotonic() + 2.0
+    while adapter.active_runs and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert adapter.active_runs == 0
+
+
+def _build_tracking_app(
+    *,
+    seeds: range,
+    max_sessions: int,
+    ttl_seconds: int,
+    idle_timeout_seconds: float,
+) -> tuple[Starlette, FakeSessionService, TrackingPrincipalMcpServer]:
+    token_values = iter(_token(seed) for seed in seeds)
+    store = InMemoryGatewaySessionStore(
+        max_sessions=max_sessions,
+        ttl_seconds=ttl_seconds,
+        token_generator=lambda: next(token_values),
+    )
+    service = FakeSessionService(store)
+    verifier = GatewayTokenVerifier(store=store, project_id="project-a")
+    resolver = GatewayPrincipalResolver(store=store, project_id="project-a")
+    adapter = TrackingPrincipalMcpServer(ContextRuntime(), resolver=resolver)
+    app = create_gateway_app(
+        settings=GatewaySettings(
+            allowed_hosts=("gateway.test",),
+            allowed_origins=("https://agent.test",),
+            session_ttl_seconds=ttl_seconds,
+            max_sessions=max_sessions,
+        ),
+        service=service,
+        token_verifier=verifier,
+        mcp_server=adapter,
+        mcp_session_idle_timeout_seconds=idle_timeout_seconds,
+    )
+    return app, service, adapter
+
+
+def test_logout_reaps_transport_within_idle_bound_and_reuses_capacity() -> None:
+    app, _, adapter = _build_tracking_app(
+        seeds=range(30, 40),
+        max_sessions=1,
+        ttl_seconds=60,
+        idle_timeout_seconds=0.03,
+    )
+
+    with TestClient(app, base_url="http://gateway.test") as client:
+        for _ in range(5):
+            token = _login(client, "a")
+            _initialize(client, token)
+            logout = client.delete(
+                "/runtime/sessions/current",
+                headers={"authorization": f"Bearer {token}"},
+            )
+            assert logout.status_code == 204
+        _wait_for_no_active_mcp_runs(adapter)
+
+    assert adapter.finished_runs == 5
+
+
+def test_active_sse_is_cancelled_by_the_same_finite_idle_bound() -> None:
+    app, _, adapter = _build_tracking_app(
+        seeds=range(60, 64),
+        max_sessions=1,
+        ttl_seconds=60,
+        idle_timeout_seconds=0.04,
+    )
+
+    with TestClient(app, base_url="http://gateway.test") as client:
+        token = _login(client, "a")
+        session_id = _initialize(client, token)
+        started = time.monotonic()
+        sse = client.get(
+            "/mcp",
+            headers=_mcp_headers(token, session_id),
+        )
+        elapsed = time.monotonic() - started
+        assert sse.status_code == 200
+        assert elapsed < 1.0
+        _wait_for_no_active_mcp_runs(adapter)
+
+    assert adapter.finished_runs == 1
+
+
+def test_reauth_session_cannot_refresh_or_keep_transport_alive() -> None:
+    app, service, adapter = _build_tracking_app(
+        seeds=range(40, 44),
+        max_sessions=1,
+        ttl_seconds=60,
+        idle_timeout_seconds=0.04,
+    )
+
+    with TestClient(app, base_url="http://gateway.test") as client:
+        token = _login(client, "a")
+        session_id = _initialize(client, token)
+        assert client.portal is not None
+        record = client.portal.call(service.store.resolve_token, token)
+        client.portal.call(service.store.mark_reauth_required, record.session_id)
+        denied = client.get(
+            "/mcp",
+            headers=_mcp_headers(token, session_id),
+        )
+        assert denied.status_code == 401
+        _wait_for_no_active_mcp_runs(adapter)
+
+    assert adapter.finished_runs == 1
+
+
+def test_expired_gateway_session_and_mcp_transport_share_finite_upper_bound() -> None:
+    app, _, adapter = _build_tracking_app(
+        seeds=range(50, 54),
+        max_sessions=1,
+        ttl_seconds=1,
+        idle_timeout_seconds=1.0,
+    )
+
+    with TestClient(app, base_url="http://gateway.test") as client:
+        token = _login(client, "a")
+        session_id = _initialize(client, token)
+        _wait_for_no_active_mcp_runs(adapter)
+        expired = client.get(
+            "/mcp",
+            headers=_mcp_headers(token, session_id),
+        )
+        assert expired.status_code == 401
+
+    assert adapter.finished_runs == 1

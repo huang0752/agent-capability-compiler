@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import math
 from collections.abc import AsyncIterator
 from typing import Protocol
 
@@ -31,6 +32,7 @@ from acc_runtime.gateway.security import RequestSecurityMiddleware
 from acc_runtime.mcp import PrincipalCapabilityMcpServer
 
 DEFAULT_GATEWAY_BODY_LIMIT = 4 * 1024 * 1024
+DEFAULT_MCP_SESSION_IDLE_TIMEOUT_SECONDS = 60.0
 
 
 class _Cancelled:
@@ -67,6 +69,7 @@ def create_gateway_app(
     token_verifier: GatewayTokenVerifier,
     mcp_server: PrincipalCapabilityMcpServer,
     max_request_body_size: int = DEFAULT_GATEWAY_BODY_LIMIT,
+    mcp_session_idle_timeout_seconds: float | None = None,
 ) -> Starlette:
     """Create one single-use Gateway app and bind all lifecycle-owned resources."""
 
@@ -76,6 +79,21 @@ def create_gateway_app(
         or max_request_body_size <= 0
     ):
         raise ValueError("max_request_body_size must be a positive integer")
+    idle_timeout = (
+        min(float(settings.session_ttl_seconds), DEFAULT_MCP_SESSION_IDLE_TIMEOUT_SECONDS)
+        if mcp_session_idle_timeout_seconds is None
+        else mcp_session_idle_timeout_seconds
+    )
+    if (
+        not isinstance(idle_timeout, (int, float))
+        or isinstance(idle_timeout, bool)
+        or not math.isfinite(idle_timeout)
+        or idle_timeout <= 0
+        or idle_timeout > settings.session_ttl_seconds
+    ):
+        raise ValueError(
+            "mcp_session_idle_timeout_seconds must be positive and no greater than session TTL"
+        )
 
     transport_security = TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
@@ -87,6 +105,7 @@ def create_gateway_app(
         json_response=True,
         stateless=False,
         security_settings=transport_security,
+        session_idle_timeout=float(idle_timeout),
         max_request_body_size=max_request_body_size,
     )
 
@@ -242,6 +261,7 @@ def _error_response(status_code: int, code: str) -> JSONResponse:
 
 __all__ = [
     "DEFAULT_GATEWAY_BODY_LIMIT",
+    "DEFAULT_MCP_SESSION_IDLE_TIMEOUT_SECONDS",
     "GatewaySessionApplicationService",
     "create_gateway_app",
 ]
