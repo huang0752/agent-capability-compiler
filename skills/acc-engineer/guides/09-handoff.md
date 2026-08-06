@@ -20,12 +20,13 @@
 - 所有结论可由 Evidence、结构化 diagnostics 或真实测试结果复核。
 - 不隐藏失败，不把未运行测试写成通过，不把推测写成事实。
 - 原系统代码、数据库、认证和部署变更均为零；交付物不含 Secret 或写接口。
-- 风险与限制已明确，候选仍符合只读 MVP 和平台中立边界。
+- 风险与限制已明确，候选仍符合已声明只读范围和平台中立边界。
 - Git diff 或非 Git artifact manifest 已按项目类型生成，不混用两种交付证据。
 
 ## 输出
 
 - `HANDOFF.md`
+- `scope-audit-report.json`
 - `coverage-report.json`
 - `test-report.json`
 - `risk-report.json`

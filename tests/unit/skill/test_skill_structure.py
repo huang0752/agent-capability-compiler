@@ -72,6 +72,25 @@ def test_skill_requires_explicit_scope_audit_and_validation_level() -> None:
     assert (SKILL / "scripts" / "artifact_manifest.py").is_file()
 
 
+def test_guides_reserve_mvp_language_for_explicit_pilot_scope() -> None:
+    guides = "\n".join(
+        path.read_text(encoding="utf-8") for path in (SKILL / "guides").glob("*.md")
+    )
+    for stale in (
+        "新需求超出只读 MVP",
+        "候选仍符合只读 MVP",
+        "MVP 候选仅使用",
+    ):
+        assert stale not in guides
+
+    for name in ("04-plan.md", "08-refine.md", "09-handoff.md"):
+        assert "MVP" not in (SKILL / "guides" / name).read_text(encoding="utf-8")
+
+    handoff = (SKILL / "guides" / "09-handoff.md").read_text(encoding="utf-8")
+    output = handoff.split("## 输出", maxsplit=1)[1].split("## 停止条件", maxsplit=1)[0]
+    assert "scope-audit-report.json" in output
+
+
 def test_openai_metadata_and_platform_wrappers_delegate_to_the_single_harness() -> None:
     metadata = _yaml(SKILL / "agents" / "openai.yaml")
     interface = metadata["interface"]
