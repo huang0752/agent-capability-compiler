@@ -4,6 +4,7 @@ import asyncio
 import gzip
 import json
 import logging
+import types
 from collections.abc import Callable, Mapping
 from typing import cast
 
@@ -187,6 +188,85 @@ def _assert_exception_graph_has_no_secret(error: BaseException, secret: str) -> 
                     getattr(value, "doc", None),
                 ]
             )
+
+
+def _assert_runtime_traceback_locals_have_no_secret(
+    error: BaseException,
+    secret: str,
+) -> None:
+    pending: list[object] = []
+    traceback = error.__traceback__
+    while traceback is not None:
+        if "/packages/acc-runtime/" in traceback.tb_frame.f_code.co_filename:
+            pending.extend(traceback.tb_frame.f_locals.values())
+        traceback = traceback.tb_next
+
+    seen: set[int] = set()
+    while pending:
+        value = pending.pop()
+        if value is None or id(value) in seen:
+            continue
+        seen.add(id(value))
+        if isinstance(value, str):
+            assert secret not in value
+            continue
+        if isinstance(value, bytes):
+            assert secret.encode() not in value
+            continue
+        if isinstance(value, SecretValue):
+            assert secret not in value.get_secret_value()
+            continue
+        if isinstance(value, CredentialPair):
+            pending.extend([value.identity, value.password])
+            continue
+        if isinstance(value, json.JSONDecodeError):
+            pending.extend([value.doc, value.args])
+            continue
+        if isinstance(value, httpx.Request):
+            pending.extend([value.content, value.headers, str(value.url)])
+            continue
+        if isinstance(value, httpx.Response):
+            pending.extend([value.headers, value.request])
+            if value.is_closed:
+                pending.append(value.content)
+            continue
+        if isinstance(value, Mapping):
+            pending.extend(value.keys())
+            pending.extend(value.values())
+            continue
+        if isinstance(value, (list, tuple, set, frozenset)):
+            pending.extend(value)
+            continue
+        if isinstance(value, BaseException):
+            pending.extend(
+                [
+                    value.args,
+                    value.__cause__,
+                    value.__context__,
+                    getattr(value, "details", None),
+                ]
+            )
+            continue
+        if isinstance(
+            value,
+            (
+                asyncio.Future,
+                asyncio.Lock,
+                types.FunctionType,
+                types.MethodType,
+                type,
+            ),
+        ):
+            continue
+        namespace = getattr(value, "__dict__", None)
+        if isinstance(namespace, dict):
+            pending.extend(namespace.values())
+        slots = getattr(type(value), "__slots__", ())
+        if isinstance(slots, str):
+            slots = (slots,)
+        for slot in slots:
+            if isinstance(slot, str) and hasattr(value, slot):
+                pending.append(getattr(value, slot))
 
 
 def test_auth_error_codes_are_limited_to_the_reviewed_public_taxonomy() -> None:
@@ -1068,6 +1148,60 @@ async def test_safe_auth_errors_detach_secret_bearing_exception_graphs() -> None
         _assert_exception_graph_has_no_secret(error, secret)
 
 
+@pytest.mark.parametrize("failure_kind", ["network", "json"])
+@pytest.mark.asyncio
+async def test_authenticate_once_traceback_locals_do_not_retain_secrets(
+    failure_kind: str,
+) -> None:
+    secret = f"authenticate-once-traceback-{failure_kind}"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if failure_kind == "network":
+            raise httpx.ConnectError(secret, request=request)
+        return httpx.Response(
+            200,
+            content=f'{{"access_token":"{secret}", broken'.encode(),
+        )
+
+    strategy = PasswordBearerAuthStrategy(
+        config=_config(credentials={"kind": "gateway_session"}),
+        base_url="https://crm.example.test",
+        credential_source=None,
+        client_factory=_client_factory(handler),
+    )
+    credentials = CredentialPair(
+        identity=SecretValue(secret),
+        password=SecretValue(secret),
+    )
+
+    with pytest.raises((AuthLoginFailedError, AuthResponseInvalidError)) as caught:
+        await strategy.authenticate_once(credentials)
+
+    _assert_runtime_traceback_locals_have_no_secret(caught.value, secret)
+
+
+@pytest.mark.asyncio
+async def test_renewable_authorize_traceback_locals_do_not_retain_secrets() -> None:
+    secret = "renewable-authorize-traceback-secret"
+    source = _CredentialSource(identity=secret, password=secret)
+    strategy = PasswordBearerAuthStrategy(
+        config=_config(),
+        base_url="https://crm.example.test",
+        credential_source=source,
+        client_factory=_client_factory(
+            lambda _request: httpx.Response(
+                200,
+                content=f'{{"access_token":"{secret}", broken'.encode(),
+            )
+        ),
+    )
+
+    with pytest.raises(AuthResponseInvalidError) as caught:
+        await strategy.headers(_context())
+
+    _assert_runtime_traceback_locals_have_no_secret(caught.value, secret)
+
+
 @pytest.mark.asyncio
 async def test_failed_single_flight_shares_one_safe_error_then_allows_a_new_retry() -> None:
     calls = 0
@@ -1234,22 +1368,32 @@ async def test_login_request_does_not_inherit_factory_headers_cookies_or_auth() 
 async def test_all_cancelled_waiters_are_cleaned_and_a_later_call_can_retry() -> None:
     calls = 0
     started = asyncio.Event()
-    release = asyncio.Event()
+    upstream_cancelled = asyncio.Event()
+    never_release = asyncio.Event()
+    clients: list[httpx.AsyncClient] = []
 
     async def handler(_request: httpx.Request) -> httpx.Response:
         nonlocal calls
         calls += 1
         if calls == 1:
             started.set()
-            await release.wait()
-            return httpx.Response(503)
+            try:
+                await never_release.wait()
+            except asyncio.CancelledError:
+                upstream_cancelled.set()
+                raise
         return httpx.Response(200, json={"access_token": "retried-token"})
+
+    def factory() -> httpx.AsyncClient:
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        clients.append(client)
+        return client
 
     strategy = PasswordBearerAuthStrategy(
         config=_config(),
         base_url="https://crm.example.test",
         credential_source=_CredentialSource(),
-        client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        client_factory=factory,
     )
     context = _context()
     waiters = [asyncio.create_task(strategy.headers(context)) for _ in range(2)]
@@ -1257,8 +1401,9 @@ async def test_all_cancelled_waiters_are_cleaned_and_a_later_call_can_retry() ->
     for waiter in waiters:
         waiter.cancel()
     await asyncio.gather(*waiters, return_exceptions=True)
-    release.set()
-    await asyncio.sleep(0.01)
+    await asyncio.wait_for(upstream_cancelled.wait(), timeout=0.5)
+
+    assert clients[0].is_closed is True
 
     retried = await strategy.headers(context)
 
