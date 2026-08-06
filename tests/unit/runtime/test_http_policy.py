@@ -280,7 +280,11 @@ async def test_http_provider_stops_when_streamed_response_exceeds_limit() -> Non
 
     assert caught.value.code == "ACC_RUNTIME_HTTP_RESPONSE_TOO_LARGE"
     assert caught.value.status == 502
-    assert caught.value.details == {"operation": "crm.get_customer", "limit_bytes": 5}
+    assert caught.value.details == {
+        "operation": "crm.get_customer",
+        "limit_bytes": 5,
+        "phase": "operation",
+    }
 
 
 @pytest.mark.asyncio

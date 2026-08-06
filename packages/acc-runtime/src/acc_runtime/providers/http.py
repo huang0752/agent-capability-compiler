@@ -15,6 +15,8 @@ from jsonschema import Draft202012Validator
 from pydantic import JsonValue, ValidationError
 
 from acc_core.models import Operation
+from acc_runtime.auth import AuthAttempt, AuthUnauthorizedError, HttpAuthStrategy
+from acc_runtime.context import PrincipalContext
 from acc_runtime.credentials import SecretValue, resolve_secret
 from acc_runtime.errors import RuntimeError
 
@@ -113,18 +115,21 @@ class HttpProvider:
         *,
         base_url_ref: str,
         secret_resolver: SecretResolver | None = None,
+        auth_strategy: HttpAuthStrategy | None = None,
         environment: Mapping[str, str] | None = None,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self.base_url_ref = base_url_ref
         self._environment = environment
         self._secret_resolver = secret_resolver or EnvironmentSecretResolver(environment)
+        self._auth_strategy = auth_strategy
         self.client = client
 
     async def call(
         self,
         operation: Mapping[str, object],
         arguments: Mapping[str, JsonValue],
+        principal_context: PrincipalContext | None = None,
     ) -> JsonValue:
         """Operation-caller protocol used by the generic workflow executor."""
 
@@ -132,12 +137,18 @@ class HttpProvider:
             definition = Operation.model_validate(operation)
         except ValidationError as exc:
             raise HttpOperationError("compiled HTTP operation is invalid") from exc
-        return await self.execute(definition, arguments)
+        return await self.execute(
+            definition,
+            arguments,
+            principal_context=principal_context,
+        )
 
     async def execute(
         self,
         operation: Operation,
         arguments: Mapping[str, JsonValue],
+        *,
+        principal_context: PrincipalContext | None = None,
     ) -> JsonValue:
         """Validate, execute, bound, decode, and validate one HTTP response."""
 
@@ -150,26 +161,33 @@ class HttpProvider:
             )
 
         url = self._request_url(base_url, operation, arguments)
-        credential = self._secret_resolver.resolve(operation.http.credential_ref)
-        token = credential if isinstance(credential, str) else credential.get_secret_value()
-        if not isinstance(token, str) or not token:
-            raise HttpRequestError(
-                "resolved credential is empty or invalid",
-                details={"operation": operation.id},
-            )
-
-        headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+        attempt = await self._authentication_attempt(operation, principal_context)
+        headers = self._request_headers(operation, attempt)
         try:
             if self.client is not None:
-                result = await self._send(self.client, operation, url, headers)
+                result = await self._send_with_retry(
+                    self.client,
+                    operation,
+                    url,
+                    headers,
+                    principal_context,
+                    attempt,
+                )
             else:
-                async with httpx.AsyncClient() as client:
-                    result = await self._send(client, operation, url, headers)
+                async with httpx.AsyncClient(follow_redirects=False) as client:
+                    result = await self._send_with_retry(
+                        client,
+                        operation,
+                        url,
+                        headers,
+                        principal_context,
+                        attempt,
+                    )
         except httpx.TimeoutException as exc:
             LOGGER.warning("HTTP operation timed out operation=%s", operation.id)
             raise HttpTimeoutError(
                 "upstream request timed out",
-                details={"operation": operation.id},
+                details={"operation": operation.id, "phase": "operation"},
             ) from exc
         except httpx.RequestError as exc:
             LOGGER.warning("HTTP operation failed operation=%s", operation.id)
@@ -180,6 +198,106 @@ class HttpProvider:
 
         self._validate_schema(operation.output_schema, result, operation, input_value=False)
         return result
+
+    async def _authentication_attempt(
+        self,
+        operation: Operation,
+        principal_context: PrincipalContext | None,
+    ) -> AuthAttempt | None:
+        if self._auth_strategy is not None:
+            if not isinstance(principal_context, PrincipalContext):
+                raise HttpOperationError(
+                    "provider authentication requires a trusted PrincipalContext",
+                    details={"operation": operation.id},
+                )
+            if operation.http.credential_ref is not None:
+                raise HttpOperationError(
+                    "operation credential conflicts with provider authentication",
+                    details={"operation": operation.id},
+                )
+            attempt = await self._auth_strategy.authorize(principal_context)
+            if attempt.state_key != principal_context.auth_state_key:
+                raise HttpOperationError(
+                    "authentication attempt does not belong to the PrincipalContext",
+                    details={"operation": operation.id},
+                )
+            return attempt
+
+        credential_ref = operation.http.credential_ref
+        if credential_ref is None:
+            raise HttpOperationError(
+                "operation credential is required without provider authentication",
+                details={"operation": operation.id},
+            )
+        return None
+
+    def _request_headers(
+        self,
+        operation: Operation,
+        attempt: AuthAttempt | None,
+    ) -> dict[str, str]:
+        if attempt is None:
+            credential_ref = operation.http.credential_ref
+            assert credential_ref is not None
+            credential = self._secret_resolver.resolve(credential_ref)
+            token = credential if isinstance(credential, str) else credential.get_secret_value()
+            if not isinstance(token, str) or not token:
+                raise HttpRequestError(
+                    "resolved credential is empty or invalid",
+                    details={"operation": operation.id},
+                )
+            return {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+
+        headers = {"Accept": "application/json"}
+        for name, secret in attempt.headers.items():
+            if name.casefold() == "cookie":
+                raise HttpOperationError(
+                    "cookie authentication is not supported by this provider",
+                    details={"operation": operation.id},
+                )
+            headers[name] = secret.get_secret_value()
+        return headers
+
+    async def _send_with_retry(
+        self,
+        client: httpx.AsyncClient,
+        operation: Operation,
+        url: str,
+        headers: Mapping[str, str],
+        principal_context: PrincipalContext | None,
+        attempt: AuthAttempt | None,
+    ) -> JsonValue:
+        try:
+            return await self._send(client, operation, url, headers)
+        except _OperationUnauthorized:
+            if (
+                self._auth_strategy is None
+                or principal_context is None
+                or attempt is None
+                or not await self._auth_strategy.on_unauthorized(
+                    principal_context,
+                    attempt,
+                )
+            ):
+                raise AuthUnauthorizedError(
+                    "source authentication is unauthorized",
+                    details={"operation": operation.id},
+                ) from None
+
+        retry_attempt = await self._auth_strategy.authorize(principal_context)
+        if retry_attempt.state_key != principal_context.auth_state_key:
+            raise HttpOperationError(
+                "authentication attempt does not belong to the PrincipalContext",
+                details={"operation": operation.id},
+            )
+        retry_headers = self._request_headers(operation, retry_attempt)
+        try:
+            return await self._send(client, operation, url, retry_headers)
+        except _OperationUnauthorized:
+            raise AuthUnauthorizedError(
+                "source authentication is unauthorized",
+                details={"operation": operation.id},
+            ) from None
 
     def _fixed_base_url(self, operation: Operation) -> str:
         source = os.environ if self._environment is None else self._environment
@@ -285,12 +403,27 @@ class HttpProvider:
         headers: Mapping[str, str],
     ) -> JsonValue:
         timeout = httpx.Timeout(operation.http.timeout_seconds)
-        async with client.stream(
+        request = httpx.Request(
             operation.http.method,
             url,
             headers=headers,
-            timeout=timeout,
-        ) as response:
+            extensions={"timeout": timeout.as_dict()},
+        )
+        response = await client.send(
+            request,
+            auth=None,
+            follow_redirects=False,
+            stream=True,
+        )
+        try:
+            if self._response_origin(response) != self._response_origin(request):
+                raise HttpRequestError(
+                    "upstream response origin did not match the configured target",
+                    details={"operation": operation.id},
+                )
+            if response.status_code == 401:
+                self._log_status(operation, response.status_code)
+                raise _OperationUnauthorized
             if response.status_code == 403:
                 self._log_status(operation, response.status_code)
                 raise HttpForbiddenError(
@@ -330,6 +463,8 @@ class HttpProvider:
                 body.extend(chunk)
                 if len(body) > operation.http.max_response_bytes:
                     raise self._response_too_large(operation)
+        finally:
+            await response.aclose()
 
         try:
             value = json.loads(body, parse_constant=self._reject_json_constant)
@@ -349,8 +484,14 @@ class HttpProvider:
             details={
                 "operation": operation.id,
                 "limit_bytes": operation.http.max_response_bytes,
+                "phase": "operation",
             },
         )
+
+    @staticmethod
+    def _response_origin(message: httpx.Request | httpx.Response) -> tuple[str, str, int | None]:
+        url = message.url
+        return (url.scheme, url.host, url.port)
 
     @staticmethod
     def _reject_json_constant(value: str) -> None:
@@ -409,3 +550,7 @@ __all__ = [
     "ResolvedSecret",
     "SecretResolver",
 ]
+
+
+class _OperationUnauthorized(Exception):
+    """Internal response signal that never retains response content."""
