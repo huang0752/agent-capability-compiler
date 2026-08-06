@@ -6,8 +6,18 @@ import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
 from acc_runtime.errors import RuntimeError
+
+if TYPE_CHECKING:
+    from acc_runtime.auth.credentials import (
+        CredentialPair,
+        CredentialSource,
+        EnvironmentCredentialSource,
+        OneShotCredentialSource,
+        RenewableCredentialSource,
+    )
 
 _ENVIRONMENT_NAME = re.compile(r"[A-Z][A-Z0-9_]*")
 _REDACTED = "[REDACTED]"
@@ -89,7 +99,28 @@ def resolve_secret(
     return SecretValue(value)
 
 
+def __getattr__(name: str) -> Any:
+    """Lazily expose auth credential sources without creating an import cycle."""
+
+    if name in {
+        "CredentialPair",
+        "CredentialSource",
+        "EnvironmentCredentialSource",
+        "OneShotCredentialSource",
+        "RenewableCredentialSource",
+    }:
+        from acc_runtime.auth import credentials as auth_credentials
+
+        return getattr(auth_credentials, name)
+    raise AttributeError(name)
+
+
 __all__ = [
+    "CredentialPair",
+    "CredentialSource",
+    "EnvironmentCredentialSource",
+    "OneShotCredentialSource",
+    "RenewableCredentialSource",
     "SecretNotFoundError",
     "SecretRef",
     "SecretReferenceError",
