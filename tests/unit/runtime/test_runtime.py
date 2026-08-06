@@ -1,21 +1,29 @@
 from __future__ import annotations
 
+import asyncio
+import types
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 from pydantic import JsonValue
 
 import acc_runtime
 from acc_runtime.auth import (
+    AuthAttempt,
+    AuthenticationResult,
     BearerSecretAuthStrategy,
     NoAuthStrategy,
     PasswordBearerAuthStrategy,
 )
 from acc_runtime.context import PrincipalContext
+from acc_runtime.credentials import SecretValue
+from acc_runtime.errors import RuntimeError as AccRuntimeError
+from acc_runtime.execution import ExecutionError
 from acc_runtime.policies import PolicyScopeDeniedError
-from acc_runtime.providers import HttpProvider
+from acc_runtime.providers import HttpForbiddenError, HttpProvider
 from acc_runtime.runtime import ContextOperationProvider, GenericRuntime, RuntimeConfigurationError
 
 
@@ -154,6 +162,101 @@ class ContextAwareProvider:
             "tenant_id": str(arguments.get("tenant_id", "")),
             "secret": "must-not-leave-runtime",
         }
+
+
+class SensitiveStrategy:
+    def __init__(self, other_users_token: str) -> None:
+        self.other_users_token = SecretValue(other_users_token)
+        self.close_calls = 0
+
+    async def authorize(self, context: PrincipalContext) -> AuthAttempt:
+        authentication = AuthenticationResult(
+            token=SecretValue("current-user-token"),
+            token_type="Bearer",
+        )
+        assert authentication.authorization is not None
+        return AuthAttempt(
+            headers={"Authorization": authentication.authorization},
+            state_key=context.auth_state_key,
+            generation=1,
+            authentication=authentication,
+        )
+
+    headers = authorize
+
+    async def on_unauthorized(
+        self,
+        context: PrincipalContext,
+        failed_attempt: AuthAttempt,
+    ) -> bool:
+        return False
+
+    async def invalidate(self, auth_state_key: object) -> None:
+        return None
+
+    async def aclose(self) -> None:
+        self.close_calls += 1
+
+
+def _assert_runtime_exception_cannot_reach_secret(
+    error: BaseException,
+    *secrets: str,
+) -> None:
+    pending: list[object] = [error]
+    seen: set[int] = set()
+    while pending:
+        value = pending.pop()
+        if value is None or id(value) in seen:
+            continue
+        seen.add(id(value))
+        if isinstance(value, str):
+            assert all(secret not in value for secret in secrets)
+            continue
+        if isinstance(value, bytes):
+            assert all(secret.encode() not in value for secret in secrets)
+            continue
+        if isinstance(value, SecretValue):
+            pending.append(value.get_secret_value())
+            continue
+        if isinstance(value, httpx.Request):
+            pending.extend([value.content, value.headers, str(value.url)])
+            continue
+        if isinstance(value, httpx.Response):
+            pending.extend([value.headers, value.request])
+            if value.is_closed:
+                pending.append(value.content)
+            continue
+        if isinstance(value, Mapping):
+            pending.extend(value.keys())
+            pending.extend(value.values())
+            continue
+        if isinstance(value, (list, tuple, set, frozenset)):
+            pending.extend(value)
+            continue
+        if isinstance(value, BaseException):
+            pending.extend(
+                [value.args, value.__cause__, value.__context__, getattr(value, "details", None)]
+            )
+            traceback = value.__traceback__
+            while traceback is not None:
+                if "/packages/acc-runtime/" in traceback.tb_frame.f_code.co_filename:
+                    pending.extend(traceback.tb_frame.f_locals.values())
+                traceback = traceback.tb_next
+            continue
+        if isinstance(
+            value,
+            (asyncio.Future, asyncio.Lock, types.FunctionType, types.MethodType, type),
+        ):
+            continue
+        namespace = getattr(value, "__dict__", None)
+        if isinstance(namespace, dict):
+            pending.extend(namespace.values())
+        slots = getattr(type(value), "__slots__", ())
+        if isinstance(slots, str):
+            slots = (slots,)
+        for slot in slots:
+            if isinstance(slot, str) and hasattr(value, slot):
+                pending.append(getattr(value, slot))
 
 
 def _principal(
@@ -516,3 +619,228 @@ def test_from_pack_rejects_gateway_credentials_in_stdio_with_a_stable_error(
 
     assert caught.value.code == "ACC_RUNTIME_CONFIGURATION_INVALID"
     assert caught.value.details == {"reason": "gateway_session_requires_streamable_http"}
+
+
+@pytest.mark.asyncio
+async def test_bound_principal_is_read_only_and_call_keeps_using_the_original_identity() -> None:
+    provider = ContextAwareProvider()
+    original = _principal("original", tenant_context={"tenant_id": "tenant-a"})
+    replacement = _principal("replacement", tenant_context={"tenant_id": "tenant-b"})
+    runtime = GenericRuntime(_ir(), provider=provider, principal_context=original)
+
+    with pytest.raises(AttributeError):
+        runtime.principal_context = replacement  # type: ignore[misc]
+
+    await runtime.call("get_customer", {"customer_id": "c-1"})
+    await runtime.call("get_customer", {"customer_id": "c-2"})
+
+    assert runtime.principal_context is original
+    assert provider.contexts == [original, original]
+
+
+def _authenticated_ir() -> dict[str, Any]:
+    ir = _ir()
+    ir["operations"]["crm.get_customer"]["http"]["credential_ref"] = None
+    ir["project"]["provider"]["auth"] = {"kind": "none"}
+    return ir
+
+
+def _sensitive_http_runtime(
+    handler: object,
+    *,
+    principal: PrincipalContext,
+    other_users_token: str,
+) -> tuple[GenericRuntime, httpx.AsyncClient]:
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),  # type: ignore[arg-type]
+        follow_redirects=False,
+    )
+    provider = HttpProvider(
+        base_url_ref="CRM_URL",
+        environment={"CRM_URL": "https://crm.example.test"},
+        auth_strategy=SensitiveStrategy(other_users_token),
+        client=client,
+    )
+    return GenericRuntime(
+        _authenticated_ir(),
+        provider=provider,
+        principal_context=principal,
+    ), client
+
+
+@pytest.mark.asyncio
+async def test_policy_error_traceback_cannot_reach_another_principals_auth_state() -> None:
+    other_users_token = "other-user-policy-token-must-not-leak"
+    principal = _principal(
+        "limited",
+        source_scopes={"source.customer"},
+        scope_mapping={"source.customer": {"customer.read"}},
+        tenant_context={"tenant_id": "tenant-a"},
+    )
+    runtime, client = _sensitive_http_runtime(
+        lambda request: httpx.Response(200, json={"id": "c-1"}),
+        principal=principal,
+        other_users_token=other_users_token,
+    )
+    try:
+        with pytest.raises(PolicyScopeDeniedError) as caught:
+            await runtime.call("get_customer", {"customer_id": "c-1"})
+    finally:
+        await client.aclose()
+
+    assert caught.value.code == "ACC_RUNTIME_POLICY_SCOPE_DENIED"
+    _assert_runtime_exception_cannot_reach_secret(caught.value, other_users_token)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("explicit_context", [False, True])
+async def test_provider_error_traceback_cannot_reach_another_principals_auth_state(
+    explicit_context: bool,
+) -> None:
+    other_users_token = "other-user-provider-token-must-not-leak"
+    runtime, client = _sensitive_http_runtime(
+        lambda request: httpx.Response(403, json={"private": "upstream"}),
+        principal=_principal("current", tenant_context={"tenant_id": "tenant-a"}),
+        other_users_token=other_users_token,
+    )
+    try:
+        with pytest.raises(AccRuntimeError) as caught:
+            if explicit_context:
+                await runtime.call_with_context(
+                    "get_customer",
+                    {"customer_id": "c-1"},
+                    runtime.principal_context,
+                )
+            else:
+                await runtime.call("get_customer", {"customer_id": "c-1"})
+    finally:
+        await client.aclose()
+
+    assert caught.value.code == "ACC_RUNTIME_HTTP_FORBIDDEN"
+    assert isinstance(caught.value, HttpForbiddenError)
+    assert caught.value.details == {"operation": "crm.get_customer"}
+    _assert_runtime_exception_cannot_reach_secret(caught.value, other_users_token)
+
+
+@pytest.mark.asyncio
+async def test_output_schema_error_traceback_cannot_reach_unfiltered_upstream_output() -> None:
+    raw_upstream_secret = "unfiltered-upstream-output-must-not-leak"
+    other_users_token = "other-user-output-token-must-not-leak"
+    runtime, client = _sensitive_http_runtime(
+        lambda request: httpx.Response(
+            200,
+            json={
+                "id": "c-1",
+                "name": "Ada",
+                "tenant_id": "tenant-a",
+                "secret": raw_upstream_secret,
+            },
+        ),
+        principal=_principal("current", tenant_context={"tenant_id": "tenant-a"}),
+        other_users_token=other_users_token,
+    )
+    runtime.ir["capabilities"]["get_customer"]["definition"]["output_schema"] = {
+        "type": "object",
+        "required": ["missing_public_field"],
+    }
+    try:
+        with pytest.raises(AccRuntimeError) as caught:
+            await runtime.call("get_customer", {"customer_id": "c-1"})
+    finally:
+        await client.aclose()
+
+    assert caught.value.code == "ACC_RUNTIME_OUTPUT_INVALID"
+    assert isinstance(caught.value, ExecutionError)
+    assert caught.value.details == {
+        "capability_id": "get_customer",
+        "schema_role": "filtered_capability_output",
+    }
+    _assert_runtime_exception_cannot_reach_secret(
+        caught.value,
+        raw_upstream_secret,
+        other_users_token,
+    )
+
+
+@pytest.mark.asyncio
+async def test_from_pack_closes_only_its_owned_auth_strategy_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ir = _authenticated_ir()
+    strategy = SensitiveStrategy("owned-strategy-secret")
+    monkeypatch.setattr(
+        "acc_runtime.runtime.load_pack",
+        lambda path: type("Pack", (), {"ir": ir, "path": Path(path)})(),
+    )
+    monkeypatch.setattr(
+        "acc_runtime.runtime._auth_strategy_from_project",
+        lambda project, environment: strategy,
+    )
+    runtime = GenericRuntime.from_pack(
+        "runtime.accpkg",
+        environment={"CRM_URL": "https://crm.example.test"},
+    )
+
+    await runtime.aclose()
+    await runtime.aclose()
+
+    assert strategy.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_runtime_async_context_closes_owned_strategy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ir = _authenticated_ir()
+    strategy = SensitiveStrategy("context-owned-strategy-secret")
+    monkeypatch.setattr(
+        "acc_runtime.runtime.load_pack",
+        lambda path: type("Pack", (), {"ir": ir, "path": Path(path)})(),
+    )
+    monkeypatch.setattr(
+        "acc_runtime.runtime._auth_strategy_from_project",
+        lambda project, environment: strategy,
+    )
+
+    async with GenericRuntime.from_pack(
+        "runtime.accpkg",
+        environment={"CRM_URL": "https://crm.example.test"},
+    ):
+        assert strategy.close_calls == 0
+
+    assert strategy.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_runtime_does_not_close_an_external_provider_or_http_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ExternalProvider(FakeProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.close_calls = 0
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
+
+    external_provider = ExternalProvider()
+    direct_runtime = GenericRuntime(_ir(), provider=external_provider)
+    await direct_runtime.aclose()
+    assert external_provider.close_calls == 0
+
+    ir = _authenticated_ir()
+    monkeypatch.setattr(
+        "acc_runtime.runtime.load_pack",
+        lambda path: type("Pack", (), {"ir": ir, "path": Path(path)})(),
+    )
+    client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200)))
+    packed_runtime = GenericRuntime.from_pack(
+        "runtime.accpkg",
+        environment={"CRM_URL": "https://crm.example.test"},
+        client=client,
+    )
+
+    await packed_runtime.aclose()
+
+    assert client.is_closed is False
+    await client.aclose()

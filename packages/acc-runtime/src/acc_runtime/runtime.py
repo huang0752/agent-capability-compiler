@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import inspect
 import os
 from collections.abc import Collection, Mapping
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, Never, Protocol, cast
 
 import httpx
 from jsonschema import Draft202012Validator
@@ -40,6 +42,28 @@ from acc_runtime.providers import HttpProvider
 class RuntimeConfigurationError(AccRuntimeError):
     code = "ACC_RUNTIME_CONFIGURATION_INVALID"
     status = 500
+
+
+@dataclass(frozen=True, slots=True)
+class _RuntimeFailure:
+    error_type: type[AccRuntimeError]
+    code: str
+    message: str
+    details: Mapping[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class _RuntimeSuccess:
+    value: JsonValue
+
+
+@dataclass(frozen=True, slots=True)
+class _RuntimeCancelled:
+    pass
+
+
+_RUNTIME_CANCELLED = _RuntimeCancelled()
+type _RuntimeOutcome = _RuntimeSuccess | _RuntimeFailure | _RuntimeCancelled
 
 
 class OperationProvider(Protocol):
@@ -163,6 +187,8 @@ class GenericRuntime:
         self.ir = copy.deepcopy(dict(compiled_ir))
         self.provider = provider
         self.loaded_pack = loaded_pack
+        self._owned_auth_strategy: HttpAuthStrategy | None = None
+        self._closed = False
         self.project = self._load_project()
         if principal_context is None:
             principal_context = _stdio_principal_context(
@@ -176,7 +202,13 @@ class GenericRuntime:
                 "PrincipalContext belongs to another target system",
                 details={"reason": "principal_target_mismatch"},
             )
-        self.principal_context = principal_context
+        self._principal_context = principal_context
+
+    @property
+    def principal_context(self) -> PrincipalContext:
+        """Return the immutable Principal fixed at construction without permitting replacement."""
+
+        return self._principal_context
 
     @classmethod
     def from_pack(
@@ -194,6 +226,12 @@ class GenericRuntime:
             project = Project.model_validate(project_value)
         except ValidationError:
             raise RuntimeConfigurationError("compiled project contract is invalid") from None
+        principal_context = _stdio_principal_context(
+            project,
+            environment=environment,
+            granted_scopes=granted_scopes,
+            tenant_id=tenant_id,
+        )
         auth_strategy = _auth_strategy_from_project(project, environment=environment)
         provider = HttpProvider(
             base_url_ref=project.provider.base_url_ref,
@@ -201,18 +239,14 @@ class GenericRuntime:
             environment=environment,
             client=client,
         )
-        principal_context = _stdio_principal_context(
-            project,
-            environment=environment,
-            granted_scopes=granted_scopes,
-            tenant_id=tenant_id,
-        )
-        return cls(
+        runtime = cls(
             loaded.ir,
             provider=provider,
             principal_context=principal_context,
             loaded_pack=loaded,
         )
+        runtime._owned_auth_strategy = auth_strategy
+        return runtime
 
     def _load_project(self) -> Project:
         try:
@@ -274,7 +308,21 @@ class GenericRuntime:
     async def call(self, capability_id: str, arguments: Mapping[str, JsonValue]) -> JsonValue:
         """Execute using only the Principal fixed at runtime construction."""
 
-        return await self.call_with_context(capability_id, arguments, self.principal_context)
+        runtime = self
+        outcome = await runtime._call_outcome(
+            capability_id,
+            arguments,
+            runtime._principal_context,
+        )
+        if isinstance(outcome, _RuntimeSuccess):
+            return outcome.value
+        failure = outcome
+        del outcome
+        del arguments
+        del capability_id
+        del runtime
+        del self
+        _raise_runtime_failure(failure)
 
     async def call_with_context(
         self,
@@ -284,6 +332,57 @@ class GenericRuntime:
     ) -> JsonValue:
         """Execute one request with a Principal supplied by a trusted transport."""
 
+        runtime = self
+        outcome = await runtime._call_outcome(
+            capability_id,
+            arguments,
+            principal_context,
+        )
+        if isinstance(outcome, _RuntimeSuccess):
+            return outcome.value
+        failure = outcome
+        del outcome
+        del principal_context
+        del arguments
+        del capability_id
+        del runtime
+        del self
+        _raise_runtime_failure(failure)
+
+    async def _call_outcome(
+        self,
+        capability_id: str,
+        arguments: Mapping[str, JsonValue],
+        principal_context: PrincipalContext,
+    ) -> _RuntimeOutcome:
+        if self._closed:
+            return _RuntimeFailure(
+                error_type=RuntimeConfigurationError,
+                code=RuntimeConfigurationError.code,
+                message="runtime is closed",
+                details={"reason": "runtime_closed"},
+            )
+        try:
+            value = await self._execute_call(capability_id, arguments, principal_context)
+        except asyncio.CancelledError:
+            return _RUNTIME_CANCELLED
+        except AccRuntimeError as error:
+            return _runtime_failure(error)
+        except Exception:
+            return _RuntimeFailure(
+                error_type=RuntimeConfigurationError,
+                code=RuntimeConfigurationError.code,
+                message="runtime execution failed",
+                details={"reason": "runtime_internal_failure"},
+            )
+        return _RuntimeSuccess(value)
+
+    async def _execute_call(
+        self,
+        capability_id: str,
+        arguments: Mapping[str, JsonValue],
+        principal_context: PrincipalContext,
+    ) -> JsonValue:
         if not isinstance(principal_context, PrincipalContext):
             raise RuntimeConfigurationError(
                 "runtime requires a trusted PrincipalContext",
@@ -332,6 +431,64 @@ class GenericRuntime:
                 },
             )
         return filtered
+
+    async def aclose(self) -> None:
+        """Idempotently close only authentication state created by ``from_pack``."""
+
+        runtime = self
+        outcome = await runtime._close_outcome()
+        if outcome is None:
+            return
+        failure = outcome
+        del outcome
+        del runtime
+        del self
+        _raise_runtime_failure(failure)
+
+    async def _close_outcome(self) -> _RuntimeFailure | _RuntimeCancelled | None:
+        if self._closed:
+            return None
+        self._closed = True
+        strategy = self._owned_auth_strategy
+        self._owned_auth_strategy = None
+        if strategy is None:
+            return None
+        try:
+            await strategy.aclose()
+        except asyncio.CancelledError:
+            return _RUNTIME_CANCELLED
+        except AccRuntimeError as error:
+            return _runtime_failure(error)
+        except Exception:
+            return _RuntimeFailure(
+                error_type=RuntimeConfigurationError,
+                code=RuntimeConfigurationError.code,
+                message="runtime close failed",
+                details={"reason": "runtime_close_failed"},
+            )
+        return None
+
+    async def __aenter__(self) -> GenericRuntime:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: object,
+    ) -> None:
+        runtime = self
+        outcome = await runtime._close_outcome()
+        if outcome is None:
+            return
+        failure = outcome
+        del outcome
+        del traceback
+        del exc_value
+        del exc_type
+        del runtime
+        del self
+        _raise_runtime_failure(failure)
 
 
 def _field_path(field: str) -> tuple[str, ...]:
@@ -461,6 +618,27 @@ def _authentication_base_url(
             details={"reason": "authentication_base_url_missing"},
         )
     return value
+
+
+def _runtime_failure(error: AccRuntimeError) -> _RuntimeFailure:
+    return _RuntimeFailure(
+        error_type=type(error),
+        code=str(error.code),
+        message=str(error),
+        details=copy.deepcopy(error.details),
+    )
+
+
+def _raise_runtime_failure(failure: _RuntimeFailure | _RuntimeCancelled) -> Never:
+    if isinstance(failure, _RuntimeCancelled):
+        raise asyncio.CancelledError from None
+    if issubclass(failure.error_type, ExecutionError):
+        raise ExecutionError(
+            failure.code,
+            failure.message,
+            details=cast(Mapping[str, str | int | None], failure.details),
+        ) from None
+    raise failure.error_type(failure.message, details=failure.details) from None
 
 
 __all__ = [
