@@ -4,25 +4,36 @@ scope:
   mode: system_readonly_complete
   user_confirmation: null
   selected_domains: []
+  exclusion_approval:
+    approved_route_ids: []
+    approval_text: null
 discovery:
   source_commit: "git:0123456789abcdef"
   methods: [GET, HEAD]
   include_paths: [backend/app/api]
   evidence_sources: [api-router]
 domains:
-  - id: customer
+  - id: REPLACE_WITH_DOMAIN_ID
     status: selected
+exclusion_rules: []
+# For every eligible excluded route, add exactly one rule with:
+# id, category, route_ids, rationale, and evidence_sources. The route must
+# reference it through exclusion_rule_id and carry its own exclusion_decision.
 routes:
-  - id: customer.search
-    domain: customer
+  - id: REPLACE_WITH_SCOPE_ROUTE_ID
+    # Keep the established `domain` key; do not rename it to `domain_id`.
+    domain: REPLACE_WITH_DOMAIN_ID
     method: GET
-    path: /api/customers/search
-    evidence_sources: [customer-routes]
+    path: /REPLACE_WITH_EVIDENCED_RESOURCE
+    evidence_sources: [REPLACE_WITH_ROUTE_EVIDENCE_SOURCE]
+    usage_evidence_sources: [REPLACE_WITH_NORMALIZED_USAGE_EVIDENCE_SOURCE]
     eligibility: eligible
     disposition: planned
-    operation_id: customer.search
-    capability_ids: [search_customers]
+    operation_id: REPLACE_WITH_OPERATION_ID
+    capability_ids: [REPLACE_WITH_CAPABILITY_ID]
     reason: null
+    exclusion_rule_id: null
+    exclusion_decision: null
 summary:
   discovered_routes: 1
   eligible_read_routes: 1

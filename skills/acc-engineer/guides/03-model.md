@@ -10,7 +10,7 @@
 ## 动作
 
 1. 建立业务领域、实体、关系和只读数据流。
-2. 建立候选 Operation 目录，每项添加非空 `scope_route_ids`，并标明对应 API、权限、Scope、租户边界、错误和 Evidence。
+2. 建立候选 Operation 目录，每项添加非空 `scope_route_ids`，且只指向 eligible 且 disposition 为 `planned` 或 `composed` 的路由；同时标明对应 API、权限、Scope、租户边界、错误和 Evidence。
 3. 记录 API 调用关系、原系统已有测试及可复用的安全测试数据。
 4. 把环境变量名称建模为引用；不得记录凭据值、动态 Host 或调用方可覆盖的认证 Header。
 5. 保留未确认事项，不用通用经验填补原系统事实。
@@ -21,7 +21,7 @@
 - 权限、租户和错误模型来自原系统证据，不由 ACC 推断或放宽。
 - 模型不包含生产 Secret、生产地址、写接口或原系统改造方案。
 - 原系统只读基线无变化。
-- 每个候选 Operation 的 `scope_route_ids` 都存在于 `scope-inventory.yaml`。
+- 每个候选 Operation 的 `scope_route_ids` 都存在于 `scope-inventory.yaml`，且不指向 excluded、ineligible 或 blocked 路由。
 
 ## 输出
 

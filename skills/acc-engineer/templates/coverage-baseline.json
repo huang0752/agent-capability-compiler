@@ -4,20 +4,22 @@
   "note": "This planning artifact is not acc coverage --json output.",
   "scope_mode": "system_readonly_complete",
   "source_scope": {
-    "eligible_read_routes": 0,
-    "planned_or_composed": 0,
+    "eligible_read_routes": 1,
+    "planned_or_composed": 1,
     "excluded": 0,
     "blocked_on_evidence": 0,
     "unresolved": 0
   },
   "candidate_operations": {
-    "total": 0,
-    "planned": [],
+    "total": 1,
+    "planned": [
+      "REPLACE_WITH_OPERATION_ID"
+    ],
     "deliberately_excluded": []
   },
   "planned_capabilities": {
-    "total": 0,
-    "positive_evals": 0,
+    "total": 1,
+    "positive_evals": 1,
     "not_found_or_empty_evals": 0,
     "permission_negative_evals": 0
   },

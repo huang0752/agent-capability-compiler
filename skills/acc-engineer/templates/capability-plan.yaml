@@ -25,6 +25,7 @@ capabilities:
 
 coverage:
   scope_mode: system_readonly_complete
+  scope_inventory: scope-inventory.yaml
   route_dispositions:
     planned:
       - REPLACE_WITH_SCOPE_ROUTE_ID
@@ -32,11 +33,11 @@ coverage:
     excluded: []
     blocked_on_evidence: []
     out_of_scope: []
+  # JSON Pointer-style references only. The authoritative rationale, evidence,
+  # approval, replacement routes, and capability IDs remain in Scope Inventory.
+  exclusion_decision_refs: []
   high_value_operations:
     - REPLACE_WITH_OPERATION_ID
-  deliberately_excluded:
-    - item: REPLACE_WITH_EXCLUDED_ITEM
-      reason: REPLACE_WITH_EXCLUSION_REASON
 
 risks:
   - risk: REPLACE_WITH_PERMISSION_OR_DISCLOSURE_RISK

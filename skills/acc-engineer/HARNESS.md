@@ -27,6 +27,8 @@ Outputs are confined to `acc_project`. The source checkout is evidence, never an
 10. Separate 浅层全局发现 from bounded deep Evidence includes, and never use `--include` as the discovery denominator.
 11. Authentication belongs to `provider.auth`: `none`, `bearer_secret`, or `password_bearer`; Operation 级 `credential_ref` 只用于 legacy `stdio`, and account/password/JWT values never enter project files.
 12. Request identity comes only from immutable `PrincipalContext`. `context_bindings` inject trusted principal/tenant values into evidenced path/query inputs and cannot be supplied by an Agent or Workflow.
+13. Frontend usage is normalized into `usage_evidence_sources`; excluding such a route always warns, and system-complete scope treats an unapproved exact route as an error.
+14. Scope Inventory is the only authority for exclusion rules, route decisions, Evidence, replacement closure, and exact user approval. Capability Plan stores references, not duplicate free-text exclusion facts.
 
 ## State machine
 
@@ -47,7 +49,7 @@ Canonicalize both paths with `pwd -P` or `realpath`. Declare `system_readonly_co
 
 ### 1. Analyze
 
-Perform shallow global discovery across route registrations, OpenAPI, and client surfaces to establish `scope-inventory.yaml`. Only then use repeatable workspace-relative `--include` paths for deep Evidence inspection of relevant controllers, services, models, auth, tests, and docs. Bind every interface and permission claim to a locator plus digest. Produce a system map and analysis report; list gaps.
+Perform shallow global discovery across route registrations, OpenAPI, and client surfaces to establish `scope-inventory.yaml`. Normalize frontend usage Evidence into route fields; the scope auditor does not parse Vue, React, or other framework source. Only then use repeatable workspace-relative `--include` paths for deep Evidence inspection of relevant controllers, services, models, auth, tests, and docs. Bind every interface and permission claim to a locator plus digest. Produce a system map and analysis report; list gaps.
 
 ### 2. Model
 
@@ -55,7 +57,7 @@ Normalize only the observed domain: entities, relations, read operations, permis
 
 ### 3. Plan
 
-Assign every eligible discovered route exactly one disposition: `planned`, `composed`, `excluded`, or `blocked_on_evidence`; `out_of_scope` is valid only where the declared mode permits it. Reconcile the `source_scope` baseline before designing the smallest valuable business capabilities. Keep credentials, tenant identity, and server-derived values out of agent inputs. Require positive and permission-negative Evals where applicable. Do not advance with unresolved scope.
+Assign every eligible discovered route exactly one disposition: `planned`, `composed`, `excluded`, or `blocked_on_evidence`; `out_of_scope` is valid only where the declared mode permits it. System-complete exclusions require a structured rule and distinct route decision; subjective and frontend-used exclusions require exact route approval. Keep legacy ineligible reason plus Evidence, and never count `blocked_on_evidence` as complete. Reconcile the `source_scope` baseline before designing the smallest valuable business capabilities. Keep credentials, tenant identity, and server-derived values out of agent inputs. Require positive and permission-negative Evals where applicable. Do not advance with unresolved scope.
 
 ### 4. Implement
 
@@ -63,7 +65,7 @@ Write only under `acc_project`, and implement only routes disposed as `planned` 
 
 ### 5. Validate
 
-Run `scope_audit.py --project <acc_project>` first and retain `scope-audit-report.json`. Only after it passes run `validate`, `compile --check`, and `coverage` with `--json`. Inspect `ok`, diagnostics, and findings. Fix one diagnostic class at a time and rerun from the scope audit.
+Run `scope_audit.py --project <acc_project>` first and retain `scope-audit-report.json`. Only after it has no errors run `validate`, `compile --check`, and `coverage` with `--json`. Inspect `ok`, diagnostics, and findings: warning-only is non-blocking but every warning remains a handoff risk. Fix one diagnostic class at a time and rerun from the scope audit.
 
 ### 6. Test
 
@@ -71,7 +73,7 @@ Run contract, Fake Runtime, and Fake E2E suites and label the result `offline_ca
 
 ### 7. Refine
 
-Compare three layers independently: source-route disposition coverage, Operation-to-source trace coverage, and Capability/Eval scenario coverage. Remove orphaned or duplicate definitions, tighten broad schemas, and add missing valuable or negative coverage. Rerun scope audit, validation, and tests after each material change.
+Compare three layers independently: source-route disposition coverage, Operation-to-source trace coverage, and Capability/Eval scenario coverage. Detect duplicate decisions, whole-domain zero capability, frontend-used exclusions, and the high-exclusion heuristic (eligible `>= 10`, excluded `>= 70%`). Remove orphaned or duplicate definitions, tighten broad schemas, and add missing valuable or negative coverage. Rerun scope audit, validation, and tests after each material change.
 
 ### 8. Handoff
 
@@ -82,7 +84,7 @@ Verify the source snapshot is unchanged. Build the pack twice and compare digest
 - `HANDOFF.md` summarizes outcomes and validation limits without claiming deployment.
 - `coverage-report.json` is copied from current structured coverage output.
 - `test-report.json` identifies each suite and real pass/fail counts.
-- `risk-report.json` includes unresolved evidence, auth, tenant, schema, runtime, and deployment risks.
+- `risk-report.json` includes unresolved evidence, auth, tenant, schema, runtime, deployment risks, and every scope-audit warning; `HANDOFF.md` repeats those warnings for human review.
 - A Git `candidate.diff` contains only ACC project changes; a non-Git `artifact-manifest.json` records sorted file hashes without file content. Neither substitutes for source verification.
 
 Never label a skipped test as passed, a placeholder digest as evidence, or a local result as production proof.

@@ -21,6 +21,8 @@ If the request is only to audit or refine an existing ACC project, still run Pre
 - When an existing-system request does not specify range, default to `system_readonly_complete`.
 - `pilot` is allowed 只有用户明确提出 MVP/试点范围并记录其确认时；不得为加快交付自行缩小范围。
 - First perform 浅层全局发现 to establish the route denominator, then use bounded `--include` paths for deep Evidence capture. An include list is never the discovery denominator.
+- Normalize 前端 call evidence into route `usage_evidence_sources`; the auditor does not parse framework source. Excluding a frontend-used eligible route always emits a warning, and `system_readonly_complete` also errors when that exact route 未精确批准.
+- In system-complete scope, every eligible exclusion uses one `exclusion_rules` entry plus a distinct route `exclusion_decision`. Keep legacy `reason` for ineligible compatibility, but require its Evidence; `blocked_on_evidence` remains a release blocker.
 - Label Fake Runtime/E2E results `offline_candidate`. Use `source_connected_verified` only after an explicitly authorized local/test source connection succeeds; neither label proves production behavior.
 
 ## Authentication and request identity
@@ -62,7 +64,7 @@ Use the bundled scripts instead of recreating fragile checks:
 - `scripts/verify_read_only_workspace.py` — prove source/ACC separation and detect source changes.
 - `scripts/inventory.py` — bounded, non-symlink source inventory.
 - `scripts/evidence_capture.py` — atomically capture bounded evidence into the ACC project.
-- `scripts/scope_audit.py` — audit scope mode, route dispositions, counts, and cross-artifact references.
+- `scripts/scope_audit.py` — audit scope mode, structured exclusions, route/Operation/Capability closure, counts, and cross-artifact references; it consumes normalized Evidence fields rather than parsing source frontends.
 - `scripts/artifact_manifest.py` — create a deterministic content-free manifest for a non-Git ACC project.
 - `scripts/summarize_diagnostics.py` — summarize ACC JSON diagnostics without hiding failures.
 
@@ -96,4 +98,4 @@ The scope audit is a required gate and must pass before `acc validate`. Then bui
 
 ## Completion
 
-Finish only after Phase 8 produces `HANDOFF.md`, `scope-audit-report.json`, `coverage-report.json`, `test-report.json`, and `risk-report.json`, plus `candidate.diff` for a Git ACC project or `artifact-manifest.json` for a non-Git ACC project. State the scope mode, validation level, and what was not exercised; then stop for human review.
+Finish only after Phase 8 produces `HANDOFF.md`, `scope-audit-report.json`, `coverage-report.json`, `test-report.json`, and `risk-report.json`, plus `candidate.diff` for a Git ACC project or `artifact-manifest.json` for a non-Git ACC project. Copy every scope warning into both risk artifacts, state the scope mode, validation level, and what was not exercised; then stop for human review.

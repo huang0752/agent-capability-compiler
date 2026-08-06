@@ -11,7 +11,7 @@
 
 1. 先运行 `scope_audit.py --project <acc_project>` 并将 JSON 保留为 `scope-audit-report.json`；审计通过前不得运行 ACC 校验命令。
 2. 再依次运行 `acc validate --json`、`acc compile --check --json` 和 `acc coverage --json`。
-3. 同时检查退出码、`ok`、`result` 和全部 `diagnostics`；不得只凭命令退出判断成功。
+3. 同时检查退出码、`ok`、`result` 和全部 `diagnostics`；不得只凭命令退出判断成功。Scope audit 的 warning 不阻断（warning-only 仍为 `ok: true`），但必须原样保留到风险交付物，不能当作“无诊断”。
 4. 修复 ACC 定义或事实来源后，每次都从 scope audit 重新验证；不得放宽 Schema 掩盖错误。
 5. 复核原系统只读基线及 Secret 扫描结果。
 6. 检查 `provider.auth`/transport 组合、Operation 级 legacy credential 警告、`context_binding_allowlist` 与全部 `context_bindings` 编译诊断；不要把 Schema 可验证误写为 `streamable_http` Gateway 已运行。
@@ -23,6 +23,7 @@
 - 编译仅接受静态引用、有界工作流和证据绑定的只读 Operation。
 - 修复未触及原系统，未连接生产环境，也未引入 Secret 或写接口。
 - 任何失败、警告或未运行项都被如实保留。
+- 任一 error 都阻断后续命令；只有 warning 时可以继续，但不得丢弃 warning。
 
 ## 输出
 

@@ -11,9 +11,10 @@
 
 1. 独立对比三层覆盖：`source_scope` 路由 disposition、Operation 对 `scope_route_ids` 的追溯、Capability/Eval 场景。
 2. 查找一接口一工具、孤立 Operation、重复 Capability、无正常/负例、权限 Evidence 不足和过宽 Schema。
-3. 查找 Agent 不应获得的参数、未脱敏字段和可以进一步收紧的权限/租户边界。
-4. 仅依据现有 Evidence 改进 ACC 项目；需要新事实时返回 Analyze，而不是推测。
-5. 每轮改进后重跑 scope audit、Validate 和 Test，并分别比较三层 Coverage 与风险变化。
+3. 检查重复 decision rationale、跨域模板理由复用、整域零能力、前端使用路由被排除，以及高排除率信号。高排除率的固定触发条件是 eligible 路由 `>= 10` 且 excluded 比例 `>= 70%`；它是 warning 风险信号，不是正确性阈值。
+4. 查找 Agent 不应获得的参数、未脱敏字段和可以进一步收紧的权限/租户边界。
+5. 仅依据现有 Evidence 改进 ACC 项目；需要新事实时返回 Analyze，而不是推测。
+6. 每轮改进后重跑 scope audit、Validate 和 Test，并分别比较三层 Coverage、全部 warning 与风险变化。
 
 ## 门禁
 
@@ -21,6 +22,7 @@
 - 源路由、Operation 追溯和 Eval 三层 Coverage 都不倒退，所有 Validate/Test 门禁仍通过。
 - 高风险、Evidence 缺口和未确认事项已修复或明确保留为风险。
 - 候选保持业务级组合，避免为了指标增加低价值工具。
+- 重复 decision 和整域零能力 error 已消除；高排除率 warning 已解释并保留，不能靠删 Evidence 或改分母消除。
 
 ## 输出
 

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -129,7 +131,12 @@ def test_templates_track_current_strict_public_models() -> None:
         "mode": "system_readonly_complete",
         "user_confirmation": None,
         "selected_domains": [],
+        "exclusion_approval": {
+            "approved_route_ids": [],
+            "approval_text": None,
+        },
     }
+    assert scope["exclusion_rules"] == []
     route = scope["routes"][0]
     assert set(route) == {
         "id",
@@ -142,7 +149,20 @@ def test_templates_track_current_strict_public_models() -> None:
         "operation_id",
         "capability_ids",
         "reason",
+        "usage_evidence_sources",
+        "exclusion_rule_id",
+        "exclusion_decision",
     }
+    assert "domain" in route
+    assert "domain_id" not in route
+    assert route["usage_evidence_sources"]
+    assert route["exclusion_rule_id"] is None
+    assert route["exclusion_decision"] is None
+    operation = _yaml(SKILL / "templates" / "system-map.yaml")["candidate_operations"][0]
+    assert operation["scope_route_ids"]
+    assert plan["coverage"]["scope_inventory"] == "scope-inventory.yaml"
+    assert plan["coverage"]["exclusion_decision_refs"] == []
+    assert "deliberately_excluded" not in plan["coverage"]
     baseline = json.loads(
         (SKILL / "templates" / "coverage-baseline.json").read_text(encoding="utf-8")
     )
@@ -157,6 +177,71 @@ def test_templates_track_current_strict_public_models() -> None:
     for name in ("preflight-report.json", "coverage-baseline.json"):
         value = json.loads((SKILL / "templates" / name).read_text(encoding="utf-8"))
         assert isinstance(value, dict)
+
+
+def test_planning_templates_form_a_scope_audit_positive_fixture(tmp_path: Path) -> None:
+    project = tmp_path / "acc-project"
+    project.mkdir()
+    for name in (
+        "scope-inventory.yaml",
+        "system-map.yaml",
+        "capability-plan.yaml",
+        "coverage-baseline.json",
+    ):
+        shutil.copyfile(SKILL / "templates" / name, project / name)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(SKILL / "scripts" / "scope_audit.py"),
+            "--project",
+            str(project),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    payload = json.loads(completed.stdout)
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert payload["ok"] is True
+    assert payload["diagnostics"] == []
+
+
+def test_scope_governance_guides_define_each_phase_contract() -> None:
+    skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+    harness = (SKILL / "HARNESS.md").read_text(encoding="utf-8")
+    analyze = (SKILL / "guides" / "02-analyze.md").read_text(encoding="utf-8")
+    model = (SKILL / "guides" / "03-model.md").read_text(encoding="utf-8")
+    plan = (SKILL / "guides" / "04-plan.md").read_text(encoding="utf-8")
+    validate = (SKILL / "guides" / "06-validate.md").read_text(encoding="utf-8")
+    refine = (SKILL / "guides" / "08-refine.md").read_text(encoding="utf-8")
+    handoff = (SKILL / "guides" / "09-handoff.md").read_text(encoding="utf-8")
+
+    assert "usage_evidence_sources" in analyze
+    assert "不解析 Vue、React" in analyze
+    assert "planned` 或 `composed" in model
+    for contract in (
+        "exclusion_rules",
+        "exclusion_decision",
+        "exclusion_approval",
+        "blocked_on_evidence",
+        "ineligible",
+    ):
+        assert contract in plan
+    assert "warning" in validate
+    assert "不阻断" in validate
+    for risk in ("重复 decision", "整域零能力", "高排除率", ">= 10", ">= 70%"):
+        assert risk in refine
+    assert "risk-report.json" in handoff
+    assert "HANDOFF.md" in handoff
+    assert "全部 warning" in handoff
+    assert "offline_candidate" in handoff
+    assert "source_connected_verified" in handoff
+    assert "前端" in skill + harness
+    assert "未精确批准" in skill + harness
+    assert len(skill.splitlines()) < 500
 
 
 def test_public_docs_explain_generic_auth_context_and_validation_boundaries() -> None:
