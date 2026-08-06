@@ -1,5 +1,250 @@
 {
   "$defs": {
+    "BearerSecretAuthConfig": {
+      "additionalProperties": false,
+      "description": "Resolve one fixed bearer token from the deployment environment.",
+      "properties": {
+        "kind": {
+          "const": "bearer_secret",
+          "title": "Kind",
+          "type": "string"
+        },
+        "token_ref": {
+          "minLength": 1,
+          "pattern": "^[A-Z][A-Z0-9_]*$",
+          "title": "Token Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "token_ref"
+      ],
+      "title": "BearerSecretAuthConfig",
+      "type": "object"
+    },
+    "EnvironmentSecretCredentials": {
+      "additionalProperties": false,
+      "description": "Resolve a renewable username/password pair from environment secrets.",
+      "properties": {
+        "identity_ref": {
+          "minLength": 1,
+          "pattern": "^[A-Z][A-Z0-9_]*$",
+          "title": "Identity Ref",
+          "type": "string"
+        },
+        "kind": {
+          "const": "environment_secret",
+          "title": "Kind",
+          "type": "string"
+        },
+        "password_ref": {
+          "minLength": 1,
+          "pattern": "^[A-Z][A-Z0-9_]*$",
+          "title": "Password Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "identity_ref",
+        "password_ref"
+      ],
+      "title": "EnvironmentSecretCredentials",
+      "type": "object"
+    },
+    "GatewaySessionCredentials": {
+      "additionalProperties": false,
+      "description": "Accept a one-shot username/password pair from a trusted Gateway session.",
+      "properties": {
+        "kind": {
+          "const": "gateway_session",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "GatewaySessionCredentials",
+      "type": "object"
+    },
+    "NoAuthConfig": {
+      "additionalProperties": false,
+      "description": "Explicitly declare that the provider requires no authentication.",
+      "properties": {
+        "kind": {
+          "const": "none",
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "NoAuthConfig",
+      "type": "object"
+    },
+    "PasswordBearerAuthConfig": {
+      "additionalProperties": false,
+      "description": "Exchange a bounded credential source for a bearer token.",
+      "properties": {
+        "credentials": {
+          "$ref": "#/$defs/PasswordBearerCredentials"
+        },
+        "expires_in_pointer": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expires In Pointer"
+        },
+        "identity_field": {
+          "minLength": 1,
+          "title": "Identity Field",
+          "type": "string"
+        },
+        "kind": {
+          "const": "password_bearer",
+          "title": "Kind",
+          "type": "string"
+        },
+        "login_path": {
+          "minLength": 1,
+          "title": "Login Path",
+          "type": "string"
+        },
+        "max_response_bytes": {
+          "default": 65536,
+          "maximum": 1048576,
+          "minimum": 1,
+          "title": "Max Response Bytes",
+          "type": "integer"
+        },
+        "password_field": {
+          "minLength": 1,
+          "title": "Password Field",
+          "type": "string"
+        },
+        "principal_pointer": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Principal Pointer"
+        },
+        "retry_on_unauthorized": {
+          "default": false,
+          "title": "Retry On Unauthorized",
+          "type": "boolean"
+        },
+        "scope_mapping": {
+          "additionalProperties": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "propertyNames": {
+            "minLength": 1
+          },
+          "title": "Scope Mapping",
+          "type": "object"
+        },
+        "scopes_pointer": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scopes Pointer"
+        },
+        "tenant_pointer": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tenant Pointer"
+        },
+        "timeout_seconds": {
+          "default": 10,
+          "maximum": 300,
+          "minimum": 1,
+          "title": "Timeout Seconds",
+          "type": "integer"
+        },
+        "token_pointer": {
+          "minLength": 1,
+          "title": "Token Pointer",
+          "type": "string"
+        },
+        "token_type_pointer": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Token Type Pointer"
+        }
+      },
+      "required": [
+        "kind",
+        "credentials",
+        "login_path",
+        "identity_field",
+        "password_field",
+        "token_pointer"
+      ],
+      "title": "PasswordBearerAuthConfig",
+      "type": "object"
+    },
+    "PasswordBearerCredentials": {
+      "discriminator": {
+        "mapping": {
+          "environment_secret": "#/$defs/EnvironmentSecretCredentials",
+          "gateway_session": "#/$defs/GatewaySessionCredentials"
+        },
+        "propertyName": "kind"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/EnvironmentSecretCredentials"
+        },
+        {
+          "$ref": "#/$defs/GatewaySessionCredentials"
+        }
+      ]
+    },
     "ProjectIdentity": {
       "additionalProperties": false,
       "description": "Stable identity of an ACC project.",
@@ -22,10 +267,42 @@
       "title": "ProjectIdentity",
       "type": "object"
     },
+    "ProviderAuthConfig": {
+      "discriminator": {
+        "mapping": {
+          "bearer_secret": "#/$defs/BearerSecretAuthConfig",
+          "none": "#/$defs/NoAuthConfig",
+          "password_bearer": "#/$defs/PasswordBearerAuthConfig"
+        },
+        "propertyName": "kind"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/NoAuthConfig"
+        },
+        {
+          "$ref": "#/$defs/BearerSecretAuthConfig"
+        },
+        {
+          "$ref": "#/$defs/PasswordBearerAuthConfig"
+        }
+      ]
+    },
     "ProviderConfig": {
       "additionalProperties": false,
       "description": "Reference to the target REST provider without embedding its URL.",
       "properties": {
+        "auth": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderAuthConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "base_url_ref": {
           "minLength": 1,
           "pattern": "^[A-Z][A-Z0-9_]*$",
@@ -51,7 +328,10 @@
       "properties": {
         "transport": {
           "items": {
-            "const": "stdio",
+            "enum": [
+              "stdio",
+              "streamable_http"
+            ],
             "type": "string"
           },
           "maxItems": 1,

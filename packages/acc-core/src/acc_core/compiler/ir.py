@@ -20,6 +20,7 @@ from acc_core.models import (
     ForeachStep,
     MapStep,
     ParallelStep,
+    PasswordBearerAuthConfig,
     PickStep,
     RedactStep,
     StrictModel,
@@ -218,6 +219,7 @@ def _validate_step(
     available_steps: set[str],
     seen_step_ids: set[str],
     operations: set[str],
+    operation_bindings: dict[str, set[str]],
     dependencies: set[str],
     allow_item: bool,
     path: str,
@@ -242,6 +244,19 @@ def _validate_step(
                 message=f"Capability references an unknown operation: {operation_id}",
                 path=path,
                 pointer=f"{pointer}/call/operation",
+            )
+        for argument in sorted(
+            set(step.call.arguments) & operation_bindings.get(operation_id, set())
+        ):
+            escaped_argument = argument.replace("~", "~0").replace("/", "~1")
+            _diagnostic(
+                diagnostics,
+                code="ACC_COMPILE_CONTEXT_BINDING_ARGUMENT_OVERRIDE",
+                message=(
+                    f"Workflow arguments cannot provide a context-bound Operation input: {argument}"
+                ),
+                path=path,
+                pointer=f"{pointer}/call/arguments/{escaped_argument}",
             )
         _validate_value(
             step.call.arguments,
@@ -330,6 +345,7 @@ def _validate_step(
             available_steps=set(available_steps),
             seen_step_ids=seen_step_ids,
             operations=operations,
+            operation_bindings=operation_bindings,
             dependencies=dependencies,
             allow_item=allow_item,
             path=path,
@@ -341,6 +357,7 @@ def _validate_step(
             available_steps=set(available_steps),
             seen_step_ids=seen_step_ids,
             operations=operations,
+            operation_bindings=operation_bindings,
             dependencies=dependencies,
             allow_item=allow_item,
             path=path,
@@ -354,6 +371,7 @@ def _validate_step(
                 available_steps=set(available_steps),
                 seen_step_ids=seen_step_ids,
                 operations=operations,
+                operation_bindings=operation_bindings,
                 dependencies=dependencies,
                 allow_item=allow_item,
                 path=path,
@@ -374,6 +392,7 @@ def _validate_step(
             available_steps=set(available_steps),
             seen_step_ids=seen_step_ids,
             operations=operations,
+            operation_bindings=operation_bindings,
             dependencies=dependencies,
             allow_item=True,
             path=path,
@@ -397,6 +416,7 @@ def _validate_workflow(
     available_steps: set[str],
     seen_step_ids: set[str],
     operations: set[str],
+    operation_bindings: dict[str, set[str]],
     dependencies: set[str],
     allow_item: bool,
     path: str,
@@ -409,6 +429,7 @@ def _validate_workflow(
             available_steps=available_steps,
             seen_step_ids=seen_step_ids,
             operations=operations,
+            operation_bindings=operation_bindings,
             dependencies=dependencies,
             allow_item=allow_item,
             path=path,
@@ -423,6 +444,7 @@ def _compile_capability(
     capability: Capability,
     *,
     operations: set[str],
+    operation_bindings: dict[str, set[str]],
     policies: set[str],
     evals: dict[str, str],
     diagnostics: list[Diagnostic],
@@ -463,6 +485,7 @@ def _compile_capability(
         available_steps=set(),
         seen_step_ids=set(),
         operations=operations,
+        operation_bindings=operation_bindings,
         dependencies=dependencies,
         allow_item=False,
         path=path,
@@ -477,6 +500,33 @@ def _compile_capability(
             path=path,
             pointer="/workflow",
         )
+    properties = capability.input_schema.get("properties", {})
+    public_inputs = set(properties) if isinstance(properties, dict) else set()
+    dependency_bindings = {
+        target
+        for operation_id in dependencies
+        for target in operation_bindings.get(operation_id, set())
+    }
+    if dependency_bindings and capability.input_schema.get("additionalProperties") is not False:
+        _diagnostic(
+            diagnostics,
+            code="ACC_COMPILE_CONTEXT_BINDING_PUBLIC_INPUT",
+            message=(
+                "Capability input schemas must set additionalProperties to false when "
+                "a dependency uses context bindings."
+            ),
+            path=path,
+            pointer="/input_schema/additionalProperties",
+        )
+    for target in sorted(public_inputs & dependency_bindings):
+        escaped_target = target.replace("~", "~0").replace("/", "~1")
+        _diagnostic(
+            diagnostics,
+            code="ACC_COMPILE_CONTEXT_BINDING_PUBLIC_INPUT",
+            message=(f"Capability input cannot expose a context-bound Operation input: {target}"),
+            path=path,
+            pointer=f"/input_schema/properties/{escaped_target}",
+        )
     return dependencies
 
 
@@ -490,6 +540,30 @@ def compile_project(project_root: str | Path = ".") -> CompilationReport:
         return report
 
     operation_ids = set(validation.operations)
+    operation_bindings = {
+        operation_id: set(operation.context_bindings)
+        for operation_id, operation in validation.operations.items()
+    }
+    for operation_id, operation in sorted(validation.operations.items()):
+        properties = operation.input_schema.get("properties", {})
+        declared_inputs = set(properties) if isinstance(properties, dict) else set()
+        mapped_inputs = set(operation.http.path_parameters.values()) | set(
+            operation.http.query_parameters.values()
+        )
+        for target in sorted(operation.context_bindings):
+            if target in declared_inputs and target in mapped_inputs:
+                continue
+            escaped_target = target.replace("~", "~0").replace("/", "~1")
+            _diagnostic(
+                diagnostics,
+                code="ACC_COMPILE_CONTEXT_BINDING_TARGET_INVALID",
+                message=(
+                    "A context binding target must be a declared Operation input mapped "
+                    f"to an HTTP path or query parameter: {target}"
+                ),
+                path=f"operations/{operation_id}.yaml",
+                pointer=f"/context_bindings/{escaped_target}",
+            )
     policy_ids = set(validation.policies)
     eval_targets = {eval_id: scenario.capability for eval_id, scenario in validation.evals.items()}
     dependencies: dict[str, set[str]] = {}
@@ -497,10 +571,38 @@ def compile_project(project_root: str | Path = ".") -> CompilationReport:
         dependencies[capability_id] = _compile_capability(
             validation.capabilities[capability_id],
             operations=operation_ids,
+            operation_bindings=operation_bindings,
             policies=policy_ids,
             evals=eval_targets,
             diagnostics=diagnostics,
         )
+
+    if validation.project.runtime.transport == ["streamable_http"]:
+        auth = validation.project.provider.auth
+        if isinstance(auth, PasswordBearerAuthConfig):
+            for capability_id in sorted(validation.capabilities):
+                capability = validation.capabilities[capability_id]
+                policy = validation.policies.get(capability.policy)
+                policy_scopes = set(policy.required_scopes) if policy is not None else set()
+                operation_scopes = {
+                    scope
+                    for operation_id in dependencies[capability_id]
+                    if operation_id in validation.operations
+                    for scope in validation.operations[operation_id].http.scopes
+                }
+                if (policy_scopes or operation_scopes) and (
+                    auth.scopes_pointer is None or not auth.scope_mapping
+                ):
+                    _diagnostic(
+                        diagnostics,
+                        code="ACC_COMPILE_SOURCE_SCOPE_MAPPING_REQUIRED",
+                        message=(
+                            "A scoped streamable_http capability requires scopes_pointer "
+                            "and a non-empty scope_mapping."
+                        ),
+                        path=f"capabilities/{capability_id}.yaml",
+                        pointer="/policy",
+                    )
 
     for eval_id in sorted(validation.evals):
         scenario = validation.evals[eval_id]

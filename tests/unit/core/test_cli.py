@@ -58,6 +58,7 @@ def _json_envelope(
     *,
     command: str,
     ok: bool,
+    allow_warnings: bool = False,
 ) -> dict[str, Any]:
     try:
         payload = json.loads(completed.stdout)
@@ -73,7 +74,10 @@ def _json_envelope(
     assert isinstance(payload["diagnostics"], list)
     if ok:
         assert isinstance(payload["result"], dict)
-        assert payload["diagnostics"] == []
+        if allow_warnings:
+            assert all(item["severity"] != "error" for item in payload["diagnostics"])
+        else:
+            assert payload["diagnostics"] == []
     else:
         assert payload["result"] is None
         assert payload["diagnostics"]
@@ -248,6 +252,21 @@ def test_schema_exports_all_models_as_draft_2020_12(tmp_path: Path) -> None:
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
         assert schema["$schema"] == JSON_SCHEMA_DRAFT_2020_12
 
+    project_schema = json.loads((output / "project.schema.json").read_text(encoding="utf-8"))
+
+    def discriminators(value: object) -> list[dict[str, object]]:
+        if isinstance(value, dict):
+            found = [value["discriminator"]] if "discriminator" in value else []
+            return found + [item for child in value.values() for item in discriminators(child)]
+        if isinstance(value, list):
+            return [item for child in value for item in discriminators(child)]
+        return []
+
+    kind_discriminators = [
+        item for item in discriminators(project_schema) if item["propertyName"] == "kind"
+    ]
+    assert len(kind_discriminators) >= 2
+
 
 def test_validate_accepts_an_evidence_bound_project(tmp_path: Path) -> None:
     project = _make_valid_project(tmp_path)
@@ -255,7 +274,12 @@ def test_validate_accepts_an_evidence_bound_project(tmp_path: Path) -> None:
     completed = _run_acc("validate", "--json", cwd=project)
 
     assert completed.returncode == 0, completed.stderr
-    payload = _json_envelope(completed, command="validate", ok=True)
+    payload = _json_envelope(
+        completed,
+        command="validate",
+        ok=True,
+        allow_warnings=True,
+    )
     assert payload["result"]["project_id"] == "example-crm"
     assert payload["result"]["counts"] == {
         "operations": 1,
@@ -263,6 +287,33 @@ def test_validate_accepts_an_evidence_bound_project(tmp_path: Path) -> None:
         "policies": 1,
         "evals": 1,
     }
+    assert payload["diagnostics"] == [
+        {
+            "code": "ACC_AUTH_LEGACY_CREDENTIAL",
+            "severity": "warning",
+            "message": (
+                "Legacy Operation-level credentials remain supported for stdio; "
+                "migrate authentication to provider.auth."
+            ),
+            "path": "project.yaml",
+            "pointer": "/provider",
+        }
+    ]
+
+
+def test_compile_check_preserves_legacy_auth_warning(tmp_path: Path) -> None:
+    project = _make_valid_project(tmp_path)
+
+    completed = _run_acc("compile", "--check", "--json", cwd=project)
+
+    assert completed.returncode == 0, completed.stderr
+    payload = _json_envelope(
+        completed,
+        command="compile",
+        ok=True,
+        allow_warnings=True,
+    )
+    assert [item["code"] for item in payload["diagnostics"]] == ["ACC_AUTH_LEGACY_CREDENTIAL"]
 
 
 def test_validate_rejects_an_operation_without_evidence(tmp_path: Path) -> None:

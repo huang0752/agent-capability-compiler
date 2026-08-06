@@ -68,7 +68,132 @@ class SourceWorkspace(StrictModel):
 class RuntimeConfig(StrictModel):
     """Runtime transports emitted by the first ACC release."""
 
-    transport: Annotated[list[Literal["stdio"]], Field(min_length=1, max_length=1)]
+    transport: Annotated[
+        list[Literal["stdio", "streamable_http"]],
+        Field(min_length=1, max_length=1),
+    ]
+
+
+def _validate_origin_relative_path(value: str, *, field_name: str) -> str:
+    parsed = urlsplit(value)
+    decoded_path = unquote(parsed.path)
+    if (
+        parsed.scheme
+        or parsed.netloc
+        or parsed.query
+        or parsed.fragment
+        or not value.startswith("/")
+        or value.startswith("//")
+        or "\\" in decoded_path
+        or ".." in decoded_path.split("/")
+    ):
+        raise ValueError(
+            f"{field_name} must be an origin-relative URL path without "
+            "traversal, query, or fragment"
+        )
+    return value
+
+
+def _validate_absolute_json_pointer(value: str) -> str:
+    if not value.startswith("/"):
+        raise ValueError("value must be an absolute RFC 6901 JSON Pointer")
+    for token in value.split("/")[1:]:
+        index = 0
+        while index < len(token):
+            if token[index] == "~":
+                if index + 1 >= len(token) or token[index + 1] not in {"0", "1"}:
+                    raise ValueError("value must be a valid RFC 6901 JSON Pointer")
+                index += 2
+            else:
+                index += 1
+    return value
+
+
+class NoAuthConfig(StrictModel):
+    """Explicitly declare that the provider requires no authentication."""
+
+    kind: Literal["none"]
+
+
+class BearerSecretAuthConfig(StrictModel):
+    """Resolve one fixed bearer token from the deployment environment."""
+
+    kind: Literal["bearer_secret"]
+    token_ref: EnvironmentReference
+
+
+class EnvironmentSecretCredentials(StrictModel):
+    """Resolve a renewable username/password pair from environment secrets."""
+
+    kind: Literal["environment_secret"]
+    identity_ref: EnvironmentReference
+    password_ref: EnvironmentReference
+
+
+class GatewaySessionCredentials(StrictModel):
+    """Accept a one-shot username/password pair from a trusted Gateway session."""
+
+    kind: Literal["gateway_session"]
+
+
+type PasswordBearerCredentials = Annotated[
+    EnvironmentSecretCredentials | GatewaySessionCredentials,
+    Field(discriminator="kind"),
+]
+
+
+class PasswordBearerAuthConfig(StrictModel):
+    """Exchange a bounded credential source for a bearer token."""
+
+    kind: Literal["password_bearer"]
+    credentials: PasswordBearerCredentials
+    login_path: NonEmptyString
+    identity_field: NonEmptyString
+    password_field: NonEmptyString
+    token_pointer: NonEmptyString
+    token_type_pointer: NonEmptyString | None = None
+    expires_in_pointer: NonEmptyString | None = None
+    principal_pointer: NonEmptyString | None = None
+    scopes_pointer: NonEmptyString | None = None
+    tenant_pointer: NonEmptyString | None = None
+    scope_mapping: dict[
+        NonEmptyString,
+        Annotated[list[NonEmptyString], Field(min_length=1)],
+    ] = Field(default_factory=dict)
+    timeout_seconds: Annotated[int, Field(ge=1, le=300)] = 10
+    max_response_bytes: Annotated[int, Field(ge=1, le=1_048_576)] = 65_536
+    retry_on_unauthorized: bool = False
+
+    @field_validator("login_path")
+    @classmethod
+    def validate_login_path(cls, value: str) -> str:
+        return _validate_origin_relative_path(value, field_name="login_path")
+
+    @field_validator(
+        "token_pointer",
+        "token_type_pointer",
+        "expires_in_pointer",
+        "principal_pointer",
+        "scopes_pointer",
+        "tenant_pointer",
+    )
+    @classmethod
+    def validate_json_pointer(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _validate_absolute_json_pointer(value)
+
+    @model_validator(mode="after")
+    def validate_distinct_login_fields(self) -> PasswordBearerAuthConfig:
+        if self.identity_field == self.password_field:
+            raise ValueError("identity_field and password_field must be distinct")
+        return self
+
+
+type ProviderAuthConfig = Annotated[
+    NoAuthConfig | BearerSecretAuthConfig | PasswordBearerAuthConfig,
+    Field(discriminator="kind"),
+]
 
 
 class ProviderConfig(StrictModel):
@@ -76,6 +201,7 @@ class ProviderConfig(StrictModel):
 
     kind: Literal["http"]
     base_url_ref: EnvironmentReference
+    auth: ProviderAuthConfig | None = None
 
 
 class Project(StrictModel):
@@ -147,7 +273,7 @@ class HttpOperation(StrictModel):
     path: NonEmptyString
     path_parameters: dict[NonEmptyString, NonEmptyString] = Field(default_factory=dict)
     query_parameters: dict[NonEmptyString, NonEmptyString] = Field(default_factory=dict)
-    credential_ref: EnvironmentReference
+    credential_ref: EnvironmentReference | None = None
     scopes: list[NonEmptyString] = Field(default_factory=list)
     timeout_seconds: Annotated[int, Field(ge=1, le=300)] = 15
     max_response_bytes: Annotated[int, Field(ge=1, le=100 * 1024 * 1024)] = 1_048_576
@@ -156,21 +282,7 @@ class HttpOperation(StrictModel):
     def validate_origin_relative_path(self) -> HttpOperation:
         """Reject absolute URLs, authority-relative paths, and traversal."""
 
-        parsed = urlsplit(self.path)
-        decoded_path = unquote(parsed.path)
-        if (
-            parsed.scheme
-            or parsed.netloc
-            or parsed.query
-            or parsed.fragment
-            or not self.path.startswith("/")
-            or self.path.startswith("//")
-            or "\\" in decoded_path
-            or ".." in decoded_path.split("/")
-        ):
-            raise ValueError(
-                "path must be an origin-relative URL path without traversal, query, or fragment"
-            )
+        _validate_origin_relative_path(self.path, field_name="path")
         return self
 
 
@@ -190,6 +302,7 @@ class Operation(StrictModel):
     input_schema: JsonObject
     output_schema: JsonObject
     http: HttpOperation
+    context_bindings: dict[NonEmptyString, NonEmptyString] = Field(default_factory=dict)
     safety: OperationSafety
     evidence: Annotated[list[Evidence], Field(min_length=1)]
 
@@ -448,6 +561,7 @@ for _model in _RECURSIVE_MODELS:
 __all__ = [
     "AssertAction",
     "AssertStep",
+    "BearerSecretAuthConfig",
     "BranchAction",
     "BranchStep",
     "CallAction",
@@ -455,6 +569,7 @@ __all__ = [
     "Capability",
     "EmitAction",
     "EmitStep",
+    "EnvironmentSecretCredentials",
     "Eval",
     "Evidence",
     "ExpectedCall",
@@ -463,17 +578,22 @@ __all__ = [
     "FilterStep",
     "ForeachAction",
     "ForeachStep",
+    "GatewaySessionCredentials",
     "HttpOperation",
     "MapAction",
     "MapStep",
+    "NoAuthConfig",
     "Operation",
     "OperationSafety",
     "ParallelStep",
+    "PasswordBearerAuthConfig",
+    "PasswordBearerCredentials",
     "PickAction",
     "PickStep",
     "Policy",
     "Project",
     "ProjectIdentity",
+    "ProviderAuthConfig",
     "ProviderConfig",
     "RedactAction",
     "RedactStep",

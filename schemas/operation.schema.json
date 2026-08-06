@@ -137,10 +137,18 @@
       "description": "A bounded HTTP request description for an existing REST system.",
       "properties": {
         "credential_ref": {
-          "minLength": 1,
-          "pattern": "^[A-Z][A-Z0-9_]*$",
-          "title": "Credential Ref",
-          "type": "string"
+          "anyOf": [
+            {
+              "minLength": 1,
+              "pattern": "^[A-Z][A-Z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Credential Ref"
         },
         "max_response_bytes": {
           "default": 1048576,
@@ -202,8 +210,7 @@
       },
       "required": [
         "method",
-        "path",
-        "credential_ref"
+        "path"
       ],
       "title": "HttpOperation",
       "type": "object"
@@ -230,6 +237,17 @@
   "additionalProperties": false,
   "description": "An evidence-bound atomic REST operation.",
   "properties": {
+    "context_bindings": {
+      "additionalProperties": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "propertyNames": {
+        "minLength": 1
+      },
+      "title": "Context Bindings",
+      "type": "object"
+    },
     "evidence": {
       "items": {
         "$ref": "#/$defs/Evidence"

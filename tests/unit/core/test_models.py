@@ -19,6 +19,23 @@ def project_document() -> dict[str, object]:
     }
 
 
+def password_bearer_auth(*, credential_kind: str = "environment_secret") -> dict[str, object]:
+    credentials: dict[str, object] = {"kind": credential_kind}
+    if credential_kind == "environment_secret":
+        credentials.update(
+            identity_ref="CRM_USER_EMAIL",
+            password_ref="CRM_USER_PASSWORD",
+        )
+    return {
+        "kind": "password_bearer",
+        "credentials": credentials,
+        "login_path": "/api/auth/login",
+        "identity_field": "email",
+        "password_field": "password",
+        "token_pointer": "/data/access_token",
+    }
+
+
 def evidence_document() -> dict[str, object]:
     return {
         "source_id": "crm-backend",
@@ -64,6 +81,124 @@ def test_project_models_the_milestone_one_contract() -> None:
     assert project.source_workspace.mode == "read_only"
     assert project.runtime.transport == ["stdio"]
     assert project.provider.base_url_ref == "CRM_BASE_URL"
+
+
+@pytest.mark.parametrize(
+    ("auth", "auth_type"),
+    [
+        ({"kind": "none"}, "NoAuthConfig"),
+        (
+            {"kind": "bearer_secret", "token_ref": "CRM_USER_TOKEN"},
+            "BearerSecretAuthConfig",
+        ),
+        (password_bearer_auth(), "PasswordBearerAuthConfig"),
+        (
+            password_bearer_auth(credential_kind="gateway_session"),
+            "PasswordBearerAuthConfig",
+        ),
+    ],
+)
+def test_project_accepts_strict_provider_auth_union(
+    auth: dict[str, object], auth_type: str
+) -> None:
+    document = project_document()
+    provider = deepcopy(document["provider"])
+    assert isinstance(provider, dict)
+    provider["auth"] = auth
+    document["provider"] = provider
+
+    project = models.Project.model_validate(document)
+
+    assert type(project.provider.auth).__name__ == auth_type
+
+
+def test_password_bearer_auth_defaults_are_bounded_and_safe() -> None:
+    auth = models.PasswordBearerAuthConfig.model_validate(password_bearer_auth())
+
+    assert isinstance(auth.credentials, models.EnvironmentSecretCredentials)
+    assert auth.timeout_seconds == 10
+    assert auth.max_response_bytes == 65_536
+    assert auth.retry_on_unauthorized is False
+    assert auth.scope_mapping == {}
+
+    for field, value in (
+        ("timeout_seconds", 0),
+        ("timeout_seconds", 301),
+        ("max_response_bytes", 0),
+        ("max_response_bytes", 1_048_577),
+    ):
+        document = password_bearer_auth()
+        document[field] = value
+        with pytest.raises(ValidationError, match=field):
+            models.PasswordBearerAuthConfig.model_validate(document)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "https://crm.example.com/api/auth/login",
+        "//crm.example.com/api/auth/login",
+        "/api/auth/../admin",
+        "api/auth/login",
+        "/api/auth/login?next=/admin",
+        "/api/auth/login#fragment",
+        "/api\\auth\\login",
+    ],
+)
+def test_password_bearer_rejects_unsafe_login_path(path: str) -> None:
+    document = password_bearer_auth()
+    document["login_path"] = path
+
+    with pytest.raises(ValidationError, match="login_path"):
+        models.PasswordBearerAuthConfig.model_validate(document)
+
+
+@pytest.mark.parametrize(
+    "pointer",
+    ["", "data/token", "/data/~2token", "/data/token~"],
+)
+def test_password_bearer_rejects_invalid_absolute_json_pointer(pointer: str) -> None:
+    document = password_bearer_auth()
+    document["token_pointer"] = pointer
+
+    with pytest.raises(ValidationError):
+        models.PasswordBearerAuthConfig.model_validate(document)
+
+
+def test_password_bearer_accepts_all_optional_json_pointers_and_scope_mapping() -> None:
+    document = password_bearer_auth(credential_kind="gateway_session")
+    document.update(
+        token_type_pointer="/data/token~0type",
+        expires_in_pointer="/data/expires~1in",
+        principal_pointer="/data/user/id",
+        scopes_pointer="/data/permissions",
+        tenant_pointer="/data/tenant",
+        scope_mapping={"customer:read": ["customer.read"]},
+        timeout_seconds=300,
+        max_response_bytes=1_048_576,
+        retry_on_unauthorized=True,
+    )
+
+    auth = models.PasswordBearerAuthConfig.model_validate(document)
+
+    assert isinstance(auth.credentials, models.GatewaySessionCredentials)
+    assert auth.scope_mapping == {"customer:read": ["customer.read"]}
+
+
+def test_password_bearer_requires_distinct_identity_and_password_fields() -> None:
+    document = password_bearer_auth()
+    document["password_field"] = "email"
+
+    with pytest.raises(ValidationError, match="identity_field"):
+        models.PasswordBearerAuthConfig.model_validate(document)
+
+
+def test_runtime_transport_remains_a_single_selected_mode() -> None:
+    assert models.RuntimeConfig.model_validate({"transport": ["streamable_http"]}).transport == [
+        "streamable_http"
+    ]
+    with pytest.raises(ValidationError):
+        models.RuntimeConfig.model_validate({"transport": ["stdio", "streamable_http"]})
 
 
 def test_evidence_supports_source_lines_json_pointer_openapi_and_summary() -> None:
@@ -222,6 +357,24 @@ def test_operation_supports_declared_query_parameters() -> None:
     operation = models.Operation.model_validate(document)
 
     assert operation.http.query_parameters == {"include_contacts": "include_contacts"}
+
+
+def test_operation_supports_optional_legacy_credential_and_context_bindings() -> None:
+    document = operation_document()
+    http = deepcopy(document["http"])
+    assert isinstance(http, dict)
+    http.pop("credential_ref")
+    document["http"] = http
+    document["context_bindings"] = {
+        "customer_id": "tenant_context.customer_id",
+    }
+
+    operation = models.Operation.model_validate(document)
+
+    assert operation.http.credential_ref is None
+    assert operation.context_bindings == {
+        "customer_id": "tenant_context.customer_id",
+    }
 
 
 def test_operation_parameter_mappings_must_reference_declared_inputs() -> None:

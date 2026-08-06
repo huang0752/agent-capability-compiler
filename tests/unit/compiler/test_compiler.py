@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
 import yaml
 
 from acc_core.compiler import compile_project
@@ -134,6 +135,240 @@ def _write_capability(project: Path, capability: dict[str, Any]) -> None:
     _write_yaml(project / "capabilities" / "get_customer.yaml", capability)
 
 
+def _configure_streamable_gateway_auth(
+    project: Path,
+    *,
+    scopes_pointer: str | None = "/permissions",
+    scope_mapping: dict[str, list[str]] | None = None,
+) -> None:
+    project_path = project / "project.yaml"
+    document = yaml.safe_load(project_path.read_text(encoding="utf-8"))
+    document["runtime"]["transport"] = ["streamable_http"]
+    auth: dict[str, object] = {
+        "kind": "password_bearer",
+        "credentials": {"kind": "gateway_session"},
+        "login_path": "/api/auth/login",
+        "identity_field": "email",
+        "password_field": "password",
+        "token_pointer": "/access_token",
+    }
+    if scopes_pointer is not None:
+        auth["scopes_pointer"] = scopes_pointer
+    if scope_mapping is not None:
+        auth["scope_mapping"] = scope_mapping
+    document["provider"]["auth"] = auth
+    _write_yaml(project_path, document)
+    operation_path = project / "operations" / "crm.get_customer.yaml"
+    operation = yaml.safe_load(operation_path.read_text(encoding="utf-8"))
+    operation["http"].pop("credential_ref")
+    _write_yaml(operation_path, operation)
+
+
+def _set_operation_context_binding(project: Path, target: str, source: str) -> None:
+    operation_path = project / "operations" / "crm.get_customer.yaml"
+    operation = yaml.safe_load(operation_path.read_text(encoding="utf-8"))
+    operation["context_bindings"] = {target: source}
+    _write_yaml(operation_path, operation)
+
+
+def test_compile_project_accepts_context_binding_not_exposed_by_capability(
+    tmp_path: Path,
+) -> None:
+    project = _make_project(tmp_path)
+    _set_operation_context_binding(project, "customer_id", "principal_id")
+    capability = _load_capability(project)
+    capability["input_schema"]["properties"] = {}
+    capability["workflow"][0]["call"]["arguments"] = {}
+    _write_capability(project, capability)
+
+    report = compile_project(project)
+
+    assert report.ok is True
+    assert report.ir is not None
+    operation = cast(dict[str, Any], report.ir)["operations"]["crm.get_customer"]
+    assert operation["context_bindings"] == {"customer_id": "principal_id"}
+
+
+def test_compile_project_rejects_context_binding_target_not_mapped_to_http(
+    tmp_path: Path,
+) -> None:
+    project = _make_project(tmp_path)
+    _set_operation_context_binding(project, "z_field", "principal_id")
+
+    report = compile_project(project)
+
+    diagnostic = next(
+        item
+        for item in report.diagnostics
+        if item.code == "ACC_COMPILE_CONTEXT_BINDING_TARGET_INVALID"
+    )
+    assert report.ok is False
+    assert diagnostic.pointer == "/context_bindings/z_field"
+
+
+def test_compile_project_rejects_context_binding_field_from_capability_input(
+    tmp_path: Path,
+) -> None:
+    project = _make_project(tmp_path)
+    _set_operation_context_binding(project, "customer_id", "principal_id")
+
+    report = compile_project(project)
+
+    assert report.ok is False
+    assert any(
+        item.code == "ACC_COMPILE_CONTEXT_BINDING_PUBLIC_INPUT" for item in report.diagnostics
+    )
+
+
+def test_compile_project_rejects_context_binding_field_from_workflow_arguments(
+    tmp_path: Path,
+) -> None:
+    project = _make_project(tmp_path)
+    _set_operation_context_binding(project, "customer_id", "principal_id")
+    capability = _load_capability(project)
+    capability["input_schema"]["properties"] = {}
+    _write_capability(project, capability)
+
+    report = compile_project(project)
+
+    assert report.ok is False
+    diagnostic = next(
+        item
+        for item in report.diagnostics
+        if item.code == "ACC_COMPILE_CONTEXT_BINDING_ARGUMENT_OVERRIDE"
+    )
+    assert diagnostic.pointer == "/workflow/0/call/arguments/customer_id"
+
+
+def test_compile_project_rejects_nested_context_binding_argument_overrides(
+    tmp_path: Path,
+) -> None:
+    project = _make_project(tmp_path)
+    _set_operation_context_binding(project, "customer_id", "principal_id")
+    capability = _load_capability(project)
+    capability["input_schema"]["properties"] = {}
+    bound_call = {
+        "call": {
+            "operation": "crm.get_customer",
+            "arguments": {"customer_id": "forced"},
+        }
+    }
+    capability["workflow"] = [
+        {
+            "branch": {
+                "condition": "$.input.flag",
+                "then": [bound_call],
+                "else": [{"emit": {"value": {}}}],
+            }
+        },
+        {"parallel": [bound_call]},
+        {
+            "foreach": {
+                "items": "$.input.items",
+                "item_name": "item",
+                "max_items": 2,
+                "workflow": [bound_call],
+            }
+        },
+        {"emit": {"value": {}}},
+    ]
+    _write_capability(project, capability)
+
+    report = compile_project(project)
+
+    overrides = [
+        item
+        for item in report.diagnostics
+        if item.code == "ACC_COMPILE_CONTEXT_BINDING_ARGUMENT_OVERRIDE"
+    ]
+    assert [item.pointer for item in overrides] == [
+        "/workflow/0/branch/then/0/call/arguments/customer_id",
+        "/workflow/1/parallel/0/call/arguments/customer_id",
+        "/workflow/2/foreach/workflow/0/call/arguments/customer_id",
+    ]
+
+
+def test_compile_project_rejects_context_binding_with_open_capability_input(
+    tmp_path: Path,
+) -> None:
+    project = _make_project(tmp_path)
+    _set_operation_context_binding(project, "customer_id", "principal_id")
+    capability = _load_capability(project)
+    capability["input_schema"]["properties"] = {}
+    capability["input_schema"]["additionalProperties"] = True
+    capability["workflow"][0]["call"]["arguments"] = {}
+    _write_capability(project, capability)
+
+    report = compile_project(project)
+
+    diagnostic = next(
+        item
+        for item in report.diagnostics
+        if item.code == "ACC_COMPILE_CONTEXT_BINDING_PUBLIC_INPUT"
+    )
+    assert diagnostic.pointer == "/input_schema/additionalProperties"
+
+
+@pytest.mark.parametrize(
+    ("scopes_pointer", "scope_mapping", "accepted"),
+    [
+        (None, {}, False),
+        ("/permissions", {}, False),
+        (None, {"customer:read": ["customer.read"]}, False),
+        ("/permissions", {"customer:read": ["customer.read"]}, True),
+    ],
+)
+def test_streamable_scoped_capability_requires_pointer_and_nonempty_scope_mapping(
+    tmp_path: Path,
+    scopes_pointer: str | None,
+    scope_mapping: dict[str, list[str]],
+    accepted: bool,
+) -> None:
+    project = _make_project(tmp_path)
+    _configure_streamable_gateway_auth(
+        project,
+        scopes_pointer=scopes_pointer,
+        scope_mapping=scope_mapping,
+    )
+
+    report = compile_project(project)
+
+    assert report.ok is accepted
+    gate_errors = [
+        item
+        for item in report.diagnostics
+        if item.code == "ACC_COMPILE_SOURCE_SCOPE_MAPPING_REQUIRED"
+    ]
+    assert bool(gate_errors) is not accepted
+
+
+@pytest.mark.parametrize("scope_source", ["policy", "operation"])
+def test_streamable_scope_gate_checks_policy_and_operation_scopes(
+    tmp_path: Path,
+    scope_source: str,
+) -> None:
+    project = _make_project(tmp_path)
+    _configure_streamable_gateway_auth(
+        project,
+        scopes_pointer=None,
+        scope_mapping={},
+    )
+    policy_path = project / "policies" / "crm-sales-read.yaml"
+    policy = yaml.safe_load(policy_path.read_text(encoding="utf-8"))
+    policy["required_scopes"] = ["customer.read"] if scope_source == "policy" else []
+    _write_yaml(policy_path, policy)
+    operation_path = project / "operations" / "crm.get_customer.yaml"
+    operation = yaml.safe_load(operation_path.read_text(encoding="utf-8"))
+    operation["http"]["scopes"] = ["customer.read"] if scope_source == "operation" else []
+    _write_yaml(operation_path, operation)
+
+    report = compile_project(project)
+
+    assert any(
+        item.code == "ACC_COMPILE_SOURCE_SCOPE_MAPPING_REQUIRED" for item in report.diagnostics
+    )
+
+
 def test_compile_project_emits_normalized_json_ir_and_operation_dependencies(
     tmp_path: Path,
 ) -> None:
@@ -155,7 +390,7 @@ def test_compile_project_emits_normalized_json_ir_and_operation_dependencies(
     report = compile_project(project)
 
     assert report.ok is True
-    assert report.diagnostics == []
+    assert [item.code for item in report.diagnostics] == ["ACC_AUTH_LEGACY_CREDENTIAL"]
     assert report.ir is not None
     assert json.loads(json.dumps(report.ir)) == report.ir
     ir = cast(dict[str, Any], report.ir)
@@ -187,12 +422,12 @@ def test_compile_project_reports_missing_operation_policy_and_eval_references(
 
     assert report.ok is False
     assert report.ir is None
-    assert [item.code for item in report.diagnostics] == [
+    assert [item.code for item in report.diagnostics if item.severity == "error"] == [
         "ACC_COMPILE_POLICY_NOT_FOUND",
         "ACC_COMPILE_EVAL_NOT_FOUND",
         "ACC_COMPILE_OPERATION_NOT_FOUND",
     ]
-    assert [item.pointer for item in report.diagnostics] == [
+    assert [item.pointer for item in report.diagnostics if item.severity == "error"] == [
         "/policy",
         "/evals/0",
         "/workflow/0/call/operation",
@@ -211,7 +446,7 @@ def test_compile_project_checks_eval_targets_and_expected_operations(tmp_path: P
 
     assert report.ok is False
     assert report.ir is None
-    assert [item.code for item in report.diagnostics] == [
+    assert [item.code for item in report.diagnostics if item.severity == "error"] == [
         "ACC_COMPILE_EVAL_CAPABILITY_MISMATCH",
         "ACC_COMPILE_CAPABILITY_NOT_FOUND",
         "ACC_COMPILE_OPERATION_NOT_FOUND",
@@ -336,7 +571,9 @@ def test_compile_project_propagates_parallel_and_foreach_bounds(tmp_path: Path) 
 
     assert report.ok is False
     assert report.ir is None
-    assert {item.code for item in report.diagnostics} == {"ACC_SCHEMA_INVALID"}
+    assert {item.code for item in report.diagnostics if item.severity == "error"} == {
+        "ACC_SCHEMA_INVALID"
+    }
     assert {item.pointer for item in report.diagnostics} >= {
         "/workflow/0/ParallelStep/parallel",
         "/workflow/1/ForeachStep/foreach/max_items",

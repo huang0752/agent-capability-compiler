@@ -142,8 +142,17 @@ def _parser() -> AccArgumentParser:
     return parser
 
 
-def _success(command: str, result: dict[str, Any]) -> ResultEnvelope:
-    return ResultEnvelope(ok=True, command=command, result=result, diagnostics=[])
+def _success(
+    command: str,
+    result: dict[str, Any],
+    diagnostics: list[Diagnostic] | None = None,
+) -> ResultEnvelope:
+    return ResultEnvelope(
+        ok=True,
+        command=command,
+        result=result,
+        diagnostics=[] if diagnostics is None else diagnostics,
+    )
 
 
 def _failure(command: str, diagnostic: Diagnostic) -> ResultEnvelope:
@@ -185,7 +194,8 @@ def _doctor_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope]
     project_diagnostics = [
         item
         for item in report.diagnostics
-        if item.path == "project.yaml" or item.code.startswith("ACC_IO_")
+        if item.severity == "error"
+        and (item.path == "project.yaml" or item.code.startswith("ACC_IO_"))
     ]
     project_ok = report.project is not None and not project_diagnostics
     checks = [
@@ -261,6 +271,7 @@ def _validate_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelop
                 "evals": len(report.evals),
             },
         },
+        report.diagnostics,
     )
 
 
@@ -369,7 +380,7 @@ def _compile_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope
                 ),
             )
         result["path"] = str(output.resolve())
-    return EXIT_SUCCESS, _success("compile", result)
+    return EXIT_SUCCESS, _success("compile", result, report.diagnostics)
 
 
 def _coverage_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope]:

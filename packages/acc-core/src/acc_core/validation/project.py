@@ -11,7 +11,17 @@ from pydantic import ValidationError
 
 from acc_core.diagnostics import Diagnostic
 from acc_core.io import ProjectIOError, load_project_object
-from acc_core.models import Capability, Eval, Operation, Policy, Project, StrictModel
+from acc_core.models import (
+    Capability,
+    EnvironmentSecretCredentials,
+    Eval,
+    GatewaySessionCredentials,
+    Operation,
+    PasswordBearerAuthConfig,
+    Policy,
+    Project,
+    StrictModel,
+)
 
 _DOCUMENT_SUFFIXES = {".json", ".yaml", ".yml"}
 
@@ -179,6 +189,97 @@ def _load_collection[ModelT: StrictModel](
     return documents
 
 
+def _validate_auth_contract(report: ValidationReport) -> None:
+    project = report.project
+    if project is None:
+        return
+
+    auth = project.provider.auth
+    transport = project.runtime.transport[0]
+    if auth is None:
+        if transport != "stdio":
+            report.diagnostics.append(
+                Diagnostic(
+                    code="ACC_AUTH_TRANSPORT_INCOMPATIBLE",
+                    severity="error",
+                    message=(
+                        "streamable_http requires password_bearer authentication "
+                        "with gateway_session credentials."
+                    ),
+                    path="project.yaml",
+                    pointer="/provider/auth",
+                )
+            )
+        else:
+            report.diagnostics.append(
+                Diagnostic(
+                    code="ACC_AUTH_LEGACY_CREDENTIAL",
+                    severity="warning",
+                    message=(
+                        "Legacy Operation-level credentials remain supported for stdio; "
+                        "migrate authentication to provider.auth."
+                    ),
+                    path="project.yaml",
+                    pointer="/provider",
+                )
+            )
+        for operation_id, operation in sorted(report.operations.items()):
+            if operation.http.credential_ref is None:
+                report.diagnostics.append(
+                    Diagnostic(
+                        code="ACC_AUTH_CREDENTIAL_REQUIRED",
+                        severity="error",
+                        message=(
+                            "Legacy authentication requires an Operation-level credential_ref."
+                        ),
+                        path=f"operations/{operation_id}.yaml",
+                        pointer="/http/credential_ref",
+                    )
+                )
+        return
+
+    for operation_id, operation in sorted(report.operations.items()):
+        if operation.http.credential_ref is not None:
+            report.diagnostics.append(
+                Diagnostic(
+                    code="ACC_AUTH_CREDENTIAL_CONFLICT",
+                    severity="error",
+                    message=(
+                        "Operation credential_ref is forbidden when provider.auth is configured."
+                    ),
+                    path=f"operations/{operation_id}.yaml",
+                    pointer="/http/credential_ref",
+                )
+            )
+
+    password_auth = auth if isinstance(auth, PasswordBearerAuthConfig) else None
+    compatible = (
+        transport == "streamable_http"
+        and password_auth is not None
+        and isinstance(password_auth.credentials, GatewaySessionCredentials)
+    ) or (
+        transport == "stdio"
+        and (
+            password_auth is None
+            or isinstance(password_auth.credentials, EnvironmentSecretCredentials)
+        )
+    )
+    if not compatible:
+        report.diagnostics.append(
+            Diagnostic(
+                code="ACC_AUTH_TRANSPORT_INCOMPATIBLE",
+                severity="error",
+                message=(
+                    "stdio accepts none, bearer_secret, or password_bearer with "
+                    "environment_secret; streamable_http accepts only password_bearer "
+                    "with gateway_session."
+                ),
+                path="project.yaml",
+                pointer="/provider/auth",
+            )
+        )
+
+
 def validate_project(project_root: str | Path = ".") -> ValidationReport:
     """Validate all Milestone 1 documents under ``project_root``."""
 
@@ -213,6 +314,7 @@ def validate_project(project_root: str | Path = ".") -> ValidationReport:
         "ACC_EVAL_ID_DUPLICATE",
         report.diagnostics,
     )
+    _validate_auth_contract(report)
     return report
 
 

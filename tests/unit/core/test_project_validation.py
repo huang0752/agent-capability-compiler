@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 
+import pytest
 import yaml
 
 from acc_core.validation.project import validate_project
@@ -128,7 +130,103 @@ def test_valid_project_loads_all_contracts(tmp_path: Path) -> None:
     assert list(report.capabilities) == ["get_customer"]
     assert list(report.policies) == ["crm-sales-read"]
     assert list(report.evals) == ["get-customer-normal"]
-    assert report.diagnostics == []
+    assert [item.code for item in report.diagnostics] == ["ACC_AUTH_LEGACY_CREDENTIAL"]
+    assert report.diagnostics[0].severity == "warning"
+
+
+def _set_provider_auth(project: Path, auth: dict[str, object]) -> None:
+    project_path = project / "project.yaml"
+    document = yaml.safe_load(project_path.read_text(encoding="utf-8"))
+    document["provider"]["auth"] = auth
+    _write_yaml(project_path, document)
+
+
+def _remove_operation_credential(project: Path) -> None:
+    operation_path = project / "operations" / "crm.get_customer.yaml"
+    operation = yaml.safe_load(operation_path.read_text(encoding="utf-8"))
+    operation["http"].pop("credential_ref")
+    _write_yaml(operation_path, operation)
+
+
+def _password_auth(credential_kind: str) -> dict[str, object]:
+    credentials: dict[str, object] = {"kind": credential_kind}
+    if credential_kind == "environment_secret":
+        credentials.update(identity_ref="CRM_USER_EMAIL", password_ref="CRM_USER_PASSWORD")
+    return {
+        "kind": "password_bearer",
+        "credentials": credentials,
+        "login_path": "/api/auth/login",
+        "identity_field": "email",
+        "password_field": "password",
+        "token_pointer": "/access_token",
+    }
+
+
+def test_legacy_auth_requires_operation_credential(tmp_path: Path) -> None:
+    project = make_valid_project(tmp_path)
+    _remove_operation_credential(project)
+
+    report = validate_project(project)
+
+    assert report.ok is False
+    diagnostic = next(
+        item for item in report.diagnostics if item.code == "ACC_AUTH_CREDENTIAL_REQUIRED"
+    )
+    assert diagnostic.path == "operations/crm.get_customer.yaml"
+    assert diagnostic.pointer == "/http/credential_ref"
+
+
+def test_provider_auth_forbids_operation_credential(tmp_path: Path) -> None:
+    project = make_valid_project(tmp_path)
+    _set_provider_auth(project, {"kind": "bearer_secret", "token_ref": "CRM_USER_TOKEN"})
+
+    report = validate_project(project)
+
+    assert report.ok is False
+    diagnostic = next(
+        item for item in report.diagnostics if item.code == "ACC_AUTH_CREDENTIAL_CONFLICT"
+    )
+    assert diagnostic.pointer == "/http/credential_ref"
+
+
+@pytest.mark.parametrize(
+    ("transport", "auth", "accepted"),
+    [
+        ("stdio", {"kind": "none"}, True),
+        ("stdio", {"kind": "bearer_secret", "token_ref": "CRM_USER_TOKEN"}, True),
+        ("stdio", _password_auth("environment_secret"), True),
+        ("stdio", _password_auth("gateway_session"), False),
+        ("streamable_http", _password_auth("gateway_session"), True),
+        ("streamable_http", _password_auth("environment_secret"), False),
+        ("streamable_http", {"kind": "none"}, False),
+        (
+            "streamable_http",
+            {"kind": "bearer_secret", "token_ref": "CRM_USER_TOKEN"},
+            False,
+        ),
+    ],
+)
+def test_transport_and_credential_source_cross_validation(
+    tmp_path: Path,
+    transport: str,
+    auth: dict[str, object],
+    accepted: bool,
+) -> None:
+    project = make_valid_project(tmp_path)
+    project_path = project / "project.yaml"
+    document = yaml.safe_load(project_path.read_text(encoding="utf-8"))
+    document["runtime"]["transport"] = [transport]
+    document["provider"]["auth"] = deepcopy(auth)
+    _write_yaml(project_path, document)
+    _remove_operation_credential(project)
+
+    report = validate_project(project)
+
+    assert report.ok is accepted
+    transport_errors = [
+        item for item in report.diagnostics if item.code == "ACC_AUTH_TRANSPORT_INCOMPATIBLE"
+    ]
+    assert bool(transport_errors) is not accepted
 
 
 def test_operation_without_evidence_has_stable_diagnostic(tmp_path: Path) -> None:
