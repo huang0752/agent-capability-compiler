@@ -272,6 +272,61 @@ def test_run_streamable_http_starts_single_worker_and_closes_after_server_return
     assert composition.close_calls == 1
 
 
+def test_run_streamable_http_maps_uvicorn_system_exit_to_stable_runtime_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import uvicorn
+
+    import acc_runtime.gateway
+    import acc_runtime.loader
+
+    project = {
+        "schema_version": "1",
+        "project": {"id": "fake-gateway", "version": "0.1.0"},
+        "source_workspace": {"path": "../system", "mode": "read_only"},
+        "runtime": {"transport": ["streamable_http"]},
+        "provider": {
+            "kind": "http",
+            "base_url_ref": "FAKE_BASE_URL",
+            "auth": {
+                "kind": "password_bearer",
+                "credentials": {"kind": "gateway_session"},
+                "login_path": "/auth/login",
+                "identity_field": "identity",
+                "password_field": "password",
+                "token_pointer": "/access_token",
+                "scopes_pointer": "/scopes",
+            },
+        },
+    }
+    composition = _FakeGatewayComposition()
+    monkeypatch.setattr(
+        acc_runtime.loader,
+        "load_pack",
+        lambda path: SimpleNamespace(ir={"project": project}),
+    )
+    monkeypatch.setattr(
+        acc_runtime.gateway,
+        "create_gateway_runtime",
+        lambda **kwargs: composition,
+    )
+    monkeypatch.setattr(
+        uvicorn,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(SystemExit(3)),
+    )
+    arguments = _run_arguments(json_output=False)
+    arguments.allowed_host = ["127.0.0.1:8000"]
+
+    exit_code, envelope = run_pack_command(arguments)
+
+    assert exit_code == EXIT_RUNTIME
+    assert envelope.ok is False
+    assert envelope.diagnostics[0].code == "ACC_RUNTIME_CONFIGURATION_INVALID"
+    assert envelope.diagnostics[0].message == "ACC runtime could not start."
+    assert composition.close_calls == 1
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [

@@ -973,6 +973,13 @@ def _run_streamable_http_gateway(
             ssl_certfile=certfile,
             ssl_keyfile=keyfile,
         )
+    except SystemExit:
+        with contextlib.suppress(BaseException):
+            anyio.run(composition.aclose)
+        raise RuntimeConfigurationError(
+            "Gateway server failed to start.",
+            details={"reason": "gateway_server_start_failed"},
+        ) from None
     except BaseException:
         with contextlib.suppress(BaseException):
             anyio.run(composition.aclose)
