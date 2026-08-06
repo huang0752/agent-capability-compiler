@@ -41,7 +41,7 @@ Gateway 的用户会话流程为：
 传输边界不同：
 
 - `stdio` 在进程启动时创建固定 principal；源权限 unavailable 时，有效 Scope 只取部署 ceiling。
-- `streamable_http` 由 Gateway 对每个已认证请求重新解析会话并创建 `PrincipalContext`，按 principal、目标系统、Gateway Session 和 MCP Session 隔离状态。A 的 token 不能恢复 B 的 MCP Session。
+- `streamable_http` 由 Gateway 对每个已认证请求重新校验 Gateway Session，并在每次工具执行时按会话恢复 `PrincipalContext`；状态按 principal、目标系统、Gateway Session 和 MCP Session 隔离。A 的 token 不能恢复 B 的 MCP Session。
 
 权限计算采用双重上限。登录响应中可验证的源 Scope 先按 Pack 声明的 mapping 转换，再与部署 Scope ceiling 取交集；原系统还会在真正的 API 请求上重新判定账号、角色、租户和数据空间。因此 ceiling 只能收紧源权限，不是可以公开或扩权的查询 key。源系统返回 401 时，对应 Gateway Session 进入 `reauth_required`，其他用户会话继续有效。
 

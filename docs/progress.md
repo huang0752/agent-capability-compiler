@@ -113,7 +113,7 @@ This file records fresh command evidence at each milestone. A status changes to 
 - `acc run` 现在会将 `runtime.transport: [streamable_http]` Pack 分派到可选的 Starlette/Uvicorn Gateway。ACC 仍是 compiler 与 Generic Runtime；Gateway 是运行时适配层，不是 Web 控制面，也不替代源系统的用户、角色、租户或数据权限。
 - Gateway v1 明确是单进程实现，要求 `workers=1`。它校验精确 Host/Origin allowlist、loopback/TLS 部署规则、请求体大小、会话 TTL、最大会话数，以及不高于 Gateway TTL 的有限 MCP idle timeout。
 - 每个用户只在 `POST /runtime/sessions` 一次性提交 identity/password。密码在源登录交换后丢弃，源 JWT 只保留在进程内，客户端收到独立的短期 opaque Gateway token，Store 只用其摘要索引。MCP tool 拒绝凭据和身份覆盖参数。
-- 每个已认证 HTTP 请求都重新解析 `PrincipalContext`。A/B/C 的 Gateway 与 MCP Session 相互独立；MCP Session owner 绑定阻止跨 token 的 POST/GET/DELETE/SSE 访问。有效 Scope 是映射后的源 Scope 与部署 ceiling 的交集，源系统仍会授权每次 REST 调用。
+- 每个已认证 HTTP 请求都重新校验 Gateway Session，每次工具执行再恢复并绑定 `PrincipalContext`。A/B/C 的 Gateway 与 MCP Session 相互独立；MCP Session owner 绑定阻止跨 token 的 POST/GET/DELETE/SSE 访问。有效 Scope 是映射后的源 Scope 与部署 ceiling 的交集，源系统仍会授权每次 REST 调用。
 - `DELETE /runtime/sessions/current`、过期、重启和源 401 都会使受影响的 Gateway 授权路径失效。源 401 只将当前用户标记为 `reauth_required`。MCP SDK 1.29 没有立即终止单个底层 Streamable HTTP 传输的公开 manager API，因此已有 SSE/传输受配置的 idle timeout 上限约束，但被撤销 token 不能授权新请求。
 - 仓库包含一个领域中立的多用户 Fake 源 E2E，以及 CRM、Warehouse 和 `baogao-jin` 的代表性 Provider 配置夹具。这些 Fake 结果都是 `offline_candidate`，不暗示已验证任何生产源。
 - 最新聚焦验证命令为 `uv run --frozen pytest -q tests/unit/runtime/gateway tests/integration/runtime/test_gateway_http.py tests/e2e/test_multi_user_http_gateway.py tests/unit/testkit/test_mcp_client.py tests/unit/core/test_cli.py`，已通过。
@@ -123,6 +123,6 @@ This file records fresh command evidence at each milestone. A status changes to 
 ### `baogao-jin` 当前验证边界
 
 - `/Users/chou/code/baogao-jin` 仍是已有只读源系统，本仓库流程不修改它。
-- 当前 Gateway 回归用通用 Fake 源验证 A/B/C 隔离，同时保留一个 `baogao-jin-fake-email-password` 认证配置夹具；二者都只是 `offline_candidate`，不使用真实 `baogao-jin` 账号、JWT、服务状态或生产数据。
+- 当前 Gateway 回归用通用 Fake 源验证 A/B/C 隔离，并以 `baogao-jin-auth-shape` 元数据标记 email/password 认证形状；它只是 `offline_candidate`，不使用真实 `baogao-jin` 账号、JWT、服务状态或生产数据。
 - 目前记录的源码审阅仅支持三个只读 GET 表面：`/api/me`、`/api/customers/search` 和 `/api/customers/{id}/overview`。overview 响应包含摘要统计，不包含文档列表。在收集新的路由、Schema、权限和测试证据前，不宣称更广的文档/报告能力。
 - 未来的 `source_connected_verified` 需要用户明确授权，并成功连接已启动的本地或隔离测试服务；不能从源码阅读或 Fake 测试推导。

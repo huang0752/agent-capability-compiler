@@ -369,7 +369,7 @@ pack.lock
 
 `stdio` 是单进程、固定身份入口：启动时构造一个 `PrincipalContext`，默认 principal 为 `stdio-local`，部署方可用 `ACC_PRINCIPAL_ID` 覆盖；它绝不从工具参数推断用户。源权限不可获得时，`source_scopes` 保持 unavailable，`effective_scopes` 只取部署 ceiling；若登录响应提供源权限，则有效 Scope 为映射后的源权限与 ceiling 的交集。
 
-`streamable_http` 面向多用户会话。Gateway 会对每个已认证请求重新解析 Gateway Session，构造请求级 `PrincipalContext`，并把认证状态按 principal、目标系统和 Gateway session 隔离。MCP Session ID 也会由 SDK 绑定到创建它的 Gateway 身份；A 的 token 不能恢复 B 的 MCP Session。Core 仅接受 `password_bearer + gateway_session` 这一安全组合。
+`streamable_http` 面向多用户会话。Gateway 会对每个已认证请求重新校验 Gateway Session；每次工具执行再按会话恢复并绑定可信 `PrincipalContext`，认证状态按 principal、目标系统和 Gateway session 隔离。MCP Session ID 也会由 SDK 绑定到创建它的 Gateway 身份；A 的 token 不能恢复 B 的 MCP Session。Core 仅接受 `password_bearer + gateway_session` 这一安全组合。
 
 有效权限不是 Gateway 自行生成的“公开查询 key”。登录响应提供的源 Scope 经显式 mapping 后，再与部署方的 `--scope` ceiling 取交集；后续每次源 API 请求仍携带该用户的源 JWT，由原系统继续执行账号、角色、租户和数据权限。部署 ceiling 只能收紧，不能扩大原系统权限。账号、密码、JWT、Cookie、Authorization 和 principal/tenant 覆盖值都不是 MCP tool 参数。
 
@@ -397,7 +397,7 @@ Fake CRM 覆盖客户、联系人、跟进记录、待办、Bearer 认证、Scop
 
 ## `baogao-jin` 验证边界
 
-`/Users/chou/code/baogao-jin` 始终是只读源系统，ACC 的分析、Pack 和测试产物不写入该目录。当前 Gateway 回归包含通用 Fake 源的 A/B/C 隔离 E2E，以及一个标记为 `baogao-jin-fake-email-password` 的代表性认证配置夹具；二者等级都只是 `offline_candidate`，没有使用真实账号、JWT、服务状态或生产数据。
+`/Users/chou/code/baogao-jin` 始终是只读源系统，ACC 的分析、Pack 和测试产物不写入该目录。当前 Gateway 回归包含通用 Fake 源的 A/B/C 隔离 E2E，并以 `baogao-jin-auth-shape` 元数据明确标记其 email/password 认证形状；等级只是 `offline_candidate`，没有使用真实账号、JWT、服务状态或生产数据。
 
 目前记录的源码证据只支持三个只读 GET 边界：`/api/me`、`/api/customers/search` 和 `/api/customers/{id}/overview`。`overview` 返回摘要统计，不是文档列表；不能由此宣称已提供报告/证书文档查询。只有在用户明确授权后连接已启动的本地或隔离测试服务，并成功验证真实认证、Schema、Scope/租户和数据可见性，才能将对应范围标记为 `source_connected_verified`。
 
