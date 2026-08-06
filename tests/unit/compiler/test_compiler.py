@@ -276,6 +276,32 @@ def test_compile_project_rejects_sensitive_context_binding_before_ir(
     assert diagnostic.pointer == expected_pointer
 
 
+@pytest.mark.parametrize(
+    "source",
+    [
+        "tenant_context.idToken",
+        "tenant_context.oauthToken",
+        "tenant_context.apiToken",
+        "tenant_context.jwtToken",
+        "tenant_context.passwordHash",
+        "tenant_context.xApiKey",
+        "tenant_context.authorizationHeader",
+    ],
+)
+def test_compile_project_rejects_sensitive_compound_context_binding_words(
+    tmp_path: Path,
+    source: str,
+) -> None:
+    project = _make_project(tmp_path)
+    _set_operation_context_binding(project, "customer_id", source)
+
+    report = compile_project(project)
+
+    assert report.ok is False
+    diagnostic = next(item for item in report.diagnostics if item.code == "ACC_SCHEMA_INVALID")
+    assert diagnostic.pointer == "/context_bindings/customer_id"
+
+
 def test_compile_project_rejects_context_binding_target_not_mapped_to_http(
     tmp_path: Path,
 ) -> None:

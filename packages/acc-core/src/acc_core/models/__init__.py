@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from itertools import pairwise
 from typing import Annotated, Literal
 from urllib.parse import unquote, urlsplit
 
@@ -31,7 +32,7 @@ _TENANT_CONTEXT_BINDING_PATTERN = (
     r"^tenant_context\.[A-Za-z][A-Za-z0-9_-]*"
     r"(?:\.[A-Za-z][A-Za-z0-9_-]*)*$"
 )
-_DIRECT_SENSITIVE_CONTEXT_NAMES = frozenset(
+_SENSITIVE_CONTEXT_WORDS = frozenset(
     {
         "authorization",
         "bearer",
@@ -40,29 +41,22 @@ _DIRECT_SENSITIVE_CONTEXT_NAMES = frozenset(
         "credential",
         "credentials",
         "csrf",
-        "header",
-        "headers",
         "jwt",
         "password",
         "secret",
         "token",
     }
 )
-_COMPOSITE_SENSITIVE_CONTEXT_NAMES = frozenset(
+_SENSITIVE_CONTEXT_PHRASES = frozenset(
     {
-        "access_token",
-        "api_key",
-        "auth_token",
-        "client_secret",
-        "private_key",
-        "refresh_token",
-        "session_token",
-        "set_cookie",
+        ("api", "key"),
+        ("private", "key"),
+        ("set", "cookie"),
     }
 )
 
 
-def _normalize_context_segment(segment: str) -> str:
+def _context_segment_words(segment: str) -> tuple[str, ...]:
     words: list[str] = []
     for chunk in re.split(r"[_-]+", segment):
         words.extend(
@@ -72,13 +66,19 @@ def _normalize_context_segment(segment: str) -> str:
                 chunk,
             )
         )
-    return "_".join(words)
+    return tuple(words)
 
 
 def _validate_tenant_context_binding_reference(value: str) -> str:
     for segment in value.removeprefix("tenant_context.").split("."):
-        normalized = _normalize_context_segment(segment)
-        if normalized in (_DIRECT_SENSITIVE_CONTEXT_NAMES | _COMPOSITE_SENSITIVE_CONTEXT_NAMES):
+        words = _context_segment_words(segment)
+        normalized = "_".join(words)
+        contains_sensitive_phrase = not _SENSITIVE_CONTEXT_PHRASES.isdisjoint(pairwise(words))
+        if (
+            any(word in _SENSITIVE_CONTEXT_WORDS for word in words)
+            or normalized in {"header", "headers"}
+            or contains_sensitive_phrase
+        ):
             raise ValueError("tenant context binding path contains a sensitive segment")
     return value
 

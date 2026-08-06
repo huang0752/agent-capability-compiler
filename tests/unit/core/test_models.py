@@ -148,6 +148,13 @@ def test_provider_rejects_duplicate_invalid_or_unsorted_context_binding_allowlis
         "tenant_context.setCookie",
         "tenant_context.api-key",
         "tenant_context.privateKey",
+        "tenant_context.idToken",
+        "tenant_context.oauthToken",
+        "tenant_context.apiToken",
+        "tenant_context.jwtToken",
+        "tenant_context.passwordHash",
+        "tenant_context.xApiKey",
+        "tenant_context.authorizationHeader",
     ],
 )
 def test_provider_rejects_sensitive_context_binding_allowlist_paths(source: str) -> None:
@@ -503,6 +510,13 @@ def test_operation_does_not_substring_block_safe_context_binding_sources(
         "tenant_context.setCookie",
         "tenant_context.api-key",
         "tenant_context.privateKey",
+        "tenant_context.idToken",
+        "tenant_context.oauthToken",
+        "tenant_context.apiToken",
+        "tenant_context.jwtToken",
+        "tenant_context.passwordHash",
+        "tenant_context.xApiKey",
+        "tenant_context.authorizationHeader",
     ],
 )
 def test_operation_rejects_sensitive_context_binding_paths(source: str) -> None:
