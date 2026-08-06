@@ -572,3 +572,120 @@ async def test_cancelled_session_mutation_drops_store_token_graph(operation: str
 
     _assert_runtime_traceback_cannot_reach_secret(caught.value, token_a)
     _assert_runtime_traceback_cannot_reach_secret(caught.value, token_b)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("operation", ["purge", "close"])
+async def test_cancelled_store_lifecycle_drops_token_graph(operation: str) -> None:
+    token_a = base64.urlsafe_b64encode(b"a" * 32).rstrip(b"=").decode("ascii")
+    token_b = base64.urlsafe_b64encode(b"b" * 32).rstrip(b"=").decode("ascii")
+    store = InMemoryGatewaySessionStore(
+        max_sessions=2,
+        ttl_seconds=60,
+        clock=Clock(),
+        token_generator=TokenGenerator(token_a, token_b),
+    )
+    returned_a, record_a = await store.create(
+        session_id="session-a",
+        principal_context=_context("a", "session-a"),
+    )
+    await store._lock.acquire()
+    call = store.purge_expired() if operation == "purge" else store.close()
+    task = asyncio.create_task(call)
+    await asyncio.sleep(0)
+    task.cancel()
+    store._lock.release()
+
+    with pytest.raises(asyncio.CancelledError) as caught:
+        await task
+
+    _assert_runtime_traceback_cannot_reach_secret(caught.value, token_a)
+    _assert_runtime_traceback_cannot_reach_secret(caught.value, token_b)
+    assert await store.resolve_token(returned_a) == record_a
+
+
+@pytest.mark.anyio
+async def test_source_boundary_wins_when_gateway_ttl_expires_at_same_instant() -> None:
+    clock = Clock()
+    store = InMemoryGatewaySessionStore(
+        max_sessions=1,
+        ttl_seconds=5,
+        clock=clock,
+        token_generator=lambda: "a" * 43,
+    )
+    token, _ = await store.create(
+        session_id="session-a",
+        principal_context=_context("a", "session-a"),
+        source_expires_at=105.0,
+    )
+    clock.value = 105.0
+
+    assert await store.purge_expired() == 0
+    with pytest.raises(GatewayReauthRequiredError):
+        await store.resolve_token(token)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("invalid_now", [float("nan"), float("inf"), float("-inf")])
+async def test_nonfinite_clock_fails_closed_for_resolve_mark_and_purge(
+    invalid_now: float,
+) -> None:
+    clock = Clock()
+    store = InMemoryGatewaySessionStore(
+        max_sessions=1,
+        ttl_seconds=60,
+        clock=clock,
+        token_generator=lambda: "a" * 43,
+    )
+    token, record = await store.create(
+        session_id="session-a",
+        principal_context=_context("a", "session-a"),
+    )
+    clock.value = invalid_now
+
+    with pytest.raises(GatewaySessionInvalidError):
+        await store.resolve_token(token)
+    with pytest.raises(GatewaySessionInvalidError):
+        await store.resolve_session_id("session-a")
+    with pytest.raises(GatewaySessionInvalidError):
+        await store.mark_reauth_required("session-a")
+    with pytest.raises(GatewaySessionInvalidError):
+        await store.purge_expired()
+
+    clock.value = 100.0
+    assert await store.resolve_token(token) == record
+
+
+@pytest.mark.anyio
+async def test_revoke_session_returns_record_without_active_resolution() -> None:
+    clock = Clock()
+    generator = _tokens("a" * 43, "b" * 43)
+    store = InMemoryGatewaySessionStore(
+        max_sessions=2,
+        ttl_seconds=10,
+        clock=clock,
+        token_generator=lambda: next(generator),
+    )
+    token_a, record_a = await store.create(
+        session_id="session-a",
+        principal_context=_context("a", "session-a"),
+        source_expires_at=105.0,
+    )
+    token_b, record_b = await store.create(
+        session_id="session-b",
+        principal_context=_context("b", "session-b"),
+    )
+    await store.mark_reauth_required("session-a")
+    clock.value = 111.0
+
+    revoked_a = await store.revoke_session("session-a")
+    revoked_b = await store.revoke_session("session-b")
+
+    assert revoked_a is not None
+    assert revoked_a.principal_context.auth_state_key == record_a.principal_context.auth_state_key
+    assert revoked_b == record_b
+    assert await store.revoke_session("session-a") is None
+    with pytest.raises(GatewaySessionInvalidError):
+        await store.resolve_token(token_a)
+    with pytest.raises(GatewaySessionInvalidError):
+        await store.resolve_token(token_b)

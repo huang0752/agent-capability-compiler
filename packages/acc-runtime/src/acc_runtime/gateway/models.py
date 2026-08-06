@@ -24,8 +24,8 @@ from acc_runtime.context import PrincipalContext
 def _exact_text(value: str, *, field_name: str) -> str:
     if not value or value != value.strip():
         raise ValueError(f"{field_name} must be a nonempty exact value")
-    if any(unicodedata.category(character) == "Cc" for character in value):
-        raise ValueError(f"{field_name} must not contain control characters")
+    if any(unicodedata.category(character) in {"Cc", "Cs"} for character in value):
+        raise ValueError(f"{field_name} must not contain control or surrogate characters")
     if any(character.isspace() for character in value):
         raise ValueError(f"{field_name} must not contain whitespace")
     if "*" in value:
@@ -153,8 +153,20 @@ class GatewaySettings(_StrictModel):
 class SessionCreateRequest(_StrictModel):
     """One-shot credentials accepted only by the trusted session endpoint."""
 
-    identity: str
+    identity_secret: SecretStr = Field(alias="identity", repr=False, exclude=True)
     password: SecretStr = Field(repr=False, exclude=True)
+
+    @field_validator("identity_secret", mode="before")
+    @classmethod
+    def _redact_malformed_identity(cls, value: object) -> object:
+        if isinstance(value, (str, SecretStr)):
+            raw_value = value.get_secret_value() if isinstance(value, SecretStr) else value
+            try:
+                _exact_text(raw_value, field_name="identity")
+            except ValueError:
+                return {"redacted": True}
+            return value
+        return {"redacted": True}
 
     @field_validator("password", mode="before")
     @classmethod
@@ -163,10 +175,11 @@ class SessionCreateRequest(_StrictModel):
             return value
         return {"redacted": True}
 
-    @field_validator("identity")
-    @classmethod
-    def _validate_identity(cls, value: str) -> str:
-        return _exact_text(value, field_name="identity")
+    @property
+    def identity(self) -> str:
+        """Reveal identity only to the trusted one-shot login service."""
+
+        return self.identity_secret.get_secret_value()
 
     @field_validator("password")
     @classmethod

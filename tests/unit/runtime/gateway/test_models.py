@@ -102,8 +102,10 @@ def test_session_create_request_only_accepts_identity_and_password() -> None:
 
     assert request.identity == "a@example.com"
     assert request.password.get_secret_value() == "top-secret"
+    assert "a@example.com" not in repr(request)
     assert "top-secret" not in repr(request)
-    assert request.model_dump() == {"identity": "a@example.com"}
+    assert request.model_dump() == {}
+    assert request.model_dump_json() == "{}"
 
     with pytest.raises(ValidationError):
         SessionCreateRequest.model_validate(
@@ -145,6 +147,35 @@ def test_malformed_password_type_is_redacted_from_every_validation_view(
     assert "nested-password-secret" not in str(caught.value)
     assert "nested-password-secret" not in str(caught.value.errors())
     assert "nested-password-secret" not in caught.value.json()
+
+
+@pytest.mark.parametrize(
+    "malformed_identity",
+    [
+        {"value": "nested-identity-secret"},
+        ["nested-identity-secret"],
+        " identity-whitespace-secret ",
+        "identity-surrogate-secret-\ud800",
+    ],
+)
+def test_invalid_identity_is_redacted_from_every_validation_view(
+    malformed_identity: object,
+) -> None:
+    with pytest.raises(ValidationError) as caught:
+        SessionCreateRequest.model_validate(
+            {"identity": malformed_identity, "password": "valid-password"}
+        )
+
+    for rendered in (
+        str(caught.value),
+        repr(caught.value),
+        str(caught.value.args),
+        str(caught.value.errors()),
+        caught.value.json(),
+    ):
+        assert "nested-identity-secret" not in rendered
+        assert "identity-whitespace-secret" not in rendered
+        assert "identity-surrogate-secret" not in rendered
 
 
 def test_session_response_secret_is_one_shot_and_not_publicly_serialized() -> None:
