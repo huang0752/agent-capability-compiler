@@ -253,6 +253,7 @@ def audit_inventory(
     seen: set[str] = set()
     operation_ids: set[str] = set()
     counters = {name: 0 for name in SUMMARY_FIELDS}
+    source_counters = {name: 0 for name in SUMMARY_FIELDS}
     for index, raw_route in enumerate(routes):
         counters["discovered_routes"] += 1
         pointer = f"/routes/{index}"
@@ -269,9 +270,15 @@ def audit_inventory(
             )
             continue
         route = cast(Mapping[str, object], raw_route)
+        eligible_route = string_at(route, "eligibility") == "eligible"
+        if eligible_route:
+            source_counters["discovered_routes"] += 1
+            source_counters["eligible_read_routes"] += 1
         route_id = string_at(route, "id")
         if route_id is None or not route_id:
             counters["unresolved"] += 1
+            if eligible_route:
+                source_counters["unresolved"] += 1
             add_issue(
                 diagnostics,
                 "ACC_SCOPE_ROUTE_INVALID",
@@ -341,6 +348,8 @@ def audit_inventory(
         disposition = string_at(route, "disposition")
         if disposition not in DISPOSITIONS:
             counters["unresolved"] += 1
+            if eligible_route:
+                source_counters["unresolved"] += 1
             add_issue(
                 diagnostics,
                 "ACC_SCOPE_DISPOSITION_INVALID",
@@ -350,6 +359,8 @@ def audit_inventory(
             )
             continue
         counters[disposition] += 1
+        if eligible_route:
+            source_counters[disposition] += 1
 
         if mode == "domain_complete" and selected_domain_ids:
             if (
@@ -436,7 +447,7 @@ def audit_inventory(
         "scope_mode": mode,
         "selected_domains": sorted(selected_domains or []),
         "operation_ids": sorted(operation_ids),
-        "source_scope": counters,
+        "source_scope": source_counters,
     }
     return result, diagnostics
 

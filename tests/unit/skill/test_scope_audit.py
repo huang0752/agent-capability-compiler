@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import runpy
 import subprocess
 import sys
 from pathlib import Path
@@ -65,7 +66,13 @@ def _summary(routes: list[object]) -> dict[str, int]:
 
 
 def _source_scope(routes: list[object]) -> dict[str, int]:
-    summary = _summary(routes)
+    summary = _summary(
+        [
+            route
+            for route in routes
+            if isinstance(route, dict) and route.get("eligibility") == "eligible"
+        ]
+    )
     return {
         "eligible_read_routes": summary["eligible_read_routes"],
         "planned_or_composed": summary["planned"] + summary["composed"],
@@ -412,6 +419,49 @@ def test_ineligible_routes_are_not_counted_as_eligible(tmp_path: Path) -> None:
 
     assert completed.returncode == 0
     assert payload["result"]["source_scope"]["eligible_read_routes"] == 0
+
+
+def test_source_scope_counts_only_eligible_route_dispositions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    routes: list[object] = [
+        _route("customer.search"),
+        {
+            **_route(
+                "internal.write",
+                disposition="excluded",
+                operation_id=None,
+                reason="write-only route",
+            ),
+            "eligibility": "ineligible",
+        },
+    ]
+    project = _write_project(tmp_path, routes=routes)
+    inventory = yaml.safe_load(
+        (project / "scope-inventory.yaml").read_text(encoding="utf-8")
+    )
+    monkeypatch.syspath_prepend(str(SCRIPT.parent))
+    script = runpy.run_path(str(SCRIPT))
+
+    result, diagnostics = script["audit_inventory"](
+        inventory, path="scope-inventory.yaml"
+    )
+
+    assert diagnostics == []
+    assert inventory["summary"]["excluded"] == 1
+    assert result["source_scope"]["eligible_read_routes"] == 1
+    assert result["source_scope"]["planned"] == 1
+    assert result["source_scope"]["composed"] == 0
+    assert result["source_scope"]["excluded"] == 0
+    assert result["source_scope"]["blocked_on_evidence"] == 0
+    assert result["source_scope"]["unresolved"] == 0
+    assert script["coverage_source_scope"](result["source_scope"]) == {
+        "eligible_read_routes": 1,
+        "planned_or_composed": 1,
+        "excluded": 0,
+        "blocked_on_evidence": 0,
+        "unresolved": 0,
+    }
 
 
 def test_planned_and_composed_routes_must_exist_in_system_map_and_plan(
