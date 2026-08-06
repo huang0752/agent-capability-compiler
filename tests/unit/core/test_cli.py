@@ -12,6 +12,7 @@ from typing import Any, cast
 
 import pytest
 import yaml
+from pydantic import JsonValue
 
 from acc_core.cli.main import EXIT_RUNTIME, EXIT_SUCCESS, _run_runtime_eval_report
 from acc_core.cli.main import _run_command as run_pack_command
@@ -44,6 +45,20 @@ class _FakeRuntime:
     async def aclose(self) -> None:
         self.close_calls += 1
         if self.close_error is not None:
+            raise self.close_error
+
+    async def __aenter__(self) -> _FakeRuntime:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: object,
+    ) -> None:
+        del exc_type, traceback
+        self.close_calls += 1
+        if exc_value is None and self.close_error is not None:
             raise self.close_error
 
 
@@ -136,6 +151,27 @@ def test_run_composition_closes_runtime_when_stdio_fails(
     assert runtime.close_calls == 1
     assert envelope.diagnostics[0].code == "ACC_RUNTIME_FAKE_STDIO_FAILED"
     assert "private stdio failure" not in repr(envelope)
+
+
+def test_run_composition_preserves_body_error_when_close_also_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body_secret = "body-secret-must-not-leak"
+    close_secret = "secondary-close-secret-must-not-leak"
+    body_error = _FakeStdioError(body_secret)
+    runtime = _FakeRuntime(close_error=ValueError(close_secret))
+    adapter = _FakeAdapter(run_error=body_error)
+    _patch_run_composition(monkeypatch, runtime=runtime, adapter=adapter)
+
+    exit_code, envelope = run_pack_command(_run_arguments(json_output=False))
+
+    assert exit_code == EXIT_RUNTIME
+    assert runtime.close_calls == 1
+    assert envelope.diagnostics[0].code == body_error.code
+    assert body_error.__cause__ is None
+    assert body_error.__context__ is None
+    assert body_secret not in repr(envelope)
+    assert close_secret not in repr(envelope)
 
 
 @pytest.mark.parametrize("json_output", [False, True])
@@ -340,14 +376,14 @@ def test_runtime_eval_composition_closes_every_created_runtime(
     assert compilation.ok is True
     assert compilation.ir is not None
     close_calls = 0
-    original_close = GenericRuntime.aclose
+    original_close_outcome = GenericRuntime._close_outcome
 
-    async def counted_close(runtime: GenericRuntime) -> None:
+    async def counted_close_outcome(runtime: GenericRuntime) -> object:
         nonlocal close_calls
         close_calls += 1
-        await original_close(runtime)
+        return await original_close_outcome(runtime)
 
-    monkeypatch.setattr(GenericRuntime, "aclose", counted_close)
+    monkeypatch.setattr(GenericRuntime, "_close_outcome", counted_close_outcome)
     monkeypatch.setenv("CRM_BASE_URL", "http://127.0.0.1:9")
     monkeypatch.setenv("CRM_USER_TOKEN", "offline-token")
 
@@ -359,6 +395,68 @@ def test_runtime_eval_composition_closes_every_created_runtime(
     )
 
     assert close_calls == 1
+
+
+@pytest.mark.parametrize("through_mcp", [False, True])
+def test_runtime_eval_preserves_body_error_when_close_also_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    through_mcp: bool,
+) -> None:
+    import anyio
+
+    project = _make_valid_project(tmp_path)
+    eval_path = project / "evals" / "get-customer-normal.yaml"
+    eval_document = yaml.safe_load(eval_path.read_text(encoding="utf-8"))
+    eval_document.pop("expected_output_schema")
+    eval_document["expected_calls"] = []
+    eval_document["expected_error"] = {
+        "code": _FakeStdioError.code,
+        "status": _FakeStdioError.status,
+    }
+    _write_yaml(eval_path, eval_document)
+    compilation = compile_project(project)
+    assert compilation.ok is True
+    assert compilation.ir is not None
+    body_secret = "eval-body-secret-must-not-leak"
+    close_secret = "eval-close-secret-must-not-leak"
+    body_error = _FakeStdioError(body_secret)
+
+    class UnusedProvider:
+        async def call(self, *args: object, **kwargs: object) -> JsonValue:
+            del self, args, kwargs
+            return {}
+
+    class FakeEvalRuntime(_FakeRuntime):
+        def __init__(self) -> None:
+            super().__init__(close_error=ValueError(close_secret))
+            self.provider = UnusedProvider()
+
+        async def call(self, *args: object, **kwargs: object) -> JsonValue:
+            del self, args, kwargs
+            raise body_error
+
+    runtime = FakeEvalRuntime()
+
+    def fake_from_pack(cls: object, /, *args: object, **kwargs: object) -> FakeEvalRuntime:
+        del cls, args, kwargs
+        return runtime
+
+    monkeypatch.setattr(GenericRuntime, "from_pack", classmethod(fake_from_pack))
+
+    report = anyio.run(
+        _run_runtime_eval_report,
+        cast(dict[str, Any], compilation.ir),
+        project,
+        through_mcp,
+    )
+
+    assert report.ok is True
+    assert runtime.close_calls == 1
+    assert body_error.__cause__ is None
+    assert body_error.__context__ is None
+    assert body_secret not in repr(report)
+    assert close_secret not in repr(report)
 
 
 def test_acc_console_entrypoint_help_lists_milestone_one_commands() -> None:

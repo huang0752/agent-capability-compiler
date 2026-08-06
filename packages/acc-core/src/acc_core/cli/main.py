@@ -698,7 +698,7 @@ async def _run_runtime_eval_report(
                     input_data: Mapping[str, JsonValue],
                 ) -> JsonValue:
                     runtime = create_runtime()
-                    try:
+                    async with runtime:
                         result = await CapabilityMcpServer(runtime).call_tool(
                             capability_id,
                             input_data,
@@ -715,8 +715,6 @@ async def _run_runtime_eval_report(
                                 status if isinstance(status, int) else 500,
                             )
                         return cast(JsonValue, structured.get("result"))
-                    finally:
-                        await runtime.aclose()
 
             caller: AsyncCapabilityCaller = McpCaller()
         else:
@@ -728,10 +726,8 @@ async def _run_runtime_eval_report(
                     input_data: Mapping[str, JsonValue],
                 ) -> JsonValue:
                     runtime = create_runtime()
-                    try:
+                    async with runtime:
                         return await runtime.call(capability_id, input_data)
-                    finally:
-                        await runtime.aclose()
 
             caller = RuntimeCaller()
 
@@ -821,14 +817,12 @@ def _run_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope]:
         )
 
         async def inspect_or_serve_stdio() -> list[dict[str, object]]:
-            try:
+            async with runtime:
                 tools = runtime.tools()
                 adapter = CapabilityMcpServer(runtime)
                 if not bool(arguments.json_output):
                     await adapter.run_stdio()
                 return tools
-            finally:
-                await runtime.aclose()
 
         tools = anyio.run(inspect_or_serve_stdio)
         return EXIT_SUCCESS, _success(
