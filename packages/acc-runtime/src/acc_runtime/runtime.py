@@ -34,6 +34,13 @@ from acc_runtime.auth import (
 from acc_runtime.context import PrincipalContext, resolve_context_binding
 from acc_runtime.errors import RuntimeError as AccRuntimeError
 from acc_runtime.execution import ExecutionError, WorkflowExecutor
+from acc_runtime.gateway.audit import (
+    AuditCollector,
+    AuditResultCategory,
+    AuditSpan,
+    OperationObserver,
+    observe_operation,
+)
 from acc_runtime.loader import LoadedPack, load_pack
 from acc_runtime.policies import PolicyEnforcer
 from acc_runtime.providers import HttpProvider
@@ -94,6 +101,8 @@ class _PolicyOperationCaller:
         policy: Policy,
         principal_context: PrincipalContext,
         allowed_context_bindings: Collection[str],
+        audit_observer: OperationObserver | None = None,
+        operation_observer: OperationObserver | None = None,
     ) -> None:
         self.provider = provider
         self.policy = policy
@@ -102,6 +111,8 @@ class _PolicyOperationCaller:
         self.tenant_id = _legacy_tenant_id(principal_context)
         self._provider_accepts_context = _accepts_principal_context(provider)
         self.enforcer = PolicyEnforcer()
+        self.audit_observer = audit_observer
+        self.operation_observer = operation_observer
 
     async def call(
         self,
@@ -157,6 +168,8 @@ class _PolicyOperationCaller:
             arguments=enriched,
             tenant_id=self.tenant_id,
         )
+        observe_operation(self.audit_observer, definition.id)
+        observe_operation(self.operation_observer, definition.id)
         if self._provider_accepts_context:
             contextual_provider = cast(ContextOperationProvider, self.provider)
             return await contextual_provider.call(
@@ -183,12 +196,16 @@ class GenericRuntime:
         granted_scopes: Collection[str] = (),
         tenant_id: JsonValue | None = None,
         loaded_pack: LoadedPack | None = None,
+        audit_collector: AuditCollector | None = None,
+        operation_observer: OperationObserver | None = None,
     ) -> None:
         self.ir = copy.deepcopy(dict(compiled_ir))
         self.provider = provider
         self.loaded_pack = loaded_pack
         self._owned_auth_strategy: HttpAuthStrategy | None = None
         self._closed = False
+        self._audit_collector = audit_collector
+        self._operation_observer = operation_observer
         self.project = self._load_project()
         if principal_context is None:
             principal_context = _stdio_principal_context(
@@ -219,6 +236,8 @@ class GenericRuntime:
         granted_scopes: Collection[str] = (),
         tenant_id: JsonValue | None = None,
         client: httpx.AsyncClient | None = None,
+        audit_collector: AuditCollector | None = None,
+        operation_observer: OperationObserver | None = None,
     ) -> GenericRuntime:
         loaded = load_pack(pack_path)
         project_value = loaded.ir.get("project")
@@ -244,6 +263,8 @@ class GenericRuntime:
             provider=provider,
             principal_context=principal_context,
             loaded_pack=loaded,
+            audit_collector=audit_collector,
+            operation_observer=operation_observer,
         )
         runtime._owned_auth_strategy = auth_strategy
         return runtime
@@ -355,26 +376,43 @@ class GenericRuntime:
         arguments: Mapping[str, JsonValue],
         principal_context: PrincipalContext,
     ) -> _RuntimeOutcome:
+        audit_span = _start_audit_span(
+            self._audit_collector,
+            project_id=self.project.project.id,
+            capability_id=capability_id,
+            principal_context=principal_context,
+        )
         if self._closed:
-            return _RuntimeFailure(
+            closed_outcome: _RuntimeOutcome = _RuntimeFailure(
                 error_type=RuntimeConfigurationError,
                 code=RuntimeConfigurationError.code,
                 message="runtime is closed",
                 details={"reason": "runtime_closed"},
             )
+            _finish_audit_span(audit_span, "internal")
+            return closed_outcome
         try:
-            value = await self._execute_call(capability_id, arguments, principal_context)
+            value = await self._execute_call(
+                capability_id,
+                arguments,
+                principal_context,
+                audit_observer=audit_span,
+            )
         except asyncio.CancelledError:
+            _finish_audit_span(audit_span, "cancelled")
             return _RUNTIME_CANCELLED
         except AccRuntimeError as error:
+            _finish_audit_span(audit_span, _audit_category(error))
             return _runtime_failure(error)
         except Exception:
+            _finish_audit_span(audit_span, "internal")
             return _RuntimeFailure(
                 error_type=RuntimeConfigurationError,
                 code=RuntimeConfigurationError.code,
                 message="runtime execution failed",
                 details={"reason": "runtime_internal_failure"},
             )
+        _finish_audit_span(audit_span, "success")
         return _RuntimeSuccess(value)
 
     async def _execute_call(
@@ -382,6 +420,8 @@ class GenericRuntime:
         capability_id: str,
         arguments: Mapping[str, JsonValue],
         principal_context: PrincipalContext,
+        *,
+        audit_observer: OperationObserver | None = None,
     ) -> JsonValue:
         if not isinstance(principal_context, PrincipalContext):
             raise RuntimeConfigurationError(
@@ -407,6 +447,8 @@ class GenericRuntime:
             policy,
             principal_context,
             self.project.provider.context_binding_allowlist,
+            audit_observer=audit_observer,
+            operation_observer=self._operation_observer,
         )
         # Capability output schemas are public contracts. Apply disclosure policy
         # before validating them so an upstream-only field can never be required
@@ -638,6 +680,62 @@ def _runtime_failure(error: AccRuntimeError) -> _RuntimeFailure:
         message=str(error),
         details=copy.deepcopy(error.details),
     )
+
+
+def _start_audit_span(
+    collector: AuditCollector | None,
+    *,
+    project_id: str,
+    capability_id: str,
+    principal_context: object,
+) -> AuditSpan | None:
+    if collector is None or not isinstance(principal_context, PrincipalContext):
+        return None
+    try:
+        return collector.start_capability(
+            project_id=project_id,
+            capability_id=capability_id,
+            principal_id=principal_context.principal_id,
+            session_id=principal_context.gateway_session_id,
+        )
+    except Exception:
+        return None
+
+
+def _finish_audit_span(
+    span: AuditSpan | None,
+    category: AuditResultCategory,
+) -> None:
+    if span is None:
+        return
+    try:
+        span.finish(category)
+    except Exception:
+        return
+
+
+def _audit_category(error: AccRuntimeError) -> AuditResultCategory:
+    code = str(error.code)
+    if code in {
+        "ACC_RUNTIME_POLICY_SCOPE_DENIED",
+        "ACC_RUNTIME_POLICY_TENANT_DENIED",
+    }:
+        return "policy_denied"
+    if code in {
+        "ACC_RUNTIME_AUTH_UNAUTHORIZED",
+        "ACC_GATEWAY_REAUTH_REQUIRED",
+    }:
+        return "reauth"
+    if code in {
+        "ACC_RUNTIME_HTTP_FORBIDDEN",
+        "ACC_RUNTIME_HTTP_UNAUTHORIZED",
+    }:
+        return "upstream_denied"
+    if code.startswith("ACC_RUNTIME_HTTP_") or code.startswith("ACC_RUNTIME_AUTH_LOGIN_"):
+        return "upstream_error"
+    if error.status in {400, 404, 422}:
+        return "invalid_request"
+    return "internal"
 
 
 def _raise_runtime_failure(failure: _RuntimeFailure | _RuntimeCancelled) -> Never:

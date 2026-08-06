@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import types
 from collections.abc import Mapping
+from datetime import UTC
 from pathlib import Path
 from typing import Any
 
@@ -18,13 +20,20 @@ from acc_runtime.auth import (
     NoAuthStrategy,
     PasswordBearerAuthStrategy,
 )
+from acc_runtime.auth.errors import AuthUnauthorizedError
 from acc_runtime.context import PrincipalContext
 from acc_runtime.credentials import SecretValue
 from acc_runtime.errors import RuntimeError as AccRuntimeError
 from acc_runtime.execution import ExecutionError
+from acc_runtime.gateway.audit import AuditCollector, AuditEvent, MemoryAuditSink
 from acc_runtime.policies import PolicyScopeDeniedError
 from acc_runtime.providers import HttpForbiddenError, HttpProvider
-from acc_runtime.runtime import ContextOperationProvider, GenericRuntime, RuntimeConfigurationError
+from acc_runtime.runtime import (
+    ContextOperationProvider,
+    GenericRuntime,
+    OperationProvider,
+    RuntimeConfigurationError,
+)
 
 
 def _ir() -> dict[str, Any]:
@@ -162,6 +171,14 @@ class ContextAwareProvider:
             "tenant_id": str(arguments.get("tenant_id", "")),
             "secret": "must-not-leave-runtime",
         }
+
+
+class RecordingOperationObserver:
+    def __init__(self) -> None:
+        self.operation_ids: list[str] = []
+
+    def observe(self, operation_id: str) -> None:
+        self.operation_ids.append(operation_id)
 
 
 class SensitiveStrategy:
@@ -948,3 +965,247 @@ async def test_async_context_without_body_error_raises_safe_owned_cleanup_error(
     assert caught.value.__context__ is None
     assert strategy.close_calls == 1
     _assert_runtime_exception_cannot_reach_secret(caught.value, close_secret)
+
+
+def _audited_runtime(
+    provider: OperationProvider | ContextOperationProvider,
+    *,
+    principal: PrincipalContext | None = None,
+    observer: RecordingOperationObserver | None = None,
+) -> tuple[GenericRuntime, MemoryAuditSink]:
+    sink = MemoryAuditSink()
+    collector = AuditCollector(sink=sink, deployment_salt=b"runtime-audit-salt")
+    runtime = GenericRuntime(
+        _ir(),
+        provider=provider,
+        principal_context=principal
+        or _principal("audited", tenant_context={"tenant_id": "tenant-a"}),
+        audit_collector=collector,
+        operation_observer=observer,
+    )
+    return runtime, sink
+
+
+@pytest.mark.asyncio
+async def test_audit_records_success_and_the_actual_provider_operation() -> None:
+    observer = RecordingOperationObserver()
+    runtime, sink = _audited_runtime(FakeProvider(), observer=observer)
+
+    await runtime.call_with_context(
+        "get_customer",
+        {"customer_id": "c-1"},
+        runtime.principal_context,
+    )
+
+    assert observer.operation_ids == ["crm.get_customer"]
+    assert len(sink.events) == 1
+    event = sink.events[0]
+    assert event.project_id == "crm"
+    assert event.capability_id == "get_customer"
+    assert event.operation_ids == ("crm.get_customer",)
+    assert event.result_category == "success"
+    assert event.duration_ms >= 0
+    assert event.timestamp.tzinfo is UTC
+
+
+@pytest.mark.asyncio
+async def test_audit_records_only_the_operation_selected_by_a_workflow_branch() -> None:
+    ir = _ir()
+    second = copy.deepcopy(ir["operations"]["crm.get_customer"])
+    second["id"] = "crm.get_customer_fallback"
+    ir["operations"]["crm.get_customer_fallback"] = second
+    capability = ir["capabilities"]["get_customer"]["definition"]
+    capability["input_schema"]["properties"]["primary"] = {"type": "boolean"}
+    capability["workflow"] = [
+        {
+            "id": "selected",
+            "branch": {
+                "condition": "$.input.primary",
+                "then": [
+                    {
+                        "id": "result",
+                        "call": {
+                            "operation": "crm.get_customer",
+                            "arguments": {"customer_id": "$.input.customer_id"},
+                        },
+                    },
+                    {"emit": {"value": "$.steps.result"}},
+                ],
+                "else": [
+                    {
+                        "id": "result",
+                        "call": {
+                            "operation": "crm.get_customer_fallback",
+                            "arguments": {"customer_id": "$.input.customer_id"},
+                        },
+                    },
+                    {"emit": {"value": "$.steps.result"}},
+                ],
+            },
+        },
+        {"emit": {"value": "$.steps.selected"}},
+    ]
+    sink = MemoryAuditSink()
+    runtime = GenericRuntime(
+        ir,
+        provider=FakeProvider(),
+        principal_context=_principal("audited", tenant_context={"tenant_id": "tenant-a"}),
+        audit_collector=AuditCollector(sink=sink, deployment_salt=b"runtime-audit-salt"),
+    )
+
+    await runtime.call("get_customer", {"customer_id": "c-1", "primary": False})
+
+    assert sink.events[0].operation_ids == ("crm.get_customer_fallback",)
+
+
+@pytest.mark.asyncio
+async def test_audit_classifies_policy_deny_before_any_provider_operation() -> None:
+    limited = _principal(
+        "limited",
+        source_scopes={"source.customer"},
+        scope_mapping={"source.customer": {"customer.read"}},
+        tenant_context={"tenant_id": "tenant-a"},
+    )
+    runtime, sink = _audited_runtime(FakeProvider(), principal=limited)
+
+    with pytest.raises(PolicyScopeDeniedError):
+        await runtime.call("get_customer", {"customer_id": "c-1"})
+
+    assert sink.events[0].operation_ids == ()
+    assert sink.events[0].result_category == "policy_denied"
+
+
+@pytest.mark.asyncio
+async def test_audit_classifies_upstream_deny_after_observing_the_operation() -> None:
+    class ForbiddenProvider(FakeProvider):
+        async def call(
+            self,
+            operation: Mapping[str, object],
+            arguments: Mapping[str, JsonValue],
+        ) -> JsonValue:
+            raise HttpForbiddenError("forbidden", details={"operation": operation["id"]})
+
+    runtime, sink = _audited_runtime(ForbiddenProvider())
+
+    with pytest.raises(HttpForbiddenError):
+        await runtime.call("get_customer", {"customer_id": "c-1"})
+
+    assert sink.events[0].operation_ids == ("crm.get_customer",)
+    assert sink.events[0].result_category == "upstream_denied"
+
+
+@pytest.mark.asyncio
+async def test_audit_and_observer_failures_do_not_change_business_or_expose_secrets() -> None:
+    secret = "audit-observer-private-secret"
+
+    class FailingSink:
+        def emit(self, event: AuditEvent) -> None:
+            raise ValueError(secret)
+
+    class FailingObserver:
+        def observe(self, operation_id: str) -> None:
+            raise ValueError(secret)
+
+    runtime = GenericRuntime(
+        _ir(),
+        provider=FakeProvider(),
+        principal_context=_principal("private-principal", tenant_context={"tenant_id": "tenant-a"}),
+        audit_collector=AuditCollector(
+            sink=FailingSink(),
+            deployment_salt=b"runtime-audit-salt",
+        ),
+        operation_observer=FailingObserver(),
+    )
+
+    result = await runtime.call("get_customer", {"customer_id": "c-1"})
+
+    assert result == {"id": "c-1", "name": "Ada", "tenant_id": "tenant-a"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "expected_category"),
+    [
+        (AuthUnauthorizedError("reauth"), "reauth"),
+        (ValueError("unstructured private failure"), "internal"),
+    ],
+)
+async def test_audit_stably_classifies_reauth_and_internal_failures(
+    failure: Exception,
+    expected_category: str,
+) -> None:
+    class FailingProvider(FakeProvider):
+        async def call(
+            self,
+            operation: Mapping[str, object],
+            arguments: Mapping[str, JsonValue],
+        ) -> JsonValue:
+            raise failure
+
+    runtime, sink = _audited_runtime(FailingProvider())
+
+    with pytest.raises(AccRuntimeError):
+        await runtime.call("get_customer", {"customer_id": "c-1"})
+
+    assert sink.events[0].operation_ids == ("crm.get_customer",)
+    assert sink.events[0].result_category == expected_category
+
+
+def test_from_pack_accepts_optional_audit_and_operation_observer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ir = _authenticated_ir()
+    monkeypatch.setattr(
+        "acc_runtime.runtime.load_pack",
+        lambda path: type("Pack", (), {"ir": ir, "path": Path(path)})(),
+    )
+    sink = MemoryAuditSink()
+    collector = AuditCollector(sink=sink, deployment_salt=b"runtime-audit-salt")
+    observer = RecordingOperationObserver()
+
+    runtime = GenericRuntime.from_pack(
+        "runtime.accpkg",
+        environment={"CRM_URL": "https://crm.example.test"},
+        audit_collector=collector,
+        operation_observer=observer,
+    )
+
+    assert runtime._audit_collector is collector
+    assert runtime._operation_observer is observer
+
+
+@pytest.mark.asyncio
+async def test_failing_audit_sink_is_absent_from_business_error_traceback() -> None:
+    sink_secret = "failing-audit-sink-secret-must-not-reach-runtime-error"
+
+    class SecretFailingSink:
+        def __init__(self) -> None:
+            self.secret = sink_secret
+
+        def emit(self, event: AuditEvent) -> None:
+            raise ValueError(self.secret)
+
+    class ForbiddenProvider(FakeProvider):
+        async def call(
+            self,
+            operation: Mapping[str, object],
+            arguments: Mapping[str, JsonValue],
+        ) -> JsonValue:
+            raise HttpForbiddenError("forbidden", details={"operation": operation["id"]})
+
+    runtime = GenericRuntime(
+        _ir(),
+        provider=ForbiddenProvider(),
+        principal_context=_principal("private-principal", tenant_context={"tenant_id": "tenant-a"}),
+        audit_collector=AuditCollector(
+            sink=SecretFailingSink(),
+            deployment_salt=b"runtime-audit-salt",
+        ),
+    )
+
+    with pytest.raises(HttpForbiddenError) as caught:
+        await runtime.call("get_customer", {"customer_id": "c-1"})
+
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    _assert_runtime_exception_cannot_reach_secret(caught.value, sink_secret)
