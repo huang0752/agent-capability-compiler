@@ -311,9 +311,13 @@ class InMemoryGatewaySessionStore:
             now = self._fresh_now_locked()
             if isinstance(now, _SessionFailure):
                 return now
-            record = self._resolve_digest_locked(digest, now, allow_reauth=True)
-            if not isinstance(record, GatewaySessionRecord):
-                return record
+            record = self._by_digest.get(digest)
+            if record is None:
+                return _SessionFailure("invalid", "session_unknown")
+            gateway_expires_at = record.gateway_expires_at or record.expires_at
+            if now > gateway_expires_at:
+                self._remove_locked(record)
+                return _SessionFailure("expired", "session_expired")
             marked = record.model_copy(update={"status": GatewaySessionStatus.REAUTH_REQUIRED})
             self._by_digest[digest] = marked
             return marked
@@ -364,22 +368,23 @@ class InMemoryGatewaySessionStore:
         self,
         digest: str,
         now: float,
-        *,
-        allow_reauth: bool = False,
     ) -> _RecordOutcome:
         record = self._by_digest.get(digest)
         if record is None:
             return _SessionFailure("invalid", "token_unknown")
-        if record.status is GatewaySessionStatus.REAUTH_REQUIRED and not allow_reauth:
+        gateway_expires_at = record.gateway_expires_at or record.expires_at
+        if now > gateway_expires_at:
+            self._remove_locked(record)
+            return _SessionFailure("expired", "session_expired")
+        if record.status is GatewaySessionStatus.REAUTH_REQUIRED:
             return _SessionFailure("reauth", "reauth_required")
         source_boundary_reached = (
             record.source_refresh_at is not None and record.source_refresh_at <= now
         ) or (record.source_expires_at is not None and record.source_expires_at <= now)
-        if source_boundary_reached and not allow_reauth:
+        if source_boundary_reached:
             marked = record.model_copy(update={"status": GatewaySessionStatus.REAUTH_REQUIRED})
             self._by_digest[digest] = marked
             return _SessionFailure("reauth", "source_authentication_expired")
-        gateway_expires_at = record.gateway_expires_at or record.expires_at
         if gateway_expires_at <= now:
             self._remove_locked(record)
             return _SessionFailure("expired", "session_expired")
@@ -388,6 +393,10 @@ class InMemoryGatewaySessionStore:
     def _purge_expired_locked(self, now: float) -> int:
         expired: list[GatewaySessionRecord] = []
         for digest, record in tuple(self._by_digest.items()):
+            gateway_expires_at = record.gateway_expires_at or record.expires_at
+            if now > gateway_expires_at:
+                expired.append(record)
+                continue
             source_boundary_reached = (
                 record.source_refresh_at is not None and record.source_refresh_at <= now
             ) or (record.source_expires_at is not None and record.source_expires_at <= now)
@@ -397,7 +406,7 @@ class InMemoryGatewaySessionStore:
                         update={"status": GatewaySessionStatus.REAUTH_REQUIRED}
                     )
                 continue
-            if (record.gateway_expires_at or record.expires_at) <= now:
+            if gateway_expires_at <= now:
                 expired.append(record)
         for record in expired:
             self._remove_locked(record)

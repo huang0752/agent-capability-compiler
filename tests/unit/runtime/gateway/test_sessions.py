@@ -689,3 +689,91 @@ async def test_revoke_session_returns_record_without_active_resolution() -> None
         await store.resolve_token(token_a)
     with pytest.raises(GatewaySessionInvalidError):
         await store.resolve_token(token_b)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("boundary_kind", ["expiry", "refresh", "manual"])
+async def test_reauth_wins_at_gateway_tie_but_expires_after_tie(
+    boundary_kind: str,
+) -> None:
+    clock = Clock()
+    store = InMemoryGatewaySessionStore(
+        max_sessions=1,
+        ttl_seconds=5,
+        clock=clock,
+        token_generator=lambda: "a" * 43,
+    )
+    source_arguments: dict[str, float] = {}
+    if boundary_kind == "expiry":
+        source_arguments["source_expires_at"] = 105.0
+    elif boundary_kind == "refresh":
+        source_arguments["source_refresh_at"] = 105.0
+        source_arguments["source_expires_at"] = 110.0
+    token, _ = await store.create(
+        session_id="session-a",
+        principal_context=_context("a", "session-a"),
+        **source_arguments,
+    )
+    clock.value = 105.0
+    if boundary_kind == "manual":
+        marked = await store.mark_reauth_required("session-a")
+        assert marked.status is GatewaySessionStatus.REAUTH_REQUIRED
+
+    with pytest.raises(GatewayReauthRequiredError):
+        await store.resolve_token(token)
+
+    clock.value = 105.000001
+    with pytest.raises(GatewaySessionExpiredError):
+        await store.resolve_token(token)
+    with pytest.raises(GatewaySessionInvalidError):
+        await store.resolve_session_id("session-a")
+
+
+@pytest.mark.anyio
+async def test_purge_removes_old_reauth_session_and_create_recovers_capacity() -> None:
+    clock = Clock()
+    generator = _tokens("a" * 43, "b" * 43)
+    store = InMemoryGatewaySessionStore(
+        max_sessions=1,
+        ttl_seconds=10,
+        clock=clock,
+        token_generator=lambda: next(generator),
+    )
+    token_a, _ = await store.create(
+        session_id="session-a",
+        principal_context=_context("a", "session-a"),
+        source_refresh_at=105.0,
+        source_expires_at=108.0,
+    )
+    clock.value = 105.0
+    with pytest.raises(GatewayReauthRequiredError):
+        await store.resolve_token(token_a)
+    clock.value = 111.0
+
+    token_b, record_b = await store.create(
+        session_id="session-b",
+        principal_context=_context("b", "session-b"),
+    )
+
+    assert await store.resolve_token(token_b) == record_b
+
+
+@pytest.mark.anyio
+async def test_mark_reauth_after_gateway_ttl_expires_and_removes_session() -> None:
+    clock = Clock()
+    store = InMemoryGatewaySessionStore(
+        max_sessions=1,
+        ttl_seconds=5,
+        clock=clock,
+        token_generator=lambda: "a" * 43,
+    )
+    token, _ = await store.create(
+        session_id="session-a",
+        principal_context=_context("a", "session-a"),
+    )
+    clock.value = 105.000001
+
+    with pytest.raises(GatewaySessionExpiredError):
+        await store.mark_reauth_required("session-a")
+    with pytest.raises(GatewaySessionInvalidError):
+        await store.resolve_token(token)
