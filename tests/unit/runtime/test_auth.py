@@ -247,6 +247,16 @@ def _assert_runtime_traceback_locals_have_no_secret(
                 ]
             )
             continue
+        if isinstance(value, asyncio.Task):
+            for frame in value.get_stack():
+                pending.extend(frame.f_locals.values())
+            pending.append(value.get_coro())
+            continue
+        if isinstance(value, types.CoroutineType):
+            if value.cr_frame is not None:
+                pending.extend(value.cr_frame.f_locals.values())
+            pending.append(value.cr_await)
+            continue
         if isinstance(
             value,
             (
@@ -1020,6 +1030,82 @@ async def test_one_shot_401_marks_reauthentication_required_without_another_logi
 
 
 @pytest.mark.asyncio
+async def test_reauthentication_error_traceback_cannot_reach_another_users_token() -> None:
+    other_users_token = "other-user-token-must-not-cross-boundary"
+    strategy = PasswordBearerAuthStrategy(
+        config=_config(credentials={"kind": "gateway_session"}),
+        base_url="https://crm.example.test",
+        credential_source=None,
+    )
+    context_a = _context("user-a", session_id="session-a", auth_state_handle="state-a")
+    context_b = _context("user-b", session_id="session-b", auth_state_handle="state-b")
+    await strategy.bind_state(
+        context_b.auth_state_key,
+        AuthenticationResult(
+            token=SecretValue(other_users_token),
+            token_type="Bearer",
+        ),
+    )
+    with pytest.raises(AuthReauthenticationRequiredError):
+        await strategy.authorize(context_a)
+
+    with pytest.raises(AuthReauthenticationRequiredError) as caught:
+        await strategy.authorize(context_a)
+
+    _assert_runtime_traceback_locals_have_no_secret(caught.value, other_users_token)
+
+
+@pytest.mark.asyncio
+async def test_closed_authorize_error_traceback_cannot_reach_credential_source() -> None:
+    secret = "closed-strategy-credential-source-secret"
+    strategy = PasswordBearerAuthStrategy(
+        config=_config(),
+        base_url="https://crm.example.test",
+        credential_source=_CredentialSource(identity=secret, password=secret),
+    )
+    await strategy.aclose()
+
+    with pytest.raises(AuthConfigurationError) as caught:
+        await strategy.authorize(_context())
+
+    _assert_runtime_traceback_locals_have_no_secret(caught.value, secret)
+
+
+@pytest.mark.asyncio
+async def test_public_parameter_errors_do_not_retain_secret_arguments_or_strategy_state() -> None:
+    secret = "public-boundary-secret-argument"
+    strategy = PasswordBearerAuthStrategy(
+        config=_config(credentials={"kind": "gateway_session"}),
+        base_url="https://crm.example.test",
+        credential_source=None,
+    )
+    result = AuthenticationResult(token=SecretValue(secret), token_type="Bearer")
+    context_a = _context("user-a", session_id="session-a", auth_state_handle="state-a")
+    context_b = _context("user-b", session_id="session-b", auth_state_handle="state-b")
+    failed_attempt = AuthAttempt(
+        headers={"Authorization": SecretValue(f"Bearer {secret}")},
+        state_key=context_b.auth_state_key,
+        generation=1,
+        authentication=result,
+    )
+    await strategy.bind_state(context_b.auth_state_key, result)
+
+    with pytest.raises(TypeError) as bind_caught:
+        await strategy.bind_state("invalid-state-key", result)  # type: ignore[arg-type]
+    with pytest.raises(TypeError) as authenticate_caught:
+        await strategy.authenticate_once(failed_attempt)  # type: ignore[arg-type]
+    with pytest.raises(ValueError) as ownership_caught:
+        await strategy.on_unauthorized(context_a, failed_attempt)
+    with pytest.raises(TypeError) as invalidate_caught:
+        await strategy.invalidate("invalid-state-key")  # type: ignore[arg-type]
+
+    _assert_runtime_traceback_locals_have_no_secret(bind_caught.value, secret)
+    _assert_runtime_traceback_locals_have_no_secret(authenticate_caught.value, secret)
+    _assert_runtime_traceback_locals_have_no_secret(ownership_caught.value, secret)
+    _assert_runtime_traceback_locals_have_no_secret(invalidate_caught.value, secret)
+
+
+@pytest.mark.asyncio
 async def test_failed_login_keeps_no_partial_state_and_renewable_source_can_retry() -> None:
     calls = 0
 
@@ -1412,6 +1498,38 @@ async def test_all_cancelled_waiters_are_cleaned_and_a_later_call_can_retry() ->
 
 
 @pytest.mark.asyncio
+async def test_zero_waiter_cancelled_error_traceback_cannot_reach_credential_source() -> None:
+    secret = "zero-waiter-cancel-credential-source-secret"
+    started = asyncio.Event()
+    upstream_cancelled = asyncio.Event()
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            upstream_cancelled.set()
+            raise
+        raise AssertionError("blocked login unexpectedly resumed")
+
+    strategy = PasswordBearerAuthStrategy(
+        config=_config(),
+        base_url="https://crm.example.test",
+        credential_source=_CredentialSource(identity=secret, password=secret),
+        client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    pending = asyncio.create_task(strategy.authorize(_context()))
+    await started.wait()
+
+    pending.cancel()
+    with pytest.raises(asyncio.CancelledError) as caught:
+        await pending
+    await asyncio.wait_for(upstream_cancelled.wait(), timeout=0.5)
+
+    _assert_runtime_traceback_locals_have_no_secret(caught.value, secret)
+
+
+@pytest.mark.asyncio
 async def test_gateway_state_invalidate_and_aclose_are_idempotent() -> None:
     strategy = PasswordBearerAuthStrategy(
         config=_config(credentials={"kind": "gateway_session"}),
@@ -1468,3 +1586,29 @@ async def test_aclose_cancels_active_login_and_closes_its_fresh_client() -> None
     with pytest.raises(asyncio.CancelledError):
         await pending
     assert clients[0].is_closed is True
+
+
+@pytest.mark.asyncio
+async def test_aclose_cancelled_error_traceback_cannot_reach_credential_source() -> None:
+    secret = "aclose-cancel-credential-source-secret"
+    started = asyncio.Event()
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        started.set()
+        await asyncio.Event().wait()
+        return httpx.Response(200, json={"access_token": "unreachable"})
+
+    strategy = PasswordBearerAuthStrategy(
+        config=_config(),
+        base_url="https://crm.example.test",
+        credential_source=_CredentialSource(identity=secret, password=secret),
+        client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    pending = asyncio.create_task(strategy.authorize(_context()))
+    await started.wait()
+
+    await strategy.aclose()
+
+    with pytest.raises(asyncio.CancelledError) as caught:
+        await pending
+    _assert_runtime_traceback_locals_have_no_secret(caught.value, secret)

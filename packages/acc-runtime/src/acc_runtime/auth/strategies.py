@@ -51,6 +51,7 @@ _BEARER_TOKEN_TYPE = re.compile(r"bearer", re.IGNORECASE)
 
 type AsyncClientFactory = Callable[[], httpx.AsyncClient]
 type _FailureKind = Literal[
+    "configuration",
     "secret_missing",
     "login_rejected",
     "upstream",
@@ -58,6 +59,13 @@ type _FailureKind = Literal[
     "response_invalid",
     "timeout",
     "response_too_large",
+    "unauthorized",
+    "invalid_credentials",
+    "invalid_context",
+    "invalid_state_key",
+    "invalid_result",
+    "invalid_attempt",
+    "attempt_mismatch",
 ]
 
 
@@ -115,6 +123,21 @@ class _FailureDescriptor:
     upstream_status: int | None = None
     reason: str | None = None
     limit_bytes: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _CancelledDescriptor:
+    """Marker used to recreate cancellation beyond the secret-bearing boundary."""
+
+
+_CANCELLED = _CancelledDescriptor()
+type _PublicFailure = (
+    _FailureDescriptor
+    | _CancelledDescriptor
+    | AuthError
+    | AuthTimeoutError
+    | AuthResponseTooLargeError
+)
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -321,17 +344,25 @@ class PasswordBearerAuthStrategy:
     ) -> AuthenticationResult:
         """Login without a Principal so Gateway session creation has no identity cycle."""
 
-        self._ensure_open()
-        if not isinstance(credentials, CredentialPair):
-            raise TypeError("authentication requires a CredentialPair")
-        outcome = await self._authentication_outcome(credentials)
-        if isinstance(outcome, _FailureDescriptor):
-            failure = outcome
-            del outcome
-            del credentials
-            del self
-            _raise_failure(failure)
-        return outcome
+        strategy = self
+        outcome: AuthenticationResult | _PublicFailure
+        if strategy._closed:
+            outcome = _FailureDescriptor(kind="configuration")
+        elif not isinstance(cast(object, credentials), CredentialPair):
+            outcome = _FailureDescriptor(kind="invalid_credentials")
+        else:
+            try:
+                outcome = await strategy._authentication_outcome(credentials)
+            except asyncio.CancelledError:
+                outcome = _CANCELLED
+        if isinstance(outcome, AuthenticationResult):
+            return outcome
+        failure = outcome
+        del outcome
+        del credentials
+        del strategy
+        del self
+        _raise_public_failure(failure)
 
     async def _authentication_outcome(
         self,
@@ -453,79 +484,127 @@ class PasswordBearerAuthStrategy:
     ) -> None:
         """Bind a pre-context login result only after Gateway builds the final Principal."""
 
-        self._ensure_open()
-        _require_auth_state_key(auth_state_key)
-        _require_result(result)
-        async with self._state_lock:
-            attempt = self._new_attempt(auth_state_key, result)
-            self._states[auth_state_key] = _BoundState(
-                attempt=attempt,
-                renewable=self._configuration.credentials.kind == "environment_secret",
-            )
+        strategy = self
+        try:
+            failure = await strategy._bind_state_outcome(auth_state_key, result)
+        except asyncio.CancelledError:
+            failure = _CANCELLED
+        if failure is None:
+            return
+        del auth_state_key
+        del result
+        del strategy
+        del self
+        _raise_public_failure(failure)
+
+    async def _bind_state_outcome(
+        self,
+        auth_state_key: object,
+        result: object,
+    ) -> _PublicFailure | None:
+        if self._closed:
+            return _FailureDescriptor(kind="configuration")
+        if not isinstance(auth_state_key, AuthStateKey):
+            return _FailureDescriptor(kind="invalid_state_key")
+        if not isinstance(result, AuthenticationResult):
+            return _FailureDescriptor(kind="invalid_result")
+        try:
+            async with self._state_lock:
+                attempt = self._new_attempt(auth_state_key, result)
+                self._states[auth_state_key] = _BoundState(
+                    attempt=attempt,
+                    renewable=self._configuration.credentials.kind == "environment_secret",
+                )
+        except asyncio.CancelledError:
+            return _CANCELLED
+        except Exception:
+            return _FailureDescriptor(kind="configuration")
+        return None
 
     async def authorize(self, context: PrincipalContext) -> AuthAttempt:
-        self._ensure_open()
-        _require_context(context)
-        key = context.auth_state_key
-        state: _BoundState | None = None
-        source: CredentialSource | None = None
-        async with self._state_lock:
-            state = self._states.get(key)
-            if state is not None and state.reauthentication_required:
-                raise AuthReauthenticationRequiredError("source session requires reauthentication")
-            if state is not None and state.attempt is not None:
-                if _result_is_fresh(state.attempt.authentication, self._clock()):
-                    return state.attempt
-                if not state.renewable:
-                    state.attempt = None
-                    state.reauthentication_required = True
-                    raise AuthReauthenticationRequiredError(
-                        "source session requires reauthentication"
-                    )
-
-            source = self._credential_source
-            if source is None or not source.renewable:
-                if state is None:
-                    self._states[key] = _BoundState(
-                        attempt=None,
-                        renewable=False,
-                        reauthentication_required=True,
-                    )
-                else:
-                    state.attempt = None
-                    state.reauthentication_required = True
-                raise AuthReauthenticationRequiredError("source session requires reauthentication")
-            flight = self._inflight.get(key)
-            if flight is None:
-                task = asyncio.create_task(self._renew_state(key))
-                flight = _InFlight(task=task)
-                self._inflight[key] = flight
-
-                def completed(_completed: asyncio.Future[AuthAttempt]) -> None:
-                    self._flight_done(key, flight)
-
-                task.add_done_callback(completed)
-            flight.waiters += 1
-
-        attempt: AuthAttempt | None = None
-        failure: AuthError | AuthTimeoutError | AuthResponseTooLargeError | None = None
+        strategy = self
         try:
-            attempt = await asyncio.shield(flight.task)
-        except (AuthError, AuthTimeoutError, AuthResponseTooLargeError) as error:
-            failure = error
-        finally:
-            await self._release_waiter(key, flight)
+            outcome = await strategy._authorize_outcome(context)
+        except asyncio.CancelledError:
+            outcome = _CANCELLED
+        if isinstance(outcome, AuthAttempt):
+            return outcome
+        failure = outcome
+        del outcome
+        del context
+        del strategy
+        del self
+        _raise_public_failure(failure)
 
-        if failure is not None:
-            state = None
-            source = None
+    async def _authorize_outcome(
+        self,
+        context: object,
+    ) -> AuthAttempt | _PublicFailure:
+        if self._closed:
+            return _FailureDescriptor(kind="configuration")
+        if not isinstance(context, PrincipalContext):
+            return _FailureDescriptor(kind="invalid_context")
+        key = context.auth_state_key
+        try:
+            async with self._state_lock:
+                state = self._states.get(key)
+                if state is not None and state.reauthentication_required:
+                    return _FailureDescriptor(kind="unauthorized")
+                if state is not None and state.attempt is not None:
+                    if _result_is_fresh(state.attempt.authentication, self._clock()):
+                        return state.attempt
+                    if not state.renewable:
+                        state.attempt = None
+                        state.reauthentication_required = True
+                        return _FailureDescriptor(kind="unauthorized")
+
+                source = self._credential_source
+                if source is None or not source.renewable:
+                    if state is None:
+                        self._states[key] = _BoundState(
+                            attempt=None,
+                            renewable=False,
+                            reauthentication_required=True,
+                        )
+                    else:
+                        state.attempt = None
+                        state.reauthentication_required = True
+                    return _FailureDescriptor(kind="unauthorized")
+                flight = self._inflight.get(key)
+                if flight is None:
+                    task = asyncio.create_task(self._renew_state(key))
+                    flight = _InFlight(task=task)
+                    self._inflight[key] = flight
+
+                    def completed(_completed: asyncio.Future[AuthAttempt]) -> None:
+                        self._flight_done(key, flight)
+
+                    task.add_done_callback(completed)
+                flight.waiters += 1
+        except asyncio.CancelledError:
+            return _CANCELLED
+        except Exception:
+            return _FailureDescriptor(kind="configuration")
+
+        outcome = await _await_shared_attempt(flight.task)
+        if isinstance(outcome, AuthAttempt):
+            attempt = outcome
+            failure: _PublicFailure | None = None
+        else:
             attempt = None
-            del context
-            del flight
-            del self
-            raise failure
+            failure = outcome
+        try:
+            await self._release_waiter(key, flight)
+        except asyncio.CancelledError:
+            attempt = None
+            failure = _CANCELLED
+        except Exception:
+            attempt = None
+            failure = _FailureDescriptor(kind="configuration")
+        if failure is not None:
+            return failure
         if attempt is None:  # pragma: no cover - the shared task returns or raises
-            raise AuthRequestError("source login request failed")
+            return _FailureDescriptor(kind="request")
         return attempt
 
     headers = authorize
@@ -535,54 +614,124 @@ class PasswordBearerAuthStrategy:
         context: PrincipalContext,
         failed_attempt: AuthAttempt,
     ) -> bool:
-        self._ensure_open()
-        _require_context(context)
+        strategy = self
+        try:
+            outcome = await strategy._unauthorized_outcome(context, failed_attempt)
+        except asyncio.CancelledError:
+            outcome = _CANCELLED
+        if isinstance(outcome, bool):
+            return outcome
+        failure = outcome
+        del outcome
+        del context
+        del failed_attempt
+        del strategy
+        del self
+        _raise_public_failure(failure)
+
+    async def _unauthorized_outcome(
+        self,
+        context: object,
+        failed_attempt: object,
+    ) -> bool | _PublicFailure:
+        if self._closed:
+            return _FailureDescriptor(kind="configuration")
+        if not isinstance(context, PrincipalContext):
+            return _FailureDescriptor(kind="invalid_context")
         key = context.auth_state_key
-        _require_attempt(failed_attempt, key)
-        async with self._state_lock:
-            state = self._states.get(key)
-            if state is None:
-                return self._retry_on_unauthorized()
-            if state.attempt is None or state.attempt.generation != failed_attempt.generation:
-                return state.renewable and self._retry_on_unauthorized()
-            if state.renewable:
-                del self._states[key]
-                return self._retry_on_unauthorized()
-            state.attempt = None
-            state.reauthentication_required = True
-            return False
+        if not isinstance(failed_attempt, AuthAttempt):
+            return _FailureDescriptor(kind="invalid_attempt")
+        if failed_attempt.state_key != key:
+            return _FailureDescriptor(kind="attempt_mismatch")
+        try:
+            async with self._state_lock:
+                state = self._states.get(key)
+                if state is None:
+                    return self._retry_on_unauthorized()
+                if state.attempt is None or state.attempt.generation != failed_attempt.generation:
+                    return state.renewable and self._retry_on_unauthorized()
+                if state.renewable:
+                    del self._states[key]
+                    return self._retry_on_unauthorized()
+                state.attempt = None
+                state.reauthentication_required = True
+                return False
+        except asyncio.CancelledError:
+            return _CANCELLED
+        except Exception:
+            return _FailureDescriptor(kind="configuration")
 
     async def invalidate(self, auth_state_key: AuthStateKey) -> None:
         """Release a Principal's token, generation, and in-flight login."""
 
-        _require_auth_state_key(auth_state_key)
-        if self._closed:
+        strategy = self
+        try:
+            failure = await strategy._invalidate_outcome(auth_state_key)
+        except asyncio.CancelledError:
+            failure = _CANCELLED
+        if failure is None:
             return
-        flight: _InFlight | None
-        async with self._state_lock:
-            self._states.pop(auth_state_key, None)
-            self._generations.pop(auth_state_key, None)
-            flight = self._inflight.pop(auth_state_key, None)
-        if flight is not None and not flight.task.done():
-            flight.task.cancel()
-            await asyncio.gather(flight.task, return_exceptions=True)
+        del auth_state_key
+        del strategy
+        del self
+        _raise_public_failure(failure)
+
+    async def _invalidate_outcome(
+        self,
+        auth_state_key: object,
+    ) -> _PublicFailure | None:
+        if not isinstance(auth_state_key, AuthStateKey):
+            return _FailureDescriptor(kind="invalid_state_key")
+        if self._closed:
+            return None
+        try:
+            async with self._state_lock:
+                self._states.pop(auth_state_key, None)
+                self._generations.pop(auth_state_key, None)
+                flight = self._inflight.pop(auth_state_key, None)
+            if flight is not None and not flight.task.done():
+                flight.task.cancel()
+                await asyncio.gather(flight.task, return_exceptions=True)
+        except asyncio.CancelledError:
+            return _CANCELLED
+        except Exception:
+            return _FailureDescriptor(kind="configuration")
+        return None
 
     async def aclose(self) -> None:
         """Cancel outstanding logins and erase all in-memory authentication state."""
 
-        async with self._state_lock:
-            if self._closed and not self._inflight:
-                return
-            self._closed = True
-            flights = tuple(self._inflight.values())
-            self._inflight.clear()
-            self._states.clear()
-            self._generations.clear()
-        tasks = tuple(flight.task for flight in flights if not flight.task.done())
-        for task in tasks:
-            task.cancel()
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+        strategy = self
+        try:
+            failure = await strategy._close_outcome()
+        except asyncio.CancelledError:
+            failure = _CANCELLED
+        if failure is None:
+            return
+        del strategy
+        del self
+        _raise_public_failure(failure)
+
+    async def _close_outcome(self) -> _PublicFailure | None:
+        try:
+            async with self._state_lock:
+                if self._closed and not self._inflight:
+                    return None
+                self._closed = True
+                flights = tuple(self._inflight.values())
+                self._inflight.clear()
+                self._states.clear()
+                self._generations.clear()
+            tasks = tuple(flight.task for flight in flights if not flight.task.done())
+            for task in tasks:
+                task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+        except asyncio.CancelledError:
+            return _CANCELLED
+        except Exception:
+            return _FailureDescriptor(kind="configuration")
+        return None
 
     async def _renew_state(self, key: AuthStateKey) -> AuthAttempt:
         strategy = self
@@ -591,7 +740,7 @@ class PasswordBearerAuthStrategy:
             strategy._credential_source,
         )
         credentials: CredentialPair | None = None
-        outcome: AuthenticationResult | _FailureDescriptor
+        outcome: AuthenticationResult | _FailureDescriptor | None = None
         result: AuthenticationResult | None = None
         failure: _FailureDescriptor | None = None
         if source is None:
@@ -600,6 +749,10 @@ class PasswordBearerAuthStrategy:
             try:
                 credentials = await source.acquire(key)
             except asyncio.CancelledError:
+                credentials = None
+                source = None
+                del strategy
+                del self
                 raise
             except Exception:
                 failure = _FailureDescriptor(kind="secret_missing")
@@ -607,24 +760,51 @@ class PasswordBearerAuthStrategy:
             failure = _FailureDescriptor(kind="secret_missing")
         if failure is None:
             assert credentials is not None
-            outcome = await strategy._authentication_outcome(credentials)
+            try:
+                outcome = await strategy._authentication_outcome(credentials)
+            except asyncio.CancelledError:
+                credentials = None
+                source = None
+                del strategy
+                del self
+                raise
             if isinstance(outcome, _FailureDescriptor):
                 failure = outcome
             else:
                 result = outcome
         credentials = None
         source = None
+        outcome = None
         if failure is not None:
             del strategy
             del self
             _raise_failure(failure)
         assert result is not None
 
-        async with strategy._state_lock:
-            strategy._ensure_open()
-            attempt = strategy._new_attempt(key, result)
-            strategy._states[key] = _BoundState(attempt=attempt, renewable=True)
-            return attempt
+        attempt: AuthAttempt | None = None
+        try:
+            async with strategy._state_lock:
+                if strategy._closed:
+                    failure = _FailureDescriptor(kind="configuration")
+                else:
+                    attempt = strategy._new_attempt(key, result)
+                    strategy._states[key] = _BoundState(attempt=attempt, renewable=True)
+        except asyncio.CancelledError:
+            result = None
+            attempt = None
+            del strategy
+            del self
+            raise
+        except Exception:
+            failure = _FailureDescriptor(kind="configuration")
+        if failure is not None:
+            result = None
+            attempt = None
+            del strategy
+            del self
+            _raise_failure(failure)
+        assert attempt is not None
+        return attempt
 
     async def _release_waiter(self, key: AuthStateKey, flight: _InFlight) -> None:
         if self._closed:
@@ -665,10 +845,6 @@ class PasswordBearerAuthStrategy:
             self._configuration.credentials.kind == "environment_secret"
             and self._configuration.retry_on_unauthorized
         )
-
-    def _ensure_open(self) -> None:
-        if self._closed:
-            raise AuthConfigurationError("authentication strategy is closed")
 
     def _new_attempt(
         self,
@@ -884,9 +1060,45 @@ def _result_is_fresh(result: AuthenticationResult, now: float) -> bool:
     return result.refresh_at is None or now < result.refresh_at
 
 
+async def _await_shared_attempt(
+    task: asyncio.Task[AuthAttempt],
+) -> AuthAttempt | _PublicFailure:
+    """Await shared work without adding a strategy-bearing frame to its error."""
+
+    try:
+        outcome = await asyncio.shield(task)
+    except asyncio.CancelledError:
+        failure: _PublicFailure = _CANCELLED
+    except (AuthError, AuthTimeoutError, AuthResponseTooLargeError) as error:
+        failure = error
+    except Exception:
+        failure = _FailureDescriptor(kind="request")
+    else:
+        del task
+        return outcome
+    del task
+    return failure
+
+
 def _raise_failure(failure: _FailureDescriptor) -> Never:
     """Raise one public, secret-free error without receiving execution objects."""
 
+    if failure.kind == "configuration":
+        raise AuthConfigurationError("authentication strategy is closed")
+    if failure.kind == "invalid_credentials":
+        raise TypeError("authentication requires a CredentialPair")
+    if failure.kind == "invalid_context":
+        raise TypeError("authentication requires a PrincipalContext")
+    if failure.kind == "invalid_state_key":
+        raise TypeError("authentication state operation requires an AuthStateKey")
+    if failure.kind == "invalid_result":
+        raise TypeError("authentication invalidation requires an AuthenticationResult")
+    if failure.kind == "invalid_attempt":
+        raise TypeError("401 feedback requires an AuthAttempt")
+    if failure.kind == "attempt_mismatch":
+        raise ValueError("authentication attempt does not belong to this PrincipalContext")
+    if failure.kind == "unauthorized":
+        raise AuthReauthenticationRequiredError("source session requires reauthentication")
     if failure.kind == "secret_missing":
         raise AuthCredentialError("provider authentication credential is unavailable")
     if failure.kind == "login_rejected":
@@ -918,6 +1130,14 @@ def _raise_failure(failure: _FailureDescriptor) -> Never:
         )
     LOGGER.warning("source login request failed")
     raise AuthRequestError("source login request failed")
+
+
+def _raise_public_failure(failure: _PublicFailure) -> Never:
+    if isinstance(failure, _CancelledDescriptor):
+        raise asyncio.CancelledError
+    if isinstance(failure, _FailureDescriptor):
+        _raise_failure(failure)
+    raise failure
 
 
 def _response_too_large(limit: int) -> AuthResponseTooLargeError:
