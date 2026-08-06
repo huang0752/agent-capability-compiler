@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
+import acc_runtime.gateway as gateway
 from acc_runtime.gateway.audit import (
     AuditCollector,
     AuditEvent,
@@ -16,6 +17,14 @@ from acc_runtime.gateway.audit import (
     MemoryAuditSink,
     NoopAuditSink,
 )
+
+
+def test_audit_types_are_exported_from_the_gateway_package() -> None:
+    assert gateway.AuditCollector is AuditCollector
+    assert gateway.AuditEvent is AuditEvent
+    assert gateway.LoggingAuditSink is LoggingAuditSink
+    assert gateway.MemoryAuditSink is MemoryAuditSink
+    assert gateway.NoopAuditSink is NoopAuditSink
 
 
 def test_collector_emits_an_immutable_minimal_event_with_salted_digests(

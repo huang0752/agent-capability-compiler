@@ -1,5 +1,17 @@
 """Multi-user Streamable HTTP Gateway primitives."""
 
+from acc_runtime.gateway.audit import (
+    AuditCollector,
+    AuditEvent,
+    AuditEventKind,
+    AuditResultCategory,
+    AuditSink,
+    AuditSpan,
+    LoggingAuditSink,
+    MemoryAuditSink,
+    NoopAuditSink,
+    OperationObserver,
+)
 from acc_runtime.gateway.models import (
     GatewaySessionRecord,
     GatewaySessionStatus,
@@ -17,6 +29,12 @@ from acc_runtime.gateway.sessions import (
 )
 
 __all__ = [
+    "AuditCollector",
+    "AuditEvent",
+    "AuditEventKind",
+    "AuditResultCategory",
+    "AuditSink",
+    "AuditSpan",
     "GatewayReauthRequiredError",
     "GatewaySessionCapacityError",
     "GatewaySessionExpiredError",
@@ -26,6 +44,10 @@ __all__ = [
     "GatewaySessionStore",
     "GatewaySettings",
     "InMemoryGatewaySessionStore",
+    "LoggingAuditSink",
+    "MemoryAuditSink",
+    "NoopAuditSink",
+    "OperationObserver",
     "SessionCreateRequest",
     "SessionCreateResponse",
 ]
