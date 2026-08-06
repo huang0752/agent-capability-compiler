@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -238,3 +239,104 @@ def test_diagnostics_never_echo_input_secrets(tmp_path: Path) -> None:
     assert completed.returncode == 3
     assert payload["diagnostics"][0]["code"] == "ACC_SCOPE_MODE_INVALID"
     assert secret not in completed.stdout
+
+
+def test_schema_version_must_be_one_without_echoing_input(tmp_path: Path) -> None:
+    secret = "production-secret-never-output"
+    project = _write_project(tmp_path)
+    inventory_path = project / "scope-inventory.yaml"
+    inventory = yaml.safe_load(inventory_path.read_text(encoding="utf-8"))
+    inventory["schema_version"] = secret
+    inventory_path.write_text(
+        yaml.safe_dump(inventory, sort_keys=False), encoding="utf-8"
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert payload["diagnostics"][0]["code"] == "ACC_SCOPE_SCHEMA_VERSION_INVALID"
+    assert payload["diagnostics"][0]["pointer"] == "/schema_version"
+    assert secret not in completed.stdout
+
+
+def test_route_domain_must_be_a_non_empty_string(tmp_path: Path) -> None:
+    route = _route("customer.search")
+    route["domain"] = ""
+    project = _write_project(tmp_path, routes=[route])
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert payload["diagnostics"][0]["code"] == "ACC_SCOPE_DOMAIN_INVALID"
+    assert payload["diagnostics"][0]["pointer"] == "/routes/0/domain"
+
+
+@pytest.mark.parametrize(
+    "invalid_path",
+    [
+        "api/customers",
+        "//api/customers",
+        "/api//customers",
+        "/api/customers?limit=1",
+        "/api/customers#details",
+        "/api\\customers",
+        "/api/../customers",
+    ],
+)
+def test_route_path_must_be_a_safe_origin_relative_path(
+    tmp_path: Path, invalid_path: str
+) -> None:
+    route = _route("customer.search")
+    route["path"] = invalid_path
+    project = _write_project(tmp_path, routes=[route])
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert payload["diagnostics"][0]["code"] == "ACC_SCOPE_PATH_INVALID"
+    assert payload["diagnostics"][0]["pointer"] == "/routes/0/path"
+
+
+def test_route_eligibility_must_be_declared_without_echoing_input(tmp_path: Path) -> None:
+    secret = "production-secret-never-output"
+    route = _route("customer.search")
+    route["eligibility"] = secret
+    project = _write_project(tmp_path, routes=[route])
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert payload["diagnostics"][0]["code"] == "ACC_SCOPE_ELIGIBILITY_INVALID"
+    assert payload["diagnostics"][0]["pointer"] == "/routes/0/eligibility"
+    assert secret not in completed.stdout
+
+
+@pytest.mark.parametrize("disposition", ["planned", "composed"])
+def test_ineligible_routes_cannot_be_planned_or_composed(
+    tmp_path: Path, disposition: str
+) -> None:
+    route = _route("customer.search", disposition=disposition)
+    route["eligibility"] = "ineligible"
+    project = _write_project(tmp_path, routes=[route])
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert payload["diagnostics"][0]["code"] == "ACC_SCOPE_INELIGIBLE_DISPOSITION"
+    assert payload["diagnostics"][0]["pointer"] == "/routes/0/disposition"
+
+
+def test_ineligible_routes_are_not_counted_as_eligible(tmp_path: Path) -> None:
+    route = _route(
+        "customer.search",
+        disposition="excluded",
+        reason="write-only route",
+        operation_id=None,
+    )
+    route["eligibility"] = "ineligible"
+    project = _write_project(tmp_path, routes=[route])
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 0
+    assert payload["result"]["source_scope"]["eligible_read_routes"] == 0

@@ -27,6 +27,7 @@ DISPOSITIONS = {
     "out_of_scope",
 }
 TERMINAL_COMPLETE = {"planned", "composed", "excluded"}
+ELIGIBILITIES = {"eligible", "ineligible"}
 SUMMARY_FIELDS = (
     "discovered_routes",
     "eligible_read_routes",
@@ -71,6 +72,20 @@ def string_list_at(document: Mapping[str, object], key: str) -> list[str] | None
     return cast(list[str], value)
 
 
+def is_origin_relative_path(value: str | None) -> bool:
+    """Return whether a route path is an unambiguous origin-relative path."""
+
+    return (
+        value is not None
+        and value.startswith("/")
+        and "//" not in value
+        and "?" not in value
+        and "#" not in value
+        and "\\" not in value
+        and ".." not in value
+    )
+
+
 def load_document(path: Path) -> dict[str, object]:
     """Safely load a bounded UTF-8 YAML/JSON mapping."""
 
@@ -99,6 +114,14 @@ def audit_inventory(
     """Validate scope mode, route dispositions, and recomputed summary counts."""
 
     diagnostics: list[dict[str, object]] = []
+    if string_at(document, "schema_version") != "1":
+        add_issue(
+            diagnostics,
+            "ACC_SCOPE_SCHEMA_VERSION_INVALID",
+            'schema_version must be "1"',
+            path=path,
+            pointer="/schema_version",
+        )
     scope = mapping_at(document, "scope")
     routes = document.get("routes")
     summary = mapping_at(document, "summary")
@@ -190,6 +213,25 @@ def audit_inventory(
         else:
             seen.add(route_id)
 
+        domain = string_at(route, "domain")
+        if domain is None or not domain.strip():
+            add_issue(
+                diagnostics,
+                "ACC_SCOPE_DOMAIN_INVALID",
+                "route domain must be a non-empty string",
+                path=path,
+                pointer=f"{pointer}/domain",
+            )
+        route_path = string_at(route, "path")
+        if not is_origin_relative_path(route_path):
+            add_issue(
+                diagnostics,
+                "ACC_SCOPE_PATH_INVALID",
+                "route path must be a safe origin-relative path",
+                path=path,
+                pointer=f"{pointer}/path",
+            )
+
         if string_at(route, "method") not in {"GET", "HEAD"}:
             add_issue(
                 diagnostics,
@@ -208,7 +250,16 @@ def audit_inventory(
                 pointer=f"{pointer}/evidence_sources",
             )
 
-        if string_at(route, "eligibility") == "eligible":
+        eligibility = string_at(route, "eligibility")
+        if eligibility not in ELIGIBILITIES:
+            add_issue(
+                diagnostics,
+                "ACC_SCOPE_ELIGIBILITY_INVALID",
+                "route eligibility must be eligible or ineligible",
+                path=path,
+                pointer=f"{pointer}/eligibility",
+            )
+        if eligibility == "eligible":
             counters["eligible_read_routes"] += 1
         disposition = string_at(route, "disposition")
         if disposition not in DISPOSITIONS:
@@ -222,6 +273,15 @@ def audit_inventory(
             )
             continue
         counters[disposition] += 1
+
+        if eligibility == "ineligible" and disposition in {"planned", "composed"}:
+            add_issue(
+                diagnostics,
+                "ACC_SCOPE_INELIGIBLE_DISPOSITION",
+                "ineligible routes cannot be planned or composed",
+                path=path,
+                pointer=f"{pointer}/disposition",
+            )
 
         reason = string_at(route, "reason")
         if disposition in {"excluded", "blocked_on_evidence", "out_of_scope"} and (
