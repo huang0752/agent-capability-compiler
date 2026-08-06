@@ -13,6 +13,7 @@ import pytest
 from pydantic import JsonValue
 
 import acc_runtime
+import acc_runtime.runtime as runtime_module
 from acc_runtime.auth import (
     AuthAttempt,
     AuthenticationResult,
@@ -1209,3 +1210,164 @@ async def test_failing_audit_sink_is_absent_from_business_error_traceback() -> N
     assert caught.value.__cause__ is None
     assert caught.value.__context__ is None
     _assert_runtime_exception_cannot_reach_secret(caught.value, sink_secret)
+
+
+@pytest.mark.asyncio
+async def test_audit_sink_cancellation_cancels_business_with_a_safe_traceback() -> None:
+    principal_secret = "cancelled-audit-principal-secret"
+    session_secret = "cancelled-audit-session-secret"
+    salt_secret = "cancelled-audit-deployment-salt"
+    sink_secret = "cancelled-audit-sink-secret"
+
+    class CancellingSink:
+        def __init__(self) -> None:
+            self.secret = sink_secret
+
+        def emit(self, event: AuditEvent) -> None:
+            raise asyncio.CancelledError
+
+    principal = PrincipalContext(
+        principal_id=principal_secret,
+        gateway_session_id=session_secret,
+        target_system_id="crm",
+        source_scopes={"customer.read", "customer.detail"},
+        deployment_scope_ceiling={"customer.read", "customer.detail"},
+        tenant_context={"tenant_id": "tenant-a"},
+        auth_state_handle="cancelled-audit-handle",
+        scope_mapping={
+            "customer.read": {"customer.read"},
+            "customer.detail": {"customer.detail"},
+        },
+    )
+    runtime = GenericRuntime(
+        _ir(),
+        provider=FakeProvider(),
+        principal_context=principal,
+        audit_collector=AuditCollector(
+            sink=CancellingSink(),
+            deployment_salt=salt_secret.encode(),
+        ),
+    )
+
+    with pytest.raises(asyncio.CancelledError) as caught:
+        await runtime.call("get_customer", {"customer_id": "c-1"})
+
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    _assert_runtime_exception_cannot_reach_secret(
+        caught.value,
+        principal_secret,
+        session_secret,
+        salt_secret,
+        sink_secret,
+    )
+
+
+@pytest.mark.asyncio
+async def test_business_cancellation_cannot_reach_a_secret_bearing_audit_sink() -> None:
+    principal_secret = "business-cancel-principal-secret"
+    sink_secret = "business-cancel-sink-secret"
+
+    class SecretSink:
+        def __init__(self) -> None:
+            self.secret = sink_secret
+            self.events: list[AuditEvent] = []
+
+        def emit(self, event: AuditEvent) -> None:
+            self.events.append(event)
+
+    class CancellingProvider(FakeProvider):
+        async def call(
+            self,
+            operation: Mapping[str, object],
+            arguments: Mapping[str, JsonValue],
+        ) -> JsonValue:
+            raise asyncio.CancelledError
+
+    sink = SecretSink()
+    runtime = GenericRuntime(
+        _ir(),
+        provider=CancellingProvider(),
+        principal_context=_principal(
+            principal_secret,
+            tenant_context={"tenant_id": "tenant-a"},
+        ),
+        audit_collector=AuditCollector(
+            sink=sink,
+            deployment_salt=b"business-cancel-salt",
+        ),
+    )
+
+    with pytest.raises(asyncio.CancelledError) as caught:
+        await runtime.call("get_customer", {"customer_id": "c-1"})
+
+    assert sink.events[0].result_category == "cancelled"
+    _assert_runtime_exception_cannot_reach_secret(
+        caught.value,
+        principal_secret,
+        sink_secret,
+    )
+
+
+def test_audit_category_table_exhaustively_classifies_current_stable_codes() -> None:
+    expected = {
+        "ACC_GATEWAY_REAUTH_REQUIRED": "reauth",
+        "ACC_GATEWAY_SESSION_CAPACITY_REACHED": "internal",
+        "ACC_GATEWAY_SESSION_EXPIRED": "reauth",
+        "ACC_GATEWAY_SESSION_INVALID": "reauth",
+        "ACC_RUNTIME_ASSERTION_FAILED": "internal",
+        "ACC_RUNTIME_AUTH_CONFIGURATION_INVALID": "internal",
+        "ACC_RUNTIME_AUTH_LOGIN_FAILED": "authentication_failed",
+        "ACC_RUNTIME_AUTH_RESPONSE_INVALID": "authentication_failed",
+        "ACC_RUNTIME_AUTH_SECRET_MISSING": "internal",
+        "ACC_RUNTIME_AUTH_UNAUTHORIZED": "reauth",
+        "ACC_RUNTIME_BOUND_EXCEEDED": "invalid_request",
+        "ACC_RUNTIME_CAPABILITY_NOT_FOUND": "invalid_request",
+        "ACC_RUNTIME_CONFIGURATION_INVALID": "internal",
+        "ACC_RUNTIME_DEFINITION_NOT_FOUND": "internal",
+        "ACC_RUNTIME_ERROR": "internal",
+        "ACC_RUNTIME_FINAL_EMIT_REQUIRED": "internal",
+        "ACC_RUNTIME_HTTP_BASE_URL_INVALID": "internal",
+        "ACC_RUNTIME_HTTP_FORBIDDEN": "upstream_denied",
+        "ACC_RUNTIME_HTTP_INVALID_JSON": "upstream_error",
+        "ACC_RUNTIME_HTTP_METHOD_DENIED": "internal",
+        "ACC_RUNTIME_HTTP_NOT_FOUND": "upstream_denied",
+        "ACC_RUNTIME_HTTP_OPERATION_INVALID": "internal",
+        "ACC_RUNTIME_HTTP_REQUEST_FAILED": "upstream_error",
+        "ACC_RUNTIME_HTTP_RESPONSE_TOO_LARGE": "upstream_error",
+        "ACC_RUNTIME_HTTP_TIMEOUT": "upstream_error",
+        "ACC_RUNTIME_HTTP_UPSTREAM_ERROR": "upstream_error",
+        "ACC_RUNTIME_INPUT_INVALID": "invalid_request",
+        "ACC_RUNTIME_INPUT_SCHEMA_INVALID": "invalid_request",
+        "ACC_RUNTIME_INTERNAL": "internal",
+        "ACC_RUNTIME_IR_INVALID": "internal",
+        "ACC_RUNTIME_IR_MISSING": "internal",
+        "ACC_RUNTIME_IR_TOO_LARGE": "internal",
+        "ACC_RUNTIME_OPERATION_FAILED": "internal",
+        "ACC_RUNTIME_OPERATION_INPUT_INVALID": "invalid_request",
+        "ACC_RUNTIME_OPERATION_NOT_FOUND": "internal",
+        "ACC_RUNTIME_OPERATION_OUTPUT_INVALID": "upstream_error",
+        "ACC_RUNTIME_OUTPUT_INVALID": "internal",
+        "ACC_RUNTIME_OUTPUT_SCHEMA_INVALID": "upstream_error",
+        "ACC_RUNTIME_PACK_VERIFICATION_FAILED": "internal",
+        "ACC_RUNTIME_POLICY_OUTPUT_INVALID": "internal",
+        "ACC_RUNTIME_POLICY_SCOPE_DENIED": "policy_denied",
+        "ACC_RUNTIME_POLICY_TENANT_DENIED": "policy_denied",
+        "ACC_RUNTIME_REFERENCE_INVALID": "internal",
+        "ACC_RUNTIME_REFERENCE_UNAVAILABLE": "internal",
+        "ACC_RUNTIME_SECRET_NOT_FOUND": "internal",
+        "ACC_RUNTIME_SECRET_REF_INVALID": "internal",
+        "ACC_RUNTIME_STEP_INVALID": "internal",
+        "ACC_RUNTIME_VALUE_TYPE_INVALID": "invalid_request",
+    }
+
+    assert expected == runtime_module._AUDIT_CODE_CATEGORIES
+
+    for code, category in expected.items():
+        error = AccRuntimeError("safe")
+        error.__dict__["code"] = code
+        assert runtime_module._audit_category(error) == category
+
+    unknown = AccRuntimeError("safe")
+    unknown.__dict__["code"] = "ACC_RUNTIME_FUTURE_UNKNOWN"
+    assert runtime_module._audit_category(unknown) == "internal"

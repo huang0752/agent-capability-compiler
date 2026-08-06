@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -20,6 +21,7 @@ type AuditResultCategory = Literal[
     "upstream_denied",
     "reauth",
     "upstream_error",
+    "authentication_failed",
     "invalid_request",
     "internal",
     "cancelled",
@@ -32,6 +34,7 @@ _RESULT_CATEGORIES = frozenset(
         "upstream_denied",
         "reauth",
         "upstream_error",
+        "authentication_failed",
         "invalid_request",
         "internal",
         "cancelled",
@@ -57,7 +60,8 @@ def _public_identifier(value: str, *, field_name: str) -> str:
 
 def _digest(value: str, *, namespace: bytes, salt: bytes) -> str:
     identifier = _public_identifier(value, field_name="audit identity")
-    return hmac.new(salt, namespace + b"\x00" + identifier.encode(), hashlib.sha256).hexdigest()
+    encoded = identifier.encode("utf-8", errors="surrogatepass")
+    return hmac.new(salt, namespace + b"\x00" + encoded, hashlib.sha256).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +90,8 @@ class AuditEvent:
             raise ValueError("audit result category is invalid")
         if self.capability_id is not None:
             _public_identifier(self.capability_id, field_name="capability_id")
+        if not isinstance(self.operation_ids, tuple):
+            raise TypeError("audit operation ids must be a tuple")
         for operation_id in self.operation_ids:
             _public_identifier(operation_id, field_name="operation_id")
         if len(set(self.operation_ids)) != len(self.operation_ids):
@@ -202,8 +208,17 @@ class _AuditSpan:
             self._operation_ids.append(normalized)
 
     def finish(self, result_category: AuditResultCategory) -> None:
+        span = self
+        outcome = span._finish_outcome(result_category)
+        del result_category
+        del span
+        del self
+        if outcome is _EMIT_CANCELLED:
+            raise asyncio.CancelledError from None
+
+    def _finish_outcome(self, result_category: AuditResultCategory) -> object | None:
         if self._finished:
-            return
+            return None
         self._finished = True
         elapsed = max(0.0, (_monotonic() - self._started_monotonic) * 1000.0)
         event = AuditEvent(
@@ -217,7 +232,10 @@ class _AuditSpan:
             principal_digest=self._principal_digest,
             session_digest=self._session_digest,
         )
-        self._collector._safe_emit(event)
+        return self._collector._emit_outcome(event)
+
+
+_EMIT_CANCELLED = object()
 
 
 class AuditCollector:
@@ -263,31 +281,67 @@ class AuditCollector:
         session_id: str | None,
         duration_ms: float,
     ) -> None:
-        event = AuditEvent(
-            timestamp=_utc_now(),
-            duration_ms=duration_ms,
+        collector = self
+        outcome = collector._emit_session_outcome(
             project_id=project_id,
             event_kind=event_kind,
-            capability_id=None,
-            operation_ids=(),
             result_category=result_category,
-            principal_digest=(
-                None
-                if principal_id is None
-                else _digest(principal_id, namespace=b"principal", salt=self._salt)
-            ),
-            session_digest=(
-                None
-                if session_id is None
-                else _digest(session_id, namespace=b"session", salt=self._salt)
-            ),
+            principal_id=principal_id,
+            session_id=session_id,
+            duration_ms=duration_ms,
         )
-        self._safe_emit(event)
+        del principal_id
+        del session_id
+        del collector
+        del self
+        if outcome is _EMIT_CANCELLED:
+            raise asyncio.CancelledError from None
+
+    def _emit_session_outcome(
+        self,
+        *,
+        project_id: str,
+        event_kind: Literal["session_create", "session_delete"],
+        result_category: AuditResultCategory,
+        principal_id: str | None,
+        session_id: str | None,
+        duration_ms: float,
+    ) -> object | None:
+        try:
+            event = AuditEvent(
+                timestamp=_utc_now(),
+                duration_ms=duration_ms,
+                project_id=project_id,
+                event_kind=event_kind,
+                capability_id=None,
+                operation_ids=(),
+                result_category=result_category,
+                principal_digest=(
+                    None
+                    if principal_id is None
+                    else _digest(principal_id, namespace=b"principal", salt=self._salt)
+                ),
+                session_digest=(
+                    None
+                    if session_id is None
+                    else _digest(session_id, namespace=b"session", salt=self._salt)
+                ),
+            )
+        except Exception:
+            return None
+        return self._emit_outcome(event)
+
+    def _emit_outcome(self, event: AuditEvent) -> object | None:
+        try:
+            self._safe_emit(event)
+        except asyncio.CancelledError:
+            return _EMIT_CANCELLED
+        return None
 
     def _safe_emit(self, event: AuditEvent) -> None:
         try:
             self._sink.emit(event)
-        except BaseException:
+        except Exception:
             # Auditing must never affect or become exception context for business calls.
             return
 
@@ -299,7 +353,7 @@ def observe_operation(observer: OperationObserver | None, operation_id: str) -> 
         return
     try:
         observer.observe(operation_id)
-    except BaseException:
+    except Exception:
         return
 
 

@@ -389,7 +389,8 @@ class GenericRuntime:
                 message="runtime is closed",
                 details={"reason": "runtime_closed"},
             )
-            _finish_audit_span(audit_span, "internal")
+            if _finish_audit_span(audit_span, "internal"):
+                return _RUNTIME_CANCELLED
             return closed_outcome
         try:
             value = await self._execute_call(
@@ -402,17 +403,20 @@ class GenericRuntime:
             _finish_audit_span(audit_span, "cancelled")
             return _RUNTIME_CANCELLED
         except AccRuntimeError as error:
-            _finish_audit_span(audit_span, _audit_category(error))
+            if _finish_audit_span(audit_span, _audit_category(error)):
+                return _RUNTIME_CANCELLED
             return _runtime_failure(error)
         except Exception:
-            _finish_audit_span(audit_span, "internal")
+            if _finish_audit_span(audit_span, "internal"):
+                return _RUNTIME_CANCELLED
             return _RuntimeFailure(
                 error_type=RuntimeConfigurationError,
                 code=RuntimeConfigurationError.code,
                 message="runtime execution failed",
                 details={"reason": "runtime_internal_failure"},
             )
-        _finish_audit_span(audit_span, "success")
+        if _finish_audit_span(audit_span, "success"):
+            return _RUNTIME_CANCELLED
         return _RuntimeSuccess(value)
 
     async def _execute_call(
@@ -705,37 +709,72 @@ def _start_audit_span(
 def _finish_audit_span(
     span: AuditSpan | None,
     category: AuditResultCategory,
-) -> None:
+) -> bool:
     if span is None:
-        return
+        return False
     try:
         span.finish(category)
+    except asyncio.CancelledError:
+        return True
     except Exception:
-        return
+        return False
+    return False
+
+
+_AUDIT_CODE_CATEGORIES: dict[str, AuditResultCategory] = {
+    "ACC_GATEWAY_REAUTH_REQUIRED": "reauth",
+    "ACC_GATEWAY_SESSION_CAPACITY_REACHED": "internal",
+    "ACC_GATEWAY_SESSION_EXPIRED": "reauth",
+    "ACC_GATEWAY_SESSION_INVALID": "reauth",
+    "ACC_RUNTIME_ASSERTION_FAILED": "internal",
+    "ACC_RUNTIME_AUTH_CONFIGURATION_INVALID": "internal",
+    "ACC_RUNTIME_AUTH_LOGIN_FAILED": "authentication_failed",
+    "ACC_RUNTIME_AUTH_RESPONSE_INVALID": "authentication_failed",
+    "ACC_RUNTIME_AUTH_SECRET_MISSING": "internal",
+    "ACC_RUNTIME_AUTH_UNAUTHORIZED": "reauth",
+    "ACC_RUNTIME_BOUND_EXCEEDED": "invalid_request",
+    "ACC_RUNTIME_CAPABILITY_NOT_FOUND": "invalid_request",
+    "ACC_RUNTIME_CONFIGURATION_INVALID": "internal",
+    "ACC_RUNTIME_DEFINITION_NOT_FOUND": "internal",
+    "ACC_RUNTIME_ERROR": "internal",
+    "ACC_RUNTIME_FINAL_EMIT_REQUIRED": "internal",
+    "ACC_RUNTIME_HTTP_BASE_URL_INVALID": "internal",
+    "ACC_RUNTIME_HTTP_FORBIDDEN": "upstream_denied",
+    "ACC_RUNTIME_HTTP_INVALID_JSON": "upstream_error",
+    "ACC_RUNTIME_HTTP_METHOD_DENIED": "internal",
+    "ACC_RUNTIME_HTTP_NOT_FOUND": "upstream_denied",
+    "ACC_RUNTIME_HTTP_OPERATION_INVALID": "internal",
+    "ACC_RUNTIME_HTTP_REQUEST_FAILED": "upstream_error",
+    "ACC_RUNTIME_HTTP_RESPONSE_TOO_LARGE": "upstream_error",
+    "ACC_RUNTIME_HTTP_TIMEOUT": "upstream_error",
+    "ACC_RUNTIME_HTTP_UPSTREAM_ERROR": "upstream_error",
+    "ACC_RUNTIME_INPUT_INVALID": "invalid_request",
+    "ACC_RUNTIME_INPUT_SCHEMA_INVALID": "invalid_request",
+    "ACC_RUNTIME_INTERNAL": "internal",
+    "ACC_RUNTIME_IR_INVALID": "internal",
+    "ACC_RUNTIME_IR_MISSING": "internal",
+    "ACC_RUNTIME_IR_TOO_LARGE": "internal",
+    "ACC_RUNTIME_OPERATION_FAILED": "internal",
+    "ACC_RUNTIME_OPERATION_INPUT_INVALID": "invalid_request",
+    "ACC_RUNTIME_OPERATION_NOT_FOUND": "internal",
+    "ACC_RUNTIME_OPERATION_OUTPUT_INVALID": "upstream_error",
+    "ACC_RUNTIME_OUTPUT_INVALID": "internal",
+    "ACC_RUNTIME_OUTPUT_SCHEMA_INVALID": "upstream_error",
+    "ACC_RUNTIME_PACK_VERIFICATION_FAILED": "internal",
+    "ACC_RUNTIME_POLICY_OUTPUT_INVALID": "internal",
+    "ACC_RUNTIME_POLICY_SCOPE_DENIED": "policy_denied",
+    "ACC_RUNTIME_POLICY_TENANT_DENIED": "policy_denied",
+    "ACC_RUNTIME_REFERENCE_INVALID": "internal",
+    "ACC_RUNTIME_REFERENCE_UNAVAILABLE": "internal",
+    "ACC_RUNTIME_SECRET_NOT_FOUND": "internal",
+    "ACC_RUNTIME_SECRET_REF_INVALID": "internal",
+    "ACC_RUNTIME_STEP_INVALID": "internal",
+    "ACC_RUNTIME_VALUE_TYPE_INVALID": "invalid_request",
+}
 
 
 def _audit_category(error: AccRuntimeError) -> AuditResultCategory:
-    code = str(error.code)
-    if code in {
-        "ACC_RUNTIME_POLICY_SCOPE_DENIED",
-        "ACC_RUNTIME_POLICY_TENANT_DENIED",
-    }:
-        return "policy_denied"
-    if code in {
-        "ACC_RUNTIME_AUTH_UNAUTHORIZED",
-        "ACC_GATEWAY_REAUTH_REQUIRED",
-    }:
-        return "reauth"
-    if code in {
-        "ACC_RUNTIME_HTTP_FORBIDDEN",
-        "ACC_RUNTIME_HTTP_UNAUTHORIZED",
-    }:
-        return "upstream_denied"
-    if code.startswith("ACC_RUNTIME_HTTP_") or code.startswith("ACC_RUNTIME_AUTH_LOGIN_"):
-        return "upstream_error"
-    if error.status in {400, 404, 422}:
-        return "invalid_request"
-    return "internal"
+    return _AUDIT_CODE_CATEGORIES.get(str(error.code), "internal")
 
 
 def _raise_runtime_failure(failure: _RuntimeFailure | _RuntimeCancelled) -> Never:
