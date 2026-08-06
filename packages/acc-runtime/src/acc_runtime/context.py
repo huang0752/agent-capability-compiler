@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import copy
 import math
-from collections.abc import Collection, Hashable, Mapping
+import re
+import unicodedata
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import cast
 
 from pydantic import JsonValue
 
@@ -21,6 +22,12 @@ type FrozenJsonValue = (
     | None
 )
 
+_TENANT_CONTEXT_PATH = re.compile(
+    r"^tenant_context\.[A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z][A-Za-z0-9_-]*)*$"
+)
+_CAMEL_ACRONYM_BOUNDARY = re.compile(r"([A-Z]+)([A-Z][a-z])")
+_CAMEL_WORD_BOUNDARY = re.compile(r"([a-z0-9])([A-Z])")
+_SEPARATOR_RUN = re.compile(r"[_-]+")
 _DENIED_TENANT_SEGMENTS = frozenset(
     {
         "secret",
@@ -39,14 +46,42 @@ _DENIED_TENANT_SEGMENTS = frozenset(
         "api_key",
         "private_key",
         "csrf",
+        "refresh_token",
+        "auth_token",
+        "client_secret",
+        "session_token",
+        "set_cookie",
     }
 )
 
 
+def _validated_text(value: object, *, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{field_name} must be a string")
+    if not value.strip() or any(unicodedata.category(character) == "Cc" for character in value):
+        raise ValueError(f"{field_name} must be nonempty and contain no control characters")
+    return value
+
+
 def _scope_set(scopes: Collection[str], *, field_name: str) -> frozenset[str]:
-    if isinstance(scopes, (str, bytes)) or any(not isinstance(scope, str) for scope in scopes):
+    if not isinstance(scopes, Collection) or isinstance(scopes, (str, bytes, Mapping)):
         raise TypeError(f"{field_name} must be a collection of strings")
-    return frozenset(scopes)
+    return frozenset(_validated_text(scope, field_name=field_name) for scope in scopes)
+
+
+def _validated_scope_mapping(
+    scope_mapping: Mapping[str, Collection[str]],
+) -> Mapping[str, frozenset[str]]:
+    if not isinstance(scope_mapping, Mapping):
+        raise TypeError("scope_mapping must be a mapping of scope collections")
+    validated: dict[str, frozenset[str]] = {}
+    for source_scope, target_scopes in scope_mapping.items():
+        source = _validated_text(source_scope, field_name="scope_mapping source scope")
+        validated[source] = _scope_set(
+            target_scopes,
+            field_name=f"scope_mapping target scopes for {source!r}",
+        )
+    return validated
 
 
 def map_effective_scopes(
@@ -64,29 +99,39 @@ def map_effective_scopes(
         deployment_scope_ceiling,
         field_name="deployment_scope_ceiling",
     )
+    validated_mapping = _validated_scope_mapping(scope_mapping)
     if source_scopes is None:
         return ceiling
 
     normalized_source = _scope_set(source_scopes, field_name="source_scopes")
     mapped: set[str] = set()
     for source_scope in normalized_source:
-        targets = scope_mapping.get(source_scope, ())
-        mapped.update(_scope_set(targets, field_name=f"scope_mapping[{source_scope!r}]"))
+        mapped.update(validated_mapping.get(source_scope, ()))
     return frozenset(mapped & ceiling)
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class AuthStateKey:
+    """Composite key that isolates authentication state between Principals."""
+
+    principal_id: str = field(repr=False)
+    target_system_id: str = field(repr=False)
+    gateway_session_id: str | None = field(repr=False)
+    auth_state_handle: str = field(repr=False)
 
 
 @dataclass(frozen=True, slots=True, init=False)
 class PrincipalContext:
     """Immutable identity state created only by a trusted transport resolver."""
 
-    principal_id: str
+    principal_id: str = field(repr=False)
     gateway_session_id: str | None = field(repr=False)
     target_system_id: str
     source_scopes: frozenset[str] | None = field(repr=False)
-    deployment_scope_ceiling: frozenset[str]
-    effective_scopes: frozenset[str]
+    deployment_scope_ceiling: frozenset[str] = field(repr=False)
+    effective_scopes: frozenset[str] = field(repr=False)
     tenant_context: Mapping[str, FrozenJsonValue] | None = field(repr=False)
-    auth_state_handle: Hashable = field(repr=False)
+    auth_state_handle: str = field(repr=False)
 
     def __init__(
         self,
@@ -97,21 +142,25 @@ class PrincipalContext:
         source_scopes: Collection[str] | None,
         deployment_scope_ceiling: Collection[str],
         tenant_context: Mapping[str, object] | None,
-        auth_state_handle: Hashable,
+        auth_state_handle: str,
         scope_mapping: Mapping[str, Collection[str]] | None = None,
     ) -> None:
-        if not isinstance(principal_id, str) or not principal_id:
-            raise ValueError("principal_id must be a nonempty string")
-        if gateway_session_id is not None and (
-            not isinstance(gateway_session_id, str) or not gateway_session_id
-        ):
-            raise ValueError("gateway_session_id must be a nonempty string when present")
-        if not isinstance(target_system_id, str) or not target_system_id:
-            raise ValueError("target_system_id must be a nonempty string")
+        validated_principal_id = _validated_text(principal_id, field_name="principal_id")
+        validated_gateway_session_id = (
+            None
+            if gateway_session_id is None
+            else _validated_text(gateway_session_id, field_name="gateway_session_id")
+        )
+        validated_target_system_id = _validated_text(
+            target_system_id,
+            field_name="target_system_id",
+        )
         if gateway_session_id is not None and source_scopes is None:
             raise ValueError("gateway PrincipalContext requires available source_scopes")
-        if not isinstance(auth_state_handle, Hashable) or not auth_state_handle:
-            raise ValueError("auth_state_handle must be nonempty and hashable")
+        validated_auth_state_handle = _validated_text(
+            auth_state_handle,
+            field_name="auth_state_handle",
+        )
 
         ceiling = _scope_set(
             deployment_scope_ceiling,
@@ -133,23 +182,25 @@ class PrincipalContext:
             assert isinstance(frozen, Mapping)
             frozen_tenant = frozen
 
-        object.__setattr__(self, "principal_id", principal_id)
-        object.__setattr__(self, "gateway_session_id", gateway_session_id)
-        object.__setattr__(self, "target_system_id", target_system_id)
+        object.__setattr__(self, "principal_id", validated_principal_id)
+        object.__setattr__(self, "gateway_session_id", validated_gateway_session_id)
+        object.__setattr__(self, "target_system_id", validated_target_system_id)
         object.__setattr__(self, "source_scopes", normalized_source)
         object.__setattr__(self, "deployment_scope_ceiling", ceiling)
         object.__setattr__(self, "effective_scopes", effective)
         object.__setattr__(self, "tenant_context", frozen_tenant)
-        object.__setattr__(self, "auth_state_handle", auth_state_handle)
+        object.__setattr__(self, "auth_state_handle", validated_auth_state_handle)
 
-    def to_public_dict(self) -> dict[str, JsonValue]:
-        """Return non-sensitive identity metadata suitable for diagnostics."""
+    @property
+    def auth_state_key(self) -> AuthStateKey:
+        """Return the only supported key for authentication-state storage."""
 
-        return {
-            "principal_id": self.principal_id,
-            "target_system_id": self.target_system_id,
-            "effective_scopes": cast(JsonValue, sorted(self.effective_scopes)),
-        }
+        return AuthStateKey(
+            principal_id=self.principal_id,
+            target_system_id=self.target_system_id,
+            gateway_session_id=self.gateway_session_id,
+            auth_state_handle=self.auth_state_handle,
+        )
 
 
 def resolve_context_binding(
@@ -161,13 +212,20 @@ def resolve_context_binding(
 
     if reference == "principal_id":
         return context.principal_id
-    if not reference.startswith("tenant_context."):
+    if _TENANT_CONTEXT_PATH.fullmatch(reference) is None:
         raise ValueError(f"context binding is not permitted: {reference}")
 
     path = reference.split(".")[1:]
-    if not path or any(segment.casefold() in _DENIED_TENANT_SEGMENTS for segment in path):
+    if any(_normalized_segment(segment) in _DENIED_TENANT_SEGMENTS for segment in path):
         raise ValueError(f"context binding is not permitted: {reference}")
-    if reference not in allowed_tenant_context_bindings:
+    if not isinstance(allowed_tenant_context_bindings, Collection) or isinstance(
+        allowed_tenant_context_bindings,
+        (str, bytes, Mapping),
+    ):
+        raise TypeError("tenant context binding allowlist must be a collection of strings")
+    if any(not isinstance(item, str) for item in allowed_tenant_context_bindings):
+        raise TypeError("tenant context binding allowlist must contain only strings")
+    if reference not in frozenset(allowed_tenant_context_bindings):
         raise ValueError(f"tenant context binding is not allowlisted: {reference}")
 
     current: FrozenJsonValue = context.tenant_context
@@ -176,6 +234,12 @@ def resolve_context_binding(
             raise ValueError(f"tenant context binding cannot be resolved: {reference}")
         current = current[segment]
     return _thaw_json(current)
+
+
+def _normalized_segment(segment: str) -> str:
+    with_acronym_boundaries = _CAMEL_ACRONYM_BOUNDARY.sub(r"\1_\2", segment)
+    with_word_boundaries = _CAMEL_WORD_BOUNDARY.sub(r"\1_\2", with_acronym_boundaries)
+    return _SEPARATOR_RUN.sub("_", with_word_boundaries).casefold()
 
 
 def _freeze_json(value: object) -> FrozenJsonValue:
@@ -189,7 +253,7 @@ def _freeze_json(value: object) -> FrozenJsonValue:
         if any(not isinstance(key, str) for key in value):
             raise TypeError("tenant_context object keys must be strings")
         return MappingProxyType({str(key): _freeze_json(item) for key, item in value.items()})
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, list):
         return tuple(_freeze_json(item) for item in value)
     raise TypeError("tenant_context must contain JSON-compatible values")
 
@@ -203,6 +267,7 @@ def _thaw_json(value: FrozenJsonValue) -> JsonValue:
 
 
 __all__ = [
+    "AuthStateKey",
     "PrincipalContext",
     "map_effective_scopes",
     "resolve_context_binding",

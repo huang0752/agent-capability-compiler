@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import FrozenInstanceError
+from typing import Any
 
 import pytest
 
 from acc_runtime.context import (
+    AuthStateKey,
     PrincipalContext,
     map_effective_scopes,
     resolve_context_binding,
@@ -136,8 +138,8 @@ def test_principal_context_derives_effective_scopes_and_rejects_spoofed_value() 
         )
 
 
-@pytest.mark.parametrize("auth_state_handle", [None, "", [], {}])
-def test_principal_context_requires_nonempty_hashable_auth_state_handle(
+@pytest.mark.parametrize("auth_state_handle", [None, "", "   ", "line\nbreak", [], {}, object()])
+def test_principal_context_requires_nonempty_control_free_string_auth_state_handle(
     auth_state_handle: object,
 ) -> None:
     with pytest.raises((TypeError, ValueError), match="auth_state_handle"):
@@ -148,8 +150,68 @@ def test_principal_context_requires_nonempty_hashable_auth_state_handle(
             source_scopes=None,
             deployment_scope_ceiling=set(),
             tenant_context=None,
-            auth_state_handle=auth_state_handle,
+            auth_state_handle=auth_state_handle,  # type: ignore[arg-type]
         )
+
+
+def test_auth_state_key_is_frozen_composite_identity_not_a_bare_handle() -> None:
+    shared_handle = "shared-auth-state-handle"
+    contexts = [
+        PrincipalContext(
+            principal_id=principal_id,
+            gateway_session_id=gateway_session_id,
+            target_system_id=target_system_id,
+            source_scopes=set(),
+            deployment_scope_ceiling=set(),
+            tenant_context=None,
+            auth_state_handle=shared_handle,
+        )
+        for principal_id, target_system_id, gateway_session_id in [
+            ("user-a", "crm", "session-a"),
+            ("user-b", "crm", "session-a"),
+            ("user-a", "erp", "session-a"),
+            ("user-a", "crm", "session-b"),
+        ]
+    ]
+
+    keys = {context.auth_state_key for context in contexts}
+
+    assert all(isinstance(key, AuthStateKey) for key in keys)
+    assert len(keys) == 4
+    assert len({hash(key) for key in keys}) == 4
+    assert "shared-auth-state-handle" not in repr(contexts[0].auth_state_key)
+    with pytest.raises(FrozenInstanceError):
+        contexts[0].auth_state_key.principal_id = "forged-user"  # type: ignore[misc]
+
+
+@pytest.mark.parametrize(
+    ("field_name", "invalid_value"),
+    [
+        ("principal_id", "   "),
+        ("principal_id", "user\nadmin"),
+        ("target_system_id", "\t"),
+        ("target_system_id", "crm\u0000admin"),
+        ("gateway_session_id", "   "),
+        ("gateway_session_id", "session\radmin"),
+    ],
+)
+def test_principal_context_rejects_blank_or_control_character_ids(
+    field_name: str,
+    invalid_value: str,
+) -> None:
+    values: dict[str, Any] = {
+        "principal_id": "user-a",
+        "gateway_session_id": "session-a",
+        "target_system_id": "crm",
+        "source_scopes": set(),
+        "deployment_scope_ceiling": set(),
+        "tenant_context": None,
+        "auth_state_handle": "auth-state:user-a",
+    }
+    values[field_name] = invalid_value
+
+    with pytest.raises(ValueError, match=field_name):
+        PrincipalContext(**values)
 
 
 def test_tenant_context_is_defensively_copied_and_deeply_read_only() -> None:
@@ -171,6 +233,11 @@ def test_tenant_context_is_defensively_copied_and_deeply_read_only() -> None:
         organization["region_id"] = "south"  # type: ignore[index]
     with pytest.raises(TypeError):
         context.tenant_context["new_field"] = "value"  # type: ignore[index]
+
+
+def test_tenant_context_rejects_tuple_as_non_json_input() -> None:
+    with pytest.raises(TypeError, match="JSON-compatible"):
+        _context(tenant_context={"regions": ("north",)})
 
 
 def test_resolve_context_binding_reads_principal_and_allowlisted_deep_tenant_path() -> None:
@@ -234,6 +301,15 @@ def test_resolve_context_binding_fails_closed_for_missing_or_non_mapping_path(
         "tenant_context.access_token",
         "tenant_context.identity.password",
         "tenant_context.request.authorization",
+        "tenant_context.identity.AccessToken",
+        "tenant_context.identity.refresh-token",
+        "tenant_context.identity.auth_token",
+        "tenant_context.identity.clientSecret",
+        "tenant_context.identity.sessionToken",
+        "tenant_context.response.setCookie",
+        "tenant_context.identity.apiKey",
+        "tenant_context.identity.privateKey",
+        "tenant_context.request.Headers",
     ],
 )
 def test_resolve_context_binding_rejects_auth_scope_and_secret_paths(reference: str) -> None:
@@ -270,6 +346,32 @@ def test_resolve_context_binding_denylist_is_case_insensitive() -> None:
         resolve_context_binding(context, reference, {reference})
 
 
+@pytest.mark.parametrize(
+    "reference",
+    [
+        "tenant_context",
+        "tenant_context.",
+        "tenant_context..region_id",
+        "tenant_context.0",
+        "tenant_context._private",
+        "Tenant_Context.region_id",
+    ],
+)
+def test_resolve_context_binding_rejects_malformed_tenant_paths(reference: str) -> None:
+    context = _context(tenant_context={"region_id": "north"})
+
+    with pytest.raises(ValueError, match="not permitted"):
+        resolve_context_binding(context, reference, {reference})
+
+
+def test_resolve_context_binding_rejects_string_allowlist() -> None:
+    context = _context(tenant_context={"region_id": "north"})
+    reference = "tenant_context.region_id"
+
+    with pytest.raises(TypeError, match="allowlist"):
+        resolve_context_binding(context, reference, reference)
+
+
 def test_resolve_context_binding_returns_a_defensive_json_copy() -> None:
     context = _context(tenant_context={"filters": {"regions": ["north"]}})
     reference = "tenant_context.filters"
@@ -282,19 +384,65 @@ def test_resolve_context_binding_returns_a_defensive_json_copy() -> None:
     assert resolve_context_binding(context, reference, {reference}) == {"regions": ["north"]}
 
 
-def test_repr_and_public_serialization_do_not_expose_auth_state_handle() -> None:
-    context = _context(
-        tenant_context={"private_tenant_marker": "tenant-secret"},
-        auth_state_handle="source-jwt-secret-handle",
+def test_repr_exposes_only_non_sensitive_context_metadata() -> None:
+    context = PrincipalContext(
+        principal_id="private-principal-user-a",
+        gateway_session_id="private-gateway-session-a",
+        target_system_id="crm",
+        source_scopes={"private-source-scope"},
+        deployment_scope_ceiling={"private-ceiling-scope"},
+        tenant_context={"private_tenant_marker": "private-tenant-secret"},
+        auth_state_handle="private-auth-state-handle",
+        scope_mapping={"private-source-scope": {"private-ceiling-scope"}},
     )
 
-    assert "source-jwt-secret-handle" not in repr(context)
-    assert "gateway-session-a" not in repr(context)
-    assert "tenant-secret" not in repr(context)
-    serialized = context.to_public_dict()
-    assert "source-jwt-secret-handle" not in str(serialized)
-    assert "gateway-session-a" not in str(serialized)
-    assert "tenant-secret" not in str(serialized)
-    assert "auth_state_handle" not in serialized
-    assert "gateway_session_id" not in serialized
-    assert "tenant_context" not in serialized
+    rendered = repr(context)
+    assert "crm" in rendered
+    assert "private-principal-user-a" not in rendered
+    assert "private-gateway-session-a" not in rendered
+    assert "private-source-scope" not in rendered
+    assert "private-ceiling-scope" not in rendered
+    assert "private-tenant-secret" not in rendered
+    assert "private-auth-state-handle" not in rendered
+
+
+@pytest.mark.parametrize(
+    ("source_scopes", "ceiling", "scope_mapping"),
+    [
+        (iter(["customer:read"]), {"customer.read"}, {}),
+        ({"customer:read": True}, {"customer.read"}, {}),
+        ({"customer:read"}, {"customer.read": True}, {}),
+        ({"customer:read", "   "}, {"customer.read"}, {}),
+        ({"customer:read"}, {"customer.read\nadmin"}, {}),
+        ({"customer:read"}, {"customer.read"}, {"   ": {"customer.read"}}),
+        (
+            {"customer:read"},
+            {"customer.read"},
+            {
+                "customer:read": {"customer.read"},
+                "unused:admin": {"   "},
+            },
+        ),
+        (
+            {"customer:read"},
+            {"customer.read"},
+            {"customer:read": {"customer.read": True}},
+        ),
+        (
+            {"customer:read"},
+            {"customer.read"},
+            {"customer:read": iter(["customer.read"])},
+        ),
+    ],
+)
+def test_map_effective_scopes_rejects_invalid_collections_and_entire_mapping(
+    source_scopes: object,
+    ceiling: object,
+    scope_mapping: object,
+) -> None:
+    with pytest.raises((TypeError, ValueError), match="scope"):
+        map_effective_scopes(
+            source_scopes,  # type: ignore[arg-type]
+            ceiling,  # type: ignore[arg-type]
+            scope_mapping,  # type: ignore[arg-type]
+        )
