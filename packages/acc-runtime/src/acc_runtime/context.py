@@ -43,6 +43,25 @@ _DENIED_TENANT_WORDS = frozenset(
         "csrf",
     }
 )
+_DENIED_TENANT_COMPACT_MARKERS = frozenset(
+    {
+        "accesstoken",
+        "refreshtoken",
+        "authtoken",
+        "oauthtoken",
+        "idtoken",
+        "apitoken",
+        "jwttoken",
+        "sessiontoken",
+        "passwordhash",
+        "authorizationheader",
+        "clientsecret",
+        "apisecret",
+        "apikey",
+        "privatekey",
+        "setcookie",
+    }
+)
 
 
 def _validated_text(value: object, *, field_name: str) -> str:
@@ -235,9 +254,11 @@ def _normalized_segment(segment: str) -> str:
 def _segment_is_sensitive(segment: str) -> bool:
     normalized = _normalized_segment(segment)
     words = frozenset(normalized.split("_"))
+    compact = "".join(character for character in segment if character.isalnum()).casefold()
     return (
         normalized in {"header", "headers"}
         or bool(words & _DENIED_TENANT_WORDS)
+        or any(marker in compact for marker in _DENIED_TENANT_COMPACT_MARKERS)
         or {"api", "key"} <= words
         or {"private", "key"} <= words
         or {"set", "cookie"} <= words

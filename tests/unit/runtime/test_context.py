@@ -319,6 +319,17 @@ def test_resolve_context_binding_fails_closed_for_missing_or_non_mapping_path(
         "tenant_context.request.authorizationHeader",
         "tenant_context.identity.privateSigningKey",
         "tenant_context.response.setSecureCookie",
+        "tenant_context.identity.idtoken",
+        "tenant_context.identity.oauthtoken",
+        "tenant_context.identity.apikey",
+        "tenant_context.identity.xapikey",
+        "tenant_context.identity.passwordhash",
+        "tenant_context.request.authorizationheader",
+        "tenant_context.identity.clientsecret",
+        "tenant_context.identity.privatekey",
+        "tenant_context.response.setcookie",
+        "tenant_context.identity.privateRegionKey",
+        "tenant_context.identity.apiRegionKey",
     ],
 )
 def test_resolve_context_binding_rejects_auth_scope_and_secret_paths(reference: str) -> None:
