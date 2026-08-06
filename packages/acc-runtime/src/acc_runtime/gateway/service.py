@@ -17,8 +17,9 @@ from acc_runtime.auth import AuthenticationResult, CredentialPair, PasswordBeare
 from acc_runtime.context import AuthStateKey, PrincipalContext
 from acc_runtime.credentials import SecretValue
 from acc_runtime.errors import RuntimeError
-from acc_runtime.gateway.models import SessionCreateResponse
+from acc_runtime.gateway.models import GatewaySessionRecord, SessionCreateResponse
 from acc_runtime.gateway.sessions import (
+    GatewaySessionExpiredError,
     GatewaySessionInvalidError,
     GatewaySessionStore,
 )
@@ -132,6 +133,16 @@ class GatewaySessionService:
         try:
             if await self._is_closed():
                 return _invalid_failure("service_closed")
+            cleanup_failed, cleanup_cancelled = await self._drain_removed_auth_states()
+            if cleanup_cancelled:
+                return _CANCELLED
+            if cleanup_failed:
+                async with self._lifecycle_lock:
+                    self._closed = True
+                _, close_cancelled = await self._close_resources()
+                if close_cancelled:
+                    return _CANCELLED
+                return _invalid_failure("expired_state_cleanup_failed")
             session_id = self._session_id_generator()
             auth_state_handle = self._auth_state_handle_generator()
             if not _is_safe_generated_value(session_id) or not _is_safe_generated_value(
@@ -186,23 +197,35 @@ class GatewaySessionService:
                 await self._auth_strategy.bind_state(state_key, result)
                 bound = True
                 assert context is not None
-                gateway_token, record = await self._store.create(
+                creation = await self._store.create(
                     session_id=session_id,
                     principal_context=context,
                     source_expires_at=result.expires_at,
                     source_refresh_at=result.refresh_at,
                 )
+                gateway_token, record = creation
                 published = True
-                raw_gateway_token = gateway_token.get_secret_value()
-                remaining = record.expires_at - self._clock()
-                if not math.isfinite(remaining) or remaining <= 0:
-                    failure = _invalid_failure("session_lifetime_invalid")
-                else:
-                    response = SessionCreateResponse(
-                        gateway_token=SecretStr(raw_gateway_token),
-                        expires_in_seconds=max(1, math.floor(remaining)),
-                    )
-                    return response
+                cleanup_failed, cleanup_cancelled = await self._invalidate_records(
+                    creation.removed_records
+                )
+                cancelled = cancelled or cleanup_cancelled
+                if cleanup_failed:
+                    async with self._lifecycle_lock:
+                        self._closed = True
+                    _, close_cancelled = await self._close_resources()
+                    cancelled = cancelled or close_cancelled
+                    failure = _invalid_failure("expired_state_cleanup_failed")
+                if failure is None and not cancelled:
+                    raw_gateway_token = gateway_token.get_secret_value()
+                    remaining = record.expires_at - self._clock()
+                    if not math.isfinite(remaining) or remaining <= 0:
+                        failure = _invalid_failure("session_lifetime_invalid")
+                    else:
+                        response = SessionCreateResponse(
+                            gateway_token=SecretStr(raw_gateway_token),
+                            expires_in_seconds=max(1, math.floor(remaining)),
+                        )
+                        return response
         except asyncio.CancelledError:
             cancelled = True
         except RuntimeError as error:
@@ -238,7 +261,7 @@ class GatewaySessionService:
     ) -> tuple[bool, bool]:
         """Finish cleanup in its own task so caller cancellation cannot leave ghost state."""
 
-        _, revoke_failed, revoke_cancelled = await _complete_value_action(
+        _, revoke_failure, revoke_cancelled = await _complete_value_action(
             lambda: self._store.revoke_session(session_id)
         )
         invalidate_failed = False
@@ -247,7 +270,7 @@ class GatewaySessionService:
             invalidate_failed, invalidate_cancelled = await _complete_action(
                 lambda: self._auth_strategy.invalidate(state_key)
             )
-        cleanup_failed = revoke_failed or invalidate_failed
+        cleanup_failed = revoke_failure is not None or invalidate_failed
         cleanup_cancelled = revoke_cancelled or invalidate_cancelled
         if cleanup_failed:
             async with self._lifecycle_lock:
@@ -256,44 +279,51 @@ class GatewaySessionService:
             cleanup_cancelled = cleanup_cancelled or close_cancelled
         return cleanup_failed, cleanup_cancelled
 
-    async def delete_current(self, session_id: str) -> None:
+    async def delete_current(self, token: str | SecretValue) -> None:
         """Revoke one current session and erase only its authentication state."""
 
         service = self
-        failure = await service._delete_outcome(session_id)
+        failure = await service._delete_outcome(token)
         if failure is None:
             return
-        del session_id
+        del token
         del service
         del self
         _raise_failure(failure)
 
-    async def _delete_outcome(self, session_id: str) -> _ServiceFailure | _Cancelled | None:
-        record, revoke_failed, cancelled = await _complete_value_action(
-            lambda: self._store.revoke_session(session_id)
+    async def _delete_outcome(
+        self, token: str | SecretValue
+    ) -> _ServiceFailure | _Cancelled | None:
+        record, revoke_failure, cancelled = await _complete_value_action(
+            lambda: self._store.revoke_token(token)
         )
-        if revoke_failed:
+        token = ""
+        if revoke_failure is not None:
             async with self._lifecycle_lock:
                 self._closed = True
             _, close_cancelled = await self._close_resources()
             if cancelled or close_cancelled:
                 return _CANCELLED
             return _invalid_failure("session_delete_failed")
-        if record is None:
-            return _CANCELLED if cancelled else None
-        key = record.principal_context.auth_state_key
-        del record
-        invalidate_failed, invalidate_cancelled = await _complete_action(
-            lambda: self._auth_strategy.invalidate(key)
-        )
-        if invalidate_failed:
+        if record is not None:
+            key = record.principal_context.auth_state_key
+            del record
+            invalidate_failed, invalidate_cancelled = await _complete_action(
+                lambda: self._auth_strategy.invalidate(key)
+            )
+            cancelled = cancelled or invalidate_cancelled
+        else:
+            invalidate_failed = False
+        drain_failed, drain_cancelled = await self._drain_removed_auth_states()
+        cancelled = cancelled or drain_cancelled
+        if invalidate_failed or drain_failed:
             async with self._lifecycle_lock:
                 self._closed = True
             _, close_cancelled = await self._close_resources()
-            if cancelled or invalidate_cancelled or close_cancelled:
+            if cancelled or close_cancelled:
                 return _CANCELLED
             return _invalid_failure("session_delete_failed")
-        return _CANCELLED if cancelled or invalidate_cancelled else None
+        return _CANCELLED if cancelled else None
 
     async def mark_reauth_required(self, session_id: str) -> None:
         """Fail closed for one source 401 without disturbing any other user."""
@@ -308,10 +338,32 @@ class GatewaySessionService:
         _raise_failure(failure)
 
     async def _reauth_outcome(self, session_id: str) -> _ServiceFailure | _Cancelled | None:
-        record, mark_failed, cancelled = await _complete_value_action(
+        record, mark_failure, cancelled = await _complete_value_action(
             lambda: self._store.mark_reauth_required(session_id)
         )
-        if mark_failed or record is None:
+        drain_failed, drain_cancelled = await self._drain_removed_auth_states()
+        cancelled = cancelled or drain_cancelled
+        if drain_failed:
+            async with self._lifecycle_lock:
+                self._closed = True
+            _, close_cancelled = await self._close_resources()
+            if cancelled or close_cancelled:
+                return _CANCELLED
+            return _invalid_failure("session_reauth_failed")
+        expected_session_failure = mark_failure in {
+            GatewaySessionExpiredError,
+            GatewaySessionInvalidError,
+        }
+        if expected_session_failure:
+            if cancelled:
+                return _CANCELLED
+            local_error = (
+                GatewaySessionExpiredError
+                if mark_failure is GatewaySessionExpiredError
+                else GatewaySessionInvalidError
+            )
+            return _ServiceFailure(local_error, {})
+        if mark_failure is not None or record is None:
             async with self._lifecycle_lock:
                 self._closed = True
             _, close_cancelled = await self._close_resources()
@@ -356,14 +408,22 @@ class GatewaySessionService:
     async def _close_resources(self) -> tuple[bool, bool]:
         store_failed = False
         store_cancelled = False
+        removed_records: tuple[GatewaySessionRecord, ...] | None = ()
         strategy_failed = False
         strategy_cancelled = False
         try:
-            store_failed, store_cancelled = await _complete_action(self._store.close)
+            removed_records, store_failure, store_cancelled = await _complete_value_action(
+                self._store.close
+            )
+            store_failed = store_failure is not None or removed_records is None
             if store_failed:
-                store_failed, retry_cancelled = await _complete_action(self._store.close)
+                removed_records, retry_failure, retry_cancelled = await _complete_value_action(
+                    self._store.close
+                )
+                store_failed = retry_failure is not None or removed_records is None
                 store_cancelled = store_cancelled or retry_cancelled
         finally:
+            drain_failed, drain_cancelled = await self._invalidate_records(removed_records or ())
             strategy_failed, strategy_cancelled = await _complete_action(self._auth_strategy.aclose)
             if strategy_failed:
                 strategy_failed, retry_cancelled = await _complete_action(
@@ -371,13 +431,41 @@ class GatewaySessionService:
                 )
                 strategy_cancelled = strategy_cancelled or retry_cancelled
         return (
-            store_failed or strategy_failed,
-            store_cancelled or strategy_cancelled,
+            store_failed or drain_failed or strategy_failed,
+            store_cancelled or drain_cancelled or strategy_cancelled,
         )
 
     async def _is_closed(self) -> bool:
         async with self._lifecycle_lock:
             return self._closed
+
+    async def _drain_removed_auth_states(self) -> tuple[bool, bool]:
+        records, collect_failure, cancelled = await _complete_value_action(
+            self._store.pop_expired_records
+        )
+        if collect_failure is not None or records is None:
+            return True, cancelled
+        failed, invalidate_cancelled = await self._invalidate_records(records)
+        return failed, cancelled or invalidate_cancelled
+
+    async def _invalidate_records(
+        self, records: Collection[GatewaySessionRecord]
+    ) -> tuple[bool, bool]:
+        failed = False
+        cancelled = False
+        for record in records:
+            key = record.principal_context.auth_state_key
+            del record
+
+            async def invalidate_removed(
+                key: AuthStateKey = key,
+            ) -> None:
+                await self._auth_strategy.invalidate(key)
+
+            state_failed, state_cancelled = await _complete_action(invalidate_removed)
+            failed = failed or state_failed
+            cancelled = cancelled or state_cancelled
+        return failed, cancelled
 
 
 def _as_secret(value: str | SecretValue) -> SecretValue:
@@ -411,13 +499,13 @@ async def _complete_action(action: Callable[[], Awaitable[None]]) -> tuple[bool,
     deliberately not caught and therefore keep their native semantics.
     """
 
-    _, failed, caller_cancelled = await _complete_value_action(action)
-    return failed, caller_cancelled
+    _, failure_type, caller_cancelled = await _complete_value_action(action)
+    return failure_type is not None, caller_cancelled
 
 
 async def _complete_value_action[T](
     action: Callable[[], Awaitable[T]],
-) -> tuple[T | None, bool, bool]:
+) -> tuple[T | None, type[BaseException] | None, bool]:
     """Return a cleanup result without retaining an ordinary exception object."""
 
     task: asyncio.Future[T] = asyncio.ensure_future(action())
@@ -431,15 +519,15 @@ async def _complete_value_action[T](
                 caller_cancelled = True
             if task.done():
                 break
-        except Exception:
-            return None, True, caller_cancelled
+        except Exception as error:
+            return None, type(error), caller_cancelled
     try:
         result = task.result()
     except asyncio.CancelledError:
-        return None, True, caller_cancelled
-    except Exception:
-        return None, True, caller_cancelled
-    return result, False, caller_cancelled
+        return None, asyncio.CancelledError, caller_cancelled
+    except Exception as error:
+        return None, type(error), caller_cancelled
+    return result, None, caller_cancelled
 
 
 def _raise_failure(failure: _ServiceFailure | _Cancelled) -> Never:

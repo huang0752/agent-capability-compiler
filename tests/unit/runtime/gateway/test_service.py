@@ -16,6 +16,7 @@ from acc_runtime.gateway.models import GatewaySessionRecord
 from acc_runtime.gateway.service import GatewaySessionService
 from acc_runtime.gateway.sessions import (
     GatewayReauthRequiredError,
+    GatewaySessionExpiredError,
     GatewaySessionInvalidError,
     InMemoryGatewaySessionStore,
 )
@@ -394,7 +395,7 @@ async def test_store_failure_rolls_back_ghost_record_and_auth_state() -> None:
 
 @pytest.mark.anyio
 async def test_post_create_response_failure_rolls_back_record_and_auth_state() -> None:
-    clock = SequenceClock(100.0, 100.0, 500.0)
+    clock = SequenceClock(100.0, 100.0, 100.0, 500.0)
     config = _config()
 
     def login(request: httpx.Request) -> httpx.Response:
@@ -617,21 +618,23 @@ async def test_delete_and_reauth_only_invalidate_selected_session() -> None:
     )
     first = await service.create_session(identity="a", password="a")
     second = await service.create_session(identity="b", password="b")
-    first_record = await store.resolve_token(_gateway_token(first))
-    second_record = await store.resolve_token(_gateway_token(second))
+    first_token = _gateway_token(first)
+    second_token = _gateway_token(second)
+    first_record = await store.resolve_token(first_token)
+    second_record = await store.resolve_token(second_token)
 
     await service.mark_reauth_required(first_record.session_id)
 
     with pytest.raises(GatewayReauthRequiredError):
-        await store.resolve_token(_gateway_token(first))
-    assert await store.resolve_token(_gateway_token(second)) == second_record
+        await store.resolve_token(first_token)
+    assert await store.resolve_token(second_token) == second_record
     assert first_record.principal_context.auth_state_key not in strategy._states
     assert second_record.principal_context.auth_state_key in strategy._states
 
-    await service.delete_current(second_record.session_id)
-    await service.delete_current(second_record.session_id)
+    await service.delete_current(second_token)
+    await service.delete_current(second_token)
     with pytest.raises(GatewaySessionInvalidError):
-        await store.resolve_token(_gateway_token(second))
+        await store.resolve_token(second_token)
     assert second_record.principal_context.auth_state_key not in strategy._states
 
 
@@ -657,14 +660,15 @@ async def test_refresh_boundary_can_mark_then_delete_without_leaving_source_stat
     strategy = _strategy(config, httpx.MockTransport(login), clock)
     service = _service(config=config, strategy=strategy, store=store, clock=clock)
     response = await service.create_session(identity="a", password="b")
-    record = await store.resolve_token(_gateway_token(response))
+    token = _gateway_token(response)
+    record = await store.resolve_token(token)
     clock.value = 370.0
 
     await service.mark_reauth_required(record.session_id)
-    await service.delete_current(record.session_id)
+    await service.delete_current(token)
 
     with pytest.raises(GatewaySessionInvalidError):
-        await store.resolve_token(_gateway_token(response))
+        await store.resolve_token(token)
     assert record.principal_context.auth_state_key not in strategy._states
 
 
@@ -695,14 +699,154 @@ async def test_gateway_expired_session_can_be_deleted_with_auth_state_cleanup() 
     strategy = _strategy(config, httpx.MockTransport(login), clock)
     service = _service(config=config, strategy=strategy, store=store, clock=clock)
     response = await service.create_session(identity="a", password="b")
-    record = await store.resolve_token(_gateway_token(response))
+    token = _gateway_token(response)
+    record = await store.resolve_token(token)
     clock.value = 110.0
 
-    await service.delete_current(record.session_id)
+    await service.delete_current(token)
 
     with pytest.raises(GatewaySessionInvalidError):
-        await store.resolve_token(_gateway_token(response))
+        await store.resolve_token(token)
     assert record.principal_context.auth_state_key not in strategy._states
+
+
+@pytest.mark.anyio
+async def test_delete_after_expired_resolve_cleans_only_that_sessions_source_state() -> None:
+    clock = Clock()
+    config = _config()
+
+    def login(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "access_token": "private-token",
+                "expires_in": 300,
+                "user": {"id": "same-principal"},
+                "permissions": ["source.read"],
+                "tenant": {},
+            },
+            request=request,
+        )
+
+    store = InMemoryGatewaySessionStore(
+        max_sessions=3,
+        ttl_seconds=10,
+        clock=clock,
+        token_generator=iter(("a" * 43, "b" * 43)).__next__,
+    )
+    strategy = _strategy(config, httpx.MockTransport(login), clock)
+    service = _service(
+        config=config,
+        strategy=strategy,
+        store=store,
+        clock=clock,
+        ids=["session-a", "session-b"],
+        handles=["auth-a", "auth-b"],
+    )
+    first = await service.create_session(identity="a", password="a")
+    first_token = _gateway_token(first)
+    first_record = await store.resolve_token(first_token)
+    clock.value = 105.0
+    second = await service.create_session(identity="b", password="b")
+    second_token = _gateway_token(second)
+    second_record = await store.resolve_token(second_token)
+    clock.value = 111.0
+
+    with pytest.raises(Exception) as expired:
+        await store.resolve_token(first_token)
+    assert getattr(expired.value, "code", None) == "ACC_GATEWAY_SESSION_EXPIRED"
+    await service.delete_current(first_token)
+
+    assert first_record.principal_context.auth_state_key not in strategy._states
+    assert second_record.principal_context.auth_state_key in strategy._states
+    assert await store.resolve_token(second_token) == second_record
+
+
+@pytest.mark.anyio
+async def test_delete_failure_does_not_retain_gateway_bearer_in_traceback() -> None:
+    clock = Clock()
+    config = _config()
+
+    class FailingTokenRevokeStore(InMemoryGatewaySessionStore):
+        async def revoke_token(self, token: str | SecretValue) -> GatewaySessionRecord | None:
+            del token
+            raise GatewaySessionInvalidError("synthetic revoke failure")
+
+    def login(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "access_token": "private-token",
+                "expires_in": 300,
+                "user": {"id": "principal-a"},
+                "permissions": ["source.read"],
+                "tenant": {},
+            },
+            request=request,
+        )
+
+    gateway_token = "gateway-token-that-must-not-survive-a-delete-failure"
+    store = FailingTokenRevokeStore(
+        max_sessions=2,
+        ttl_seconds=10,
+        clock=clock,
+        token_generator=lambda: "a" * 43,
+    )
+    strategy = _strategy(config, httpx.MockTransport(login), clock)
+    service = _service(config=config, strategy=strategy, store=store, clock=clock)
+
+    with pytest.raises(GatewaySessionInvalidError) as caught:
+        await service.delete_current(gateway_token)
+
+    _assert_traceback_cannot_reach_secret(caught.value, gateway_token)
+
+
+@pytest.mark.anyio
+async def test_late_401_after_one_session_ttl_does_not_close_other_user() -> None:
+    clock = Clock()
+    config = _config()
+
+    def login(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "access_token": "private-token",
+                "expires_in": 300,
+                "user": {"id": "same-principal"},
+                "permissions": ["source.read"],
+                "tenant": {},
+            },
+            request=request,
+        )
+
+    store = InMemoryGatewaySessionStore(
+        max_sessions=3,
+        ttl_seconds=10,
+        clock=clock,
+        token_generator=iter(("a" * 43, "b" * 43)).__next__,
+    )
+    strategy = _strategy(config, httpx.MockTransport(login), clock)
+    service = _service(
+        config=config,
+        strategy=strategy,
+        store=store,
+        clock=clock,
+        ids=["session-a", "session-b"],
+        handles=["auth-a", "auth-b"],
+    )
+    first = await service.create_session(identity="a", password="a")
+    first_record = await store.resolve_token(_gateway_token(first))
+    clock.value = 105.0
+    second = await service.create_session(identity="b", password="b")
+    second_record = await store.resolve_token(_gateway_token(second))
+    clock.value = 111.0
+
+    with pytest.raises(GatewaySessionExpiredError):
+        await service.mark_reauth_required(first_record.session_id)
+
+    assert first_record.principal_context.auth_state_key not in strategy._states
+    assert second_record.principal_context.auth_state_key in strategy._states
+    assert await store.resolve_token(_gateway_token(second)) == second_record
 
 
 @pytest.mark.anyio
@@ -746,6 +890,104 @@ async def test_same_principal_sessions_keep_distinct_auth_state() -> None:
 
 
 @pytest.mark.anyio
+async def test_create_capacity_purge_also_invalidates_expired_source_state() -> None:
+    clock = Clock()
+    config = _config()
+
+    class CapacityPurgeStore(InMemoryGatewaySessionStore):
+        async def pop_expired_records(self) -> tuple[GatewaySessionRecord, ...]:
+            return ()
+
+    def login(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "access_token": "private-token",
+                "expires_in": 300,
+                "user": {"id": "same-principal"},
+                "permissions": ["source.read"],
+                "tenant": {},
+            },
+            request=request,
+        )
+
+    store = CapacityPurgeStore(
+        max_sessions=1,
+        ttl_seconds=10,
+        clock=clock,
+        token_generator=iter(("a" * 43, "b" * 43)).__next__,
+    )
+    strategy = _strategy(config, httpx.MockTransport(login), clock)
+    service = _service(
+        config=config,
+        strategy=strategy,
+        store=store,
+        clock=clock,
+        ids=["session-a", "session-b"],
+        handles=["auth-a", "auth-b"],
+    )
+    first = await service.create_session(identity="a", password="a")
+    first_record = await store.resolve_token(_gateway_token(first))
+    clock.value = 111.0
+
+    second = await service.create_session(identity="b", password="b")
+    second_record = await store.resolve_token(_gateway_token(second))
+
+    assert first_record.principal_context.auth_state_key not in strategy._states
+    assert second_record.principal_context.auth_state_key in strategy._states
+
+
+@pytest.mark.anyio
+async def test_concurrent_creates_drain_one_expired_users_state_once() -> None:
+    clock = Clock()
+    config = _config()
+
+    async def login(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0)
+        return httpx.Response(
+            200,
+            json={
+                "access_token": "private-token",
+                "expires_in": 300,
+                "user": {"id": "same-principal"},
+                "permissions": ["source.read"],
+                "tenant": {},
+            },
+            request=request,
+        )
+
+    store = InMemoryGatewaySessionStore(
+        max_sessions=2,
+        ttl_seconds=10,
+        clock=clock,
+        token_generator=iter(("a" * 43, "b" * 43, "c" * 43)).__next__,
+    )
+    strategy = _strategy(config, httpx.MockTransport(login), clock)
+    service = _service(
+        config=config,
+        strategy=strategy,
+        store=store,
+        clock=clock,
+        ids=["session-a", "session-b", "session-c"],
+        handles=["auth-a", "auth-b", "auth-c"],
+    )
+    first = await service.create_session(identity="a", password="a")
+    first_record = await store.resolve_token(_gateway_token(first))
+    clock.value = 111.0
+
+    second, third = await asyncio.gather(
+        service.create_session(identity="b", password="b"),
+        service.create_session(identity="c", password="c"),
+    )
+    second_record = await store.resolve_token(_gateway_token(second))
+    third_record = await store.resolve_token(_gateway_token(third))
+
+    assert first_record.principal_context.auth_state_key not in strategy._states
+    assert second_record.principal_context.auth_state_key in strategy._states
+    assert third_record.principal_context.auth_state_key in strategy._states
+
+
+@pytest.mark.anyio
 async def test_close_is_idempotent_and_closes_store_and_strategy() -> None:
     clock = Clock()
     config = _config()
@@ -778,6 +1020,61 @@ async def test_close_is_idempotent_and_closes_store_and_strategy() -> None:
 
 
 @pytest.mark.anyio
+async def test_close_invalidates_each_record_returned_by_store() -> None:
+    clock = Clock()
+    config = _config()
+
+    class TrackingStrategy(PasswordBearerAuthStrategy):
+        def __init__(self, **kwargs: object) -> None:
+            super().__init__(**kwargs)  # type: ignore[arg-type]
+            self.invalidated: list[AuthStateKey] = []
+
+        async def invalidate(self, auth_state_key: AuthStateKey) -> None:
+            self.invalidated.append(auth_state_key)
+            await super().invalidate(auth_state_key)
+
+    def login(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "access_token": "private-token",
+                "expires_in": 300,
+                "user": {"id": "same-principal"},
+                "permissions": ["source.read"],
+                "tenant": {},
+            },
+            request=request,
+        )
+
+    store = _store(clock, "a" * 43, "b" * 43)
+    strategy = TrackingStrategy(
+        config=config,
+        base_url="https://source.example",
+        credential_source=None,
+        client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(login)),
+        clock=clock,
+    )
+    service = _service(
+        config=config,
+        strategy=strategy,
+        store=store,
+        clock=clock,
+        ids=["session-a", "session-b"],
+        handles=["auth-a", "auth-b"],
+    )
+    first = await service.create_session(identity="a", password="a")
+    second = await service.create_session(identity="b", password="b")
+    expected = {
+        (await store.resolve_token(_gateway_token(first))).principal_context.auth_state_key,
+        (await store.resolve_token(_gateway_token(second))).principal_context.auth_state_key,
+    }
+
+    await service.aclose()
+
+    assert set(strategy.invalidated) == expected
+
+
+@pytest.mark.anyio
 async def test_cancelled_close_finishes_both_cleanups_before_propagating_cancel() -> None:
     clock = Clock()
     config = _config()
@@ -787,10 +1084,10 @@ async def test_cancelled_close_finishes_both_cleanups_before_propagating_cancel(
     strategy_release = asyncio.Event()
 
     class PausingCloseStore(InMemoryGatewaySessionStore):
-        async def close(self) -> None:
+        async def close(self) -> tuple[GatewaySessionRecord, ...]:
             store_started.set()
             await store_release.wait()
-            await super().close()
+            return await super().close()
 
     class PausingCloseStrategy(PasswordBearerAuthStrategy):
         async def aclose(self) -> None:
@@ -847,7 +1144,7 @@ async def test_double_close_failure_is_stable_after_both_resources_clear() -> No
     config = _config()
 
     class FailingCloseStore(InMemoryGatewaySessionStore):
-        async def close(self) -> None:
+        async def close(self) -> tuple[GatewaySessionRecord, ...]:
             await super().close()
             raise GatewaySessionInvalidError("synthetic store close failure")
 
