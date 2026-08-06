@@ -25,3 +25,10 @@ Before validation:
 2. Replace `{{ CAPTURED_SHA256_DIGEST }}` only with a digest computed from captured evidence; the marker intentionally cannot pass `Operation` validation.
 3. Keep credentials out of all files. Configure `provider.auth` with environment-variable references; `base_url_ref`, `token_ref`, `identity_ref`, and `password_ref` are references, never values. Operation-level `credential_ref` is legacy stdio compatibility only and must not be used by new projects.
 4. Add one positive Eval per Capability. If scopes or tenant enforcement apply, also add an Eval expecting status 401 or 403.
+
+Provider authentication and identity rules:
+
+- `none` has no credential source; `bearer_secret` references an environment token.
+- `password_bearer` pairs `environment_secret` with `stdio`, or `gateway_session` with `streamable_http`.
+- Runtime creates an immutable `PrincipalContext`; public tools never accept principal, scope, password, JWT, Cookie, or Authorization values.
+- `context_bindings` may inject only compiler-approved principal/tenant values into mapped path/query inputs. Declare tenant paths in `provider.context_binding_allowlist`, and keep bound targets out of Capability inputs and Workflow arguments.

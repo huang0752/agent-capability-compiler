@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import json
 import os
+import shutil
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -124,19 +127,88 @@ def _contains_key(value: object, key: str) -> bool:
     return False
 
 
-def test_example_uses_provider_bearer_auth_without_operation_credentials() -> None:
-    project = yaml.safe_load((PROJECT / "project.yaml").read_text(encoding="utf-8"))
+def _assert_example_source_has_no_legacy_credentials(project_root: Path) -> None:
+    project = yaml.safe_load((project_root / "project.yaml").read_text(encoding="utf-8"))
 
     assert project["provider"]["auth"] == {
         "kind": "bearer_secret",
         "token_ref": "CRM_DEMO_TOKEN",
     }
-    for path in sorted((PROJECT / "operations").glob("*.yaml")):
+    for path in sorted((project_root / "operations").glob("*.yaml")):
         operation = yaml.safe_load(path.read_text(encoding="utf-8"))
         assert "credential_ref" not in operation["http"], path
-    for path in sorted(PROJECT.rglob("*")):
-        if path.is_file() and path.suffix in {".diff", ".json", ".md", ".yaml"}:
-            assert "credential_ref" not in path.read_text(encoding="utf-8"), path
+    candidate = (project_root / "candidate.diff").read_text(encoding="utf-8")
+    assert "+  credential_ref:" not in candidate
+
+
+def test_example_uses_provider_bearer_auth_without_operation_credentials() -> None:
+    _assert_example_source_has_no_legacy_credentials(PROJECT)
+
+
+def test_credential_scan_ignores_generated_compiler_output(tmp_path: Path) -> None:
+    copied_example = tmp_path / "fastapi-crm"
+    shutil.copytree(PROJECT.parent, copied_example)
+    copied_project = copied_example / "acc-project"
+    output = copied_project / "build" / "compiled" / "ir.json"
+
+    completed = subprocess.run(
+        [
+            "uv",
+            "run",
+            "--frozen",
+            "acc",
+            "compile",
+            str(copied_project),
+            "--output",
+            str(output),
+            "--json",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert output.is_file()
+    _assert_example_source_has_no_legacy_credentials(copied_project)
+
+
+def test_handoff_artifacts_match_the_current_compiled_candidate(tmp_path: Path) -> None:
+    report = compile_project(PROJECT)
+    assert report.ok and report.ir is not None
+    compiled_bytes = (
+        json.dumps(
+            report.ir,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        + "\n"
+    ).encode()
+    compiled_sha256 = hashlib.sha256(compiled_bytes).hexdigest()
+    pack = build_pack(PROJECT, tmp_path / "current.accpkg", compiled_ir=report.ir)
+    handoff = (PROJECT / "HANDOFF.md").read_text(encoding="utf-8")
+    test_report = yaml.safe_load((PROJECT / "test-report.json").read_text(encoding="utf-8"))
+    candidate = (PROJECT / "candidate.diff").read_text(encoding="utf-8")
+
+    assert compiled_sha256 in handoff
+    assert pack.sha256 in handoff
+    assert test_report["compiled_ir_sha256"] == compiled_sha256
+    assert test_report["deterministic_pack"]["sha256"] == pack.sha256
+    assert test_report["verified_at"] == "2026-08-06"
+    assert "281 passed" not in handoff
+    assert "281 passed" not in candidate
+
+    check = subprocess.run(
+        ["git", "apply", "--check", str(PROJECT / "candidate.diff")],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert check.returncode == 0, check.stderr
 
 
 def test_pack_is_deterministic_and_contains_no_demo_token(

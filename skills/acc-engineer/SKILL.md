@@ -23,6 +23,13 @@ If the request is only to audit or refine an existing ACC project, still run Pre
 - First perform 浅层全局发现 to establish the route denominator, then use bounded `--include` paths for deep Evidence capture. An include list is never the discovery denominator.
 - Label Fake Runtime/E2E results `offline_candidate`. Use `source_connected_verified` only after an explicitly authorized local/test source connection succeeds; neither label proves production behavior.
 
+## Authentication and request identity
+
+- New ACC projects declare exactly one Provider-level `provider.auth`: `none`, `bearer_secret`, or `password_bearer`. Operation 级 `credential_ref` 只用于 legacy `stdio` 兼容，不得用于新项目。
+- `bearer_secret` references an environment token. `password_bearer` uses `environment_secret` with `stdio`, and `gateway_session` with `streamable_http`; never put accounts, passwords, JWTs, or headers in Agent inputs or artifacts.
+- `stdio` binds one fixed `PrincipalContext` for the process. `streamable_http` requires the Gateway to create a trusted request-level `PrincipalContext`; a valid schema alone does not prove the Gateway is deployed.
+- Use compiler-checked `context_bindings` only when an evidenced path/query value must come from trusted principal or tenant context. The Capability and Workflow must not expose or override that target.
+
 ## Non-negotiable boundaries
 
 - Never modify, format, generate into, restart, migrate, seed, deploy, or commit the source system.

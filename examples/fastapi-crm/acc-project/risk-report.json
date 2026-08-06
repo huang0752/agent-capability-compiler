@@ -25,6 +25,13 @@
       "mitigation": "The same compiled Operations and generic HttpProvider are exercised, while real CRM calls cover success, 403, and 404."
     },
     {
+      "area": "tenant_context",
+      "severity": "informational",
+      "status": "compatibility_boundary",
+      "risk": "The CRM Operations do not demonstrate explicit context_bindings.",
+      "mitigation": "The fixed stdio PrincipalContext supplies tenant_id through the required-tenant Policy compatibility path. Explicit binding behavior is covered by generic compiler/runtime tests and is not claimed as CRM acceptance."
+    },
+    {
       "area": "deployment",
       "severity": "informational",
       "status": "not_in_scope",

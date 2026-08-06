@@ -185,6 +185,33 @@ def test_public_docs_explain_generic_auth_context_and_validation_boundaries() ->
     assert "baogao-jin 源码或在线源已验证" not in combined
 
 
+def test_skill_workflow_enforces_provider_auth_and_trusted_context_contracts() -> None:
+    skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+    harness = (SKILL / "HARNESS.md").read_text(encoding="utf-8")
+    implement = (SKILL / "guides" / "05-implement.md").read_text(encoding="utf-8")
+    test_guide = (SKILL / "guides" / "07-test.md").read_text(encoding="utf-8")
+    handoff = (SKILL / "guides" / "09-handoff.md").read_text(encoding="utf-8")
+    schema_index = (SKILL / "references" / "schemas" / "index.md").read_text(encoding="utf-8")
+    workflow = "\n".join((skill, harness, implement, test_guide, handoff, schema_index))
+
+    for contract in (
+        "provider.auth",
+        "none",
+        "bearer_secret",
+        "password_bearer",
+        "PrincipalContext",
+        "context_bindings",
+        "stdio",
+        "streamable_http",
+        "environment_secret",
+        "gateway_session",
+    ):
+        assert contract in workflow
+
+    assert "Operation 级 `credential_ref` 只用于 legacy `stdio`" in workflow
+    assert "Agent 输入" in workflow
+
+
 def test_installers_copy_thin_integrations_and_refuse_overwrite(tmp_path: Path) -> None:
     codex_root = tmp_path / "codex-skills"
     codex = ROOT / "integrations" / "codex" / "install.sh"

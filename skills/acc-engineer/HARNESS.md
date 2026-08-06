@@ -25,6 +25,8 @@ Outputs are confined to `acc_project`. The source checkout is evidence, never an
 8. Failures remain visible in diagnostics and handoff artifacts.
 9. Default unspecified existing-system scope to `system_readonly_complete`; use `pilot` only after explicit user MVP confirmation is recorded.
 10. Separate 浅层全局发现 from bounded deep Evidence includes, and never use `--include` as the discovery denominator.
+11. Authentication belongs to `provider.auth`: `none`, `bearer_secret`, or `password_bearer`; Operation 级 `credential_ref` 只用于 legacy `stdio`, and account/password/JWT values never enter project files.
+12. Request identity comes only from immutable `PrincipalContext`. `context_bindings` inject trusted principal/tenant values into evidenced path/query inputs and cannot be supplied by an Agent or Workflow.
 
 ## State machine
 
@@ -57,7 +59,7 @@ Assign every eligible discovered route exactly one disposition: `planned`, `comp
 
 ### 4. Implement
 
-Write only under `acc_project`, and implement only routes disposed as `planned` or `composed`: Evidence, Operations, Capabilities, Policies, Evals, and fixtures. Freeze evidence digests from exact source material. No source-system edits or generated artifacts outside the project.
+Write only under `acc_project`, and implement only routes disposed as `planned` or `composed`: Evidence, Operations, Capabilities, Policies, Evals, and fixtures. Select Provider auth from evidence: `none`, environment-backed `bearer_secret`, or `password_bearer`; new Operations never carry `credential_ref`. For `stdio`, password login uses `environment_secret`; `streamable_http` requires `gateway_session`. Add `context_bindings` only for evidenced trusted path/query inputs and keep those targets out of Capability inputs and Workflow arguments. Freeze evidence digests from exact source material. No source-system edits or generated artifacts outside the project.
 
 ### 5. Validate
 
@@ -65,7 +67,7 @@ Run `scope_audit.py --project <acc_project>` first and retain `scope-audit-repor
 
 ### 6. Test
 
-Run contract, Fake Runtime, and Fake E2E suites and label the result `offline_candidate`. Exercise normal, empty, 404, insufficient scope, cross-tenant, redaction, timeout, response-too-large, error mapping, MCP list, and MCP call behavior. A `source_connected_verified` result additionally requires explicit local/test connection authorization and a successful source-connected run; never infer it from Fake tests.
+Run contract, Fake Runtime, and Fake E2E suites and label the result `offline_candidate`. Exercise normal, empty, 404, insufficient scope, cross-tenant, redaction, timeout, response-too-large, error mapping, MCP list, and MCP call behavior. Test `PrincipalContext`, effective scopes, Provider auth, and every declared `context_bindings` target without exposing identity or credentials through MCP tools. Treat `stdio` as one fixed identity; do not claim `streamable_http` until its Gateway request identity path is actually exercised. A `source_connected_verified` result additionally requires explicit local/test connection authorization and a successful source-connected run; never infer it from Fake tests.
 
 ### 7. Refine
 

@@ -478,6 +478,8 @@ def test_init_creates_minimal_project_and_never_overwrites(tmp_path: Path) -> No
     payload = _json_envelope(completed, command="init", ok=True)
     assert Path(payload["result"]["path"]) == project.resolve()
     assert (project / "project.yaml").is_file()
+    project_document = yaml.safe_load((project / "project.yaml").read_text(encoding="utf-8"))
+    assert project_document["provider"]["auth"] == {"kind": "none"}
     assert {entry.name for entry in project.iterdir() if entry.is_dir()} >= PROJECT_DIRECTORIES
 
     original = (project / "project.yaml").read_text(encoding="utf-8")

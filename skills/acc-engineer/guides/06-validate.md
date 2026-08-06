@@ -14,6 +14,7 @@
 3. 同时检查退出码、`ok`、`result` 和全部 `diagnostics`；不得只凭命令退出判断成功。
 4. 修复 ACC 定义或事实来源后，每次都从 scope audit 重新验证；不得放宽 Schema 掩盖错误。
 5. 复核原系统只读基线及 Secret 扫描结果。
+6. 检查 `provider.auth`/transport 组合、Operation 级 legacy credential 警告、`context_binding_allowlist` 与全部 `context_bindings` 编译诊断；不要把 Schema 可验证误写为 `streamable_http` Gateway 已运行。
 
 ## 门禁
 

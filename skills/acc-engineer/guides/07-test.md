@@ -15,6 +15,7 @@
 4. 验证 MCP `tools/list` 与 `tools/call`，并检查协议输出、日志和报告不包含 Secret 或完整上游响应。
 5. 检查实际结果和 diagnostics；不得隐藏失败、跳过项或仅报告通过数量。
 6. 仅当用户明确授权连接本地/测试原系统，且源连接套件真实通过时，才标记 `source_connected_verified`。
+7. 覆盖 `none`、`bearer_secret` 或所选 `password_bearer` 合同，确认 `PrincipalContext` 与 `context_bindings` 不进入 Agent 输入；`stdio` 只使用固定身份，`streamable_http` 只有实际 Gateway 请求级身份测试通过后才能声明可用。
 
 ## 门禁
 
@@ -23,6 +24,7 @@
 - 测试只使用 Fake/隔离环境和非生产 fixtures，不调用生产环境或写接口。
 - 原系统只读基线无变化；所有失败和未覆盖项均如实记录。
 - `offline_candidate` 与 `source_connected_verified` 严格分开，两者都不得表述为生产验证。
+- environment Secret、Gateway session、JWT、Authorization、Cookie 和认证状态不得进入 Pack、MCP tools、错误、日志或测试报告。
 
 ## 输出
 

@@ -1,32 +1,45 @@
 {
   "artifact_kind": "acc_engineer_test_report",
-  "status": "passed_with_documented_risks",
+  "verified_at": "2026-08-06",
+  "status": "passed_with_documented_format_gate",
+  "validation_level": {
+    "offline_candidate": ["acc test contract", "isolated runtime fixtures"],
+    "source_connected_verified": ["local synthetic FastAPI CRM HTTP boundary"]
+  },
+  "compiled_ir_sha256": "da3598860f83cc01fd0824f68ba8ca6a7862e5f89700c7594891edf4d6de4258",
   "acc_suites": [
     {"command": "acc test contract --json", "total": 9, "passed": 9, "failed": 0},
     {"command": "acc test runtime --json", "total": 9, "passed": 9, "failed": 0},
     {"command": "acc test e2e --json", "total": 9, "passed": 9, "failed": 0}
   ],
   "repository_gates": {
-    "pytest": {"total": 281, "passed": 281, "failed": 0},
-    "ruff_format": {"files_checked": 84, "passed": true},
+    "pytest": {"total": 720, "passed": 720, "failed": 0},
     "ruff_lint": {"passed": true},
-    "mypy": {"source_files": 84, "passed": true},
-    "uv_lock_check": {"passed": true}
+    "changed_file_format": {"passed": true},
+    "repository_format": {
+      "passed": false,
+      "outside_migration_files": 9,
+      "note": "Includes immutable synthetic source and separate scope-governance work; no source file was reformatted."
+    },
+    "mypy": {"source_files": 102, "passed": true},
+    "skill_quick_validate": {"passed": true}
   },
   "source_system_gates": {
     "pytest": {"total": 34, "passed": 34, "failed": 0},
-    "ruff_lint": {"passed": true},
-    "mypy": {"source_files": 6, "passed": true}
+    "source_files_changed": 0
   },
   "acceptance_checks": {
+    "provider_auth": "bearer_secret",
+    "operation_credential_ref_count": 0,
+    "context_bindings_count": 0,
+    "tenant_context_boundary": "required_policy_compatibility",
     "real_rest_system": true,
     "pack_loaded": true,
     "mcp_stdio_tools_list": true,
     "mcp_stdio_tools_call": true,
-    "secret_ref_only": true,
+    "streamable_http_tested": false,
     "token_in_tool_arguments": false,
     "token_in_mcp_stderr": false,
-    "output_schema_enforced_after_policy": true,
     "stable_404": true,
     "stable_403": true,
     "stable_timeout": true,
@@ -36,12 +49,11 @@
   "deterministic_pack": {
     "builds": 2,
     "byte_identical": true,
-    "sha256": "d6670760bc1d690f6e34e57cc9dff029c258f91a4912486fd7032345724fc6ae"
+    "sha256": "6d13a596446fa7dd7cbe34d7345fd642d75bfca918fff7825de91686a18d97b5"
   },
-  "resolved_iterations": [
-    "Runtime eval fixtures initially lacked per-case scope and tenant context; a strict runtime_context fixture was added and tested.",
-    "Hidden tenant input was initially required before runtime injection; schemas now constrain it without exposing it as an Agent input.",
-    "Raw workflow output was initially checked against the public schema before policy filtering; GenericRuntime now filters first and then validates the public contract.",
-    "An initial freeze invocation omitted the required operation id; all six operations were subsequently frozen individually."
+  "limits": [
+    "No production system or production credential was used.",
+    "No streamable_http Gateway or multi-user session was exercised.",
+    "The CRM candidate uses legacy required-tenant Policy injection rather than explicit context_bindings."
   ]
 }

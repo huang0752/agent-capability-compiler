@@ -101,7 +101,7 @@ This file records fresh command evidence at each milestone. A status changes to 
 - The `streamable_http` schema accepts only the Gateway-session authentication combination; `acc run` still rejects it until the multi-user Gateway phase.
 - Migrated the synthetic FastAPI CRM example to Provider-level `bearer_secret` and removed credentials from all six Operations.
 - Fake Runtime/Fake E2E remains `offline_candidate`; `source_connected_verified` requires a separately authorized and successful local/test source connection. This milestone does not assert production behavior or validation of any unrelated source system.
-- Provider-auth/stdio/CRM/Skill focused regression: 85 passed; local synthetic CRM source: 34 passed; repository: 714 passed.
+- Provider-auth/stdio/CRM/Skill focused regression: 85 passed; local synthetic CRM source: 34 passed; repository: 720 passed.
 - `acc validate` and `acc compile --check` passed; with the local synthetic CRM running, ACC Contract, Runtime, and E2E suites each passed 9/9. This is `source_connected_verified` for that synthetic test source only.
 - Strict mypy passed for 102 source files; Ruff lint and the changed-file format check passed; Skill quick validation reported `Skill is valid!`.
 - The repository-wide Ruff format gate remains open on nine files outside this migration, including the read-only synthetic source and concurrent scope-governance work. Those files were not reformatted in this task, so Milestone 7 remains `Verification in progress`.

@@ -182,7 +182,11 @@ def _init_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope]:
         "project": {"id": target.name, "version": "0.1.0"},
         "source_workspace": {"path": "../system", "mode": "read_only"},
         "runtime": {"transport": ["stdio"]},
-        "provider": {"kind": "http", "base_url_ref": "ACC_TARGET_BASE_URL"},
+        "provider": {
+            "kind": "http",
+            "base_url_ref": "ACC_TARGET_BASE_URL",
+            "auth": {"kind": "none"},
+        },
     }
     project_file.write_text(yaml.safe_dump(template, sort_keys=False), encoding="utf-8")
     return EXIT_SUCCESS, _success("init", {"path": str(target)})

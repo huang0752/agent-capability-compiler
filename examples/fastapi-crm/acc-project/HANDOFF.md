@@ -11,8 +11,15 @@ evidence-bound REST Operations:
 - `find_overdue_followups` returns open followups before an explicit deterministic date.
 
 The source system is `../system`; the isolated ACC project is this directory. Runtime configuration
-uses `CRM_BASE_URL`, `CRM_DEMO_TOKEN`, granted scopes, and tenant context. Credential values, tenant,
-base URL, and authorization headers are not Agent tool inputs.
+uses Provider-level `bearer_secret` through the `CRM_DEMO_TOKEN` environment reference, plus
+`CRM_BASE_URL`, deployment scopes, and tenant context. All six Operations omit legacy
+`credential_ref`. Credential values, tenant, base URL, and authorization headers are not Agent tool
+inputs.
+
+This candidate does not declare `context_bindings`. Its hidden `tenant_id` is injected through the
+required-tenant Policy compatibility path from the fixed stdio `PrincipalContext`. That verifies
+legacy tenant injection, not the explicit context-binding contract. `streamable_http` Gateway and
+request-level multi-user identity were not exercised by this example.
 
 ## Evidence and source integrity
 
@@ -32,13 +39,15 @@ Operation. Final read-only verification matched the Phase 0 snapshot:
 
 - `acc validate --json`: 3 capabilities, 9 evals, 6 operations, 3 policies; no diagnostics.
 - `acc compile --check --json`: passed; IR SHA-256
-  `373249da83b925b9780d91e66c9018c144254801f6340b79faf5190992bc9876`.
+  `da3598860f83cc01fd0824f68ba8ca6a7862e5f89700c7594891edf4d6de4258`.
 - `acc coverage --json`: no orphan Operations or missing eval/permission-negative coverage; two
   low-risk one-interface heuristics are retained and explained in `risk-report.json`.
 - Contract, Runtime, and E2E suites: each 9/9 passed against the local synthetic CRM.
-- Pack built twice byte-identically: SHA-256
-  `d6670760bc1d690f6e34e57cc9dff029c258f91a4912486fd7032345724fc6ae`.
-- Repository: 281 tests passed; Ruff format/lint and strict mypy passed for 84 files.
+- Pack built twice byte-identically on 2026-08-06: SHA-256
+  `6d13a596446fa7dd7cbe34d7345fd642d75bfca918fff7825de91686a18d97b5`.
+- Repository on 2026-08-06: 720 tests passed; Ruff lint, changed-file format checks, and strict
+  mypy for 102 files passed. Repository-wide Ruff format remains open on nine files outside this
+  migration, including the immutable synthetic source and separate scope-governance work.
 - Independent source system: 34 tests passed; Ruff and strict mypy passed.
 - Real MCP stdio initialized, listed all three tools, and called `get_customer_context` without a
   token in tool arguments or stderr.
@@ -48,10 +57,12 @@ See `coverage-report.json`, `test-report.json`, and `risk-report.json` for machi
 
 ## Validation limits
 
-No production system, credential, deployment, write path, rate limit, or availability target was
-tested. The FastAPI source generates OpenAPI at runtime rather than storing it as a checked-in file.
-Timeout and oversize responses were simulated at the generic HTTP transport boundary. These are
-documented limits, not production assurances.
+Validation level is `source_connected_verified` only for the explicitly started local synthetic CRM;
+the ACC Contract suite and isolated fixture coverage are also `offline_candidate`. No production
+system, credential, deployment, write path, rate limit, availability target, `streamable_http`
+Gateway, or unrelated source checkout was tested. The FastAPI source generates OpenAPI at runtime
+rather than storing it as a checked-in file. Timeout and oversize responses were simulated at the
+generic HTTP transport boundary. These are documented limits, not production assurances.
 
 ## Human review order
 

@@ -66,6 +66,8 @@ to this local synthetic CRM and succeeds. Neither level proves production behavi
 unrelated source checkout or online system.
 
 For new integrations, Provider authentication is one of `none`, `bearer_secret`, or
-`password_bearer`. Trusted request values are carried by `PrincipalContext` and may be injected only
-through compiler-checked `context_bindings`; account credentials, JWTs, and tenant identifiers must
-not become Agent inputs.
+`password_bearer`. Runtime supports compiler-checked `context_bindings` sourced from
+`PrincipalContext`, but this CRM candidate does not declare one. Its hidden `tenant_id` is still
+injected by the legacy required-tenant Policy compatibility path from the fixed stdio tenant
+context. This proves backward-compatible tenant isolation, not the explicit binding contract;
+account credentials, JWTs, and tenant identifiers still must not become Agent inputs.
