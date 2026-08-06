@@ -163,6 +163,13 @@ def test_templates_track_current_strict_public_models() -> None:
     assert plan["coverage"]["scope_inventory"] == "scope-inventory.yaml"
     assert plan["coverage"]["exclusion_decision_refs"] == []
     assert "deliberately_excluded" not in plan["coverage"]
+    assert set(plan["coverage"]["route_dispositions"]) == {
+        "planned",
+        "composed",
+        "excluded",
+        "blocked_on_evidence",
+        "out_of_scope",
+    }
     baseline = json.loads(
         (SKILL / "templates" / "coverage-baseline.json").read_text(encoding="utf-8")
     )
@@ -230,6 +237,10 @@ def test_scope_governance_guides_define_each_phase_contract() -> None:
         "ineligible",
     ):
         assert contract in plan
+    assert "不再要求 legacy `reason`" in plan
+    assert "pilot/domain" in plan
+    assert "精确一致" in plan
+    assert "/routes/{index}/exclusion_decision" in plan
     assert "warning" in validate
     assert "不阻断" in validate
     for risk in ("重复 decision", "整域零能力", "高排除率", ">= 10", ">= 70%"):

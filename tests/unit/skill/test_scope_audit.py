@@ -140,6 +140,7 @@ def _write_project(
     approval_text: str | None = None,
     system_operation_records: list[dict[str, object]] | None = None,
     plan_capabilities: list[dict[str, object]] | None = None,
+    plan_coverage: dict[str, object] | None = None,
 ) -> Path:
     project = tmp_path / "acc-project"
     project.mkdir()
@@ -224,8 +225,42 @@ def _write_project(
         if plan_capabilities is not None
         else [{"id": "scope-capability", "operation_dependencies": actual_plan_dependencies}]
     )
+    actual_route_dispositions: dict[str, list[str]] = {
+        disposition: []
+        for disposition in (
+            "planned",
+            "composed",
+            "excluded",
+            "blocked_on_evidence",
+            "out_of_scope",
+        )
+    }
+    exclusion_decision_refs: list[str] = []
+    for index, route in enumerate(actual_routes):
+        if not isinstance(route, dict):
+            continue
+        route_id = route.get("id")
+        disposition = route.get("disposition")
+        if isinstance(route_id, str) and disposition in actual_route_dispositions:
+            actual_route_dispositions[str(disposition)].append(route_id)
+        if (
+            route.get("eligibility") == "eligible"
+            and disposition == "excluded"
+            and isinstance(route.get("exclusion_decision"), dict)
+        ):
+            exclusion_decision_refs.append(f"/routes/{index}/exclusion_decision")
+    actual_coverage = (
+        plan_coverage
+        if plan_coverage is not None
+        else {
+            "scope_mode": mode,
+            "scope_inventory": "scope-inventory.yaml",
+            "route_dispositions": actual_route_dispositions,
+            "exclusion_decision_refs": exclusion_decision_refs,
+        }
+    )
     (project / "capability-plan.yaml").write_text(
-        yaml.safe_dump({"capabilities": actual_capabilities}),
+        yaml.safe_dump({"capabilities": actual_capabilities, "coverage": actual_coverage}),
         encoding="utf-8",
     )
     (project / "coverage-baseline.json").write_text(
@@ -812,6 +847,46 @@ def test_system_complete_requires_structured_exclusion_rule_and_decision(
         "ACC_SCOPE_EXCLUSION_RULE_REQUIRED",
         "ACC_SCOPE_ROUTE_EXCLUSION_DECISION_REQUIRED",
         "ACC_SCOPE_DOMAIN_ZERO_CAPABILITY",
+        "ACC_SCOPE_PLAN_EXCLUSION_DECISION_REFS_INVALID",
+    }
+
+
+def test_valid_structured_system_exclusion_does_not_require_legacy_reason(
+    tmp_path: Path,
+) -> None:
+    route, rule = _excluded_route("customer.download")
+    route["reason"] = None
+    project = _write_project(
+        tmp_path,
+        routes=[route, _route("customer.search")],
+        exclusion_rules=[rule],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 0
+    assert payload["ok"] is True
+
+
+def test_malformed_structured_system_exclusion_still_requires_legacy_reason(
+    tmp_path: Path,
+) -> None:
+    route, rule = _excluded_route("customer.download")
+    route["reason"] = None
+    assert isinstance(route["exclusion_decision"], dict)
+    route["exclusion_decision"]["evidence_sources"] = []
+    project = _write_project(
+        tmp_path,
+        routes=[route, _route("customer.search")],
+        exclusion_rules=[rule],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert {item["code"] for item in payload["diagnostics"]} >= {
+        "ACC_SCOPE_EXCLUSION_EVIDENCE_REQUIRED",
+        "ACC_SCOPE_REASON_REQUIRED",
     }
 
 
@@ -1495,3 +1570,195 @@ def test_cross_domain_rule_rationale_reuse_is_a_warning(tmp_path: Path) -> None:
         if item["code"] == "ACC_SCOPE_EXCLUSION_TEMPLATE_REUSED"
     )
     assert warning["severity"] == "warning"
+
+
+def test_system_complete_plan_coverage_matches_inventory_and_decisions(
+    tmp_path: Path,
+) -> None:
+    excluded, rule = _excluded_route("customer.download")
+    project = _write_project(
+        tmp_path,
+        routes=[excluded, _route("customer.search")],
+        exclusion_rules=[rule],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 0
+    assert payload["ok"] is True
+
+
+@pytest.mark.parametrize(
+    "route_dispositions",
+    [
+        {
+            "planned": [],
+            "composed": [],
+            "excluded": ["customer.download"],
+            "blocked_on_evidence": [],
+            "out_of_scope": [],
+        },
+        {
+            "planned": ["customer.search", "unknown.route"],
+            "composed": [],
+            "excluded": ["customer.download"],
+            "blocked_on_evidence": [],
+            "out_of_scope": [],
+        },
+        {
+            "planned": ["customer.search", "customer.search"],
+            "composed": [],
+            "excluded": ["customer.download"],
+            "blocked_on_evidence": [],
+            "out_of_scope": [],
+        },
+        {
+            "planned": ["customer.search", "   "],
+            "composed": [],
+            "excluded": ["customer.download"],
+            "blocked_on_evidence": [],
+            "out_of_scope": [],
+        },
+    ],
+)
+def test_system_complete_rejects_inexact_plan_route_dispositions(
+    tmp_path: Path, route_dispositions: dict[str, list[str]]
+) -> None:
+    excluded, rule = _excluded_route("customer.download")
+    project = _write_project(
+        tmp_path,
+        routes=[excluded, _route("customer.search")],
+        exclusion_rules=[rule],
+        plan_coverage={
+            "scope_mode": "system_readonly_complete",
+            "scope_inventory": "scope-inventory.yaml",
+            "route_dispositions": route_dispositions,
+            "exclusion_decision_refs": ["/routes/0/exclusion_decision"],
+        },
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert "ACC_SCOPE_PLAN_ROUTE_DISPOSITIONS_MISMATCH" in {
+        item["code"] for item in payload["diagnostics"]
+    }
+
+
+@pytest.mark.parametrize(
+    "decision_refs",
+    [
+        [],
+        ["/routes/1/exclusion_decision"],
+        ["/routes/0/exclusion_decision", "/routes/0/exclusion_decision"],
+        ["customer.download"],
+        ["   "],
+    ],
+)
+def test_system_complete_rejects_inexact_exclusion_decision_refs(
+    tmp_path: Path, decision_refs: list[str]
+) -> None:
+    excluded, rule = _excluded_route("customer.download")
+    project = _write_project(
+        tmp_path,
+        routes=[excluded, _route("customer.search")],
+        exclusion_rules=[rule],
+        plan_coverage={
+            "scope_mode": "system_readonly_complete",
+            "scope_inventory": "scope-inventory.yaml",
+            "route_dispositions": {
+                "planned": ["customer.search"],
+                "composed": [],
+                "excluded": ["customer.download"],
+                "blocked_on_evidence": [],
+                "out_of_scope": [],
+            },
+            "exclusion_decision_refs": decision_refs,
+        },
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert "ACC_SCOPE_PLAN_EXCLUSION_DECISION_REFS_INVALID" in {
+        item["code"] for item in payload["diagnostics"]
+    }
+
+
+def test_system_complete_rejects_legacy_free_text_plan_exclusions(tmp_path: Path) -> None:
+    project = _write_project(tmp_path)
+    plan_path = project / "capability-plan.yaml"
+    plan = yaml.safe_load(plan_path.read_text(encoding="utf-8"))
+    plan["coverage"]["deliberately_excluded"] = [
+        {"item": "customer.download", "reason": "duplicate authority"}
+    ]
+    plan_path.write_text(yaml.safe_dump(plan, sort_keys=False), encoding="utf-8")
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert "ACC_SCOPE_PLAN_FREE_TEXT_EXCLUSION_FORBIDDEN" in {
+        item["code"] for item in payload["diagnostics"]
+    }
+
+
+def test_system_complete_requires_structured_plan_coverage(tmp_path: Path) -> None:
+    project = _write_project(tmp_path)
+    plan_path = project / "capability-plan.yaml"
+    plan = yaml.safe_load(plan_path.read_text(encoding="utf-8"))
+    del plan["coverage"]
+    plan_path.write_text(yaml.safe_dump(plan, sort_keys=False), encoding="utf-8")
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert {item["code"] for item in payload["diagnostics"]} == {
+        "ACC_SCOPE_PLAN_ROUTE_DISPOSITIONS_MISMATCH",
+        "ACC_SCOPE_PLAN_EXCLUSION_DECISION_REFS_INVALID",
+    }
+
+
+def test_plan_coverage_diagnostic_does_not_echo_invalid_pointer_value(
+    tmp_path: Path,
+) -> None:
+    secret = "decision-ref-secret-never-output"
+    project = _write_project(
+        tmp_path,
+        plan_coverage={
+            "scope_mode": "system_readonly_complete",
+            "scope_inventory": "scope-inventory.yaml",
+            "route_dispositions": {
+                "planned": ["customer.search"],
+                "composed": [],
+                "excluded": [],
+                "blocked_on_evidence": [],
+                "out_of_scope": [],
+            },
+            "exclusion_decision_refs": [secret],
+        },
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert payload["diagnostics"][0]["code"] == ("ACC_SCOPE_PLAN_EXCLUSION_DECISION_REFS_INVALID")
+    assert secret not in completed.stdout
+
+
+def test_legacy_pilot_plan_without_structured_coverage_remains_compatible(
+    tmp_path: Path,
+) -> None:
+    project = _write_project(
+        tmp_path,
+        mode="pilot",
+        user_confirmation="Approved pilot.",
+    )
+    plan_path = project / "capability-plan.yaml"
+    plan = yaml.safe_load(plan_path.read_text(encoding="utf-8"))
+    del plan["coverage"]
+    plan_path.write_text(yaml.safe_dump(plan, sort_keys=False), encoding="utf-8")
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 0
+    assert payload["ok"] is True

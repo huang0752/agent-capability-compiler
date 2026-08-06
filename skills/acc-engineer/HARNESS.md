@@ -57,7 +57,7 @@ Normalize only the observed domain: entities, relations, read operations, permis
 
 ### 3. Plan
 
-Assign every eligible discovered route exactly one disposition: `planned`, `composed`, `excluded`, or `blocked_on_evidence`; `out_of_scope` is valid only where the declared mode permits it. System-complete exclusions require a structured rule and distinct route decision; subjective and frontend-used exclusions require exact route approval. Keep legacy ineligible reason plus Evidence, and never count `blocked_on_evidence` as complete. Reconcile the `source_scope` baseline before designing the smallest valuable business capabilities. Keep credentials, tenant identity, and server-derived values out of agent inputs. Require positive and permission-negative Evals where applicable. Do not advance with unresolved scope.
+Assign every eligible discovered route exactly one disposition: `planned`, `composed`, `excluded`, or `blocked_on_evidence`; `out_of_scope` is valid only where the declared mode permits it. System-complete exclusions require a structured rule and distinct route decision, which replace legacy reason only when valid; subjective and frontend-used exclusions require exact route approval. Ineligible, blocked, out-of-scope, and pilot/domain legacy exclusions keep reason plus Evidence. Capability Plan route lists and decision pointers exactly close over Inventory without duplicate free text. Never count `blocked_on_evidence` as complete. Reconcile the `source_scope` baseline before designing the smallest valuable business capabilities. Keep credentials, tenant identity, and server-derived values out of agent inputs. Require positive and permission-negative Evals where applicable. Do not advance with unresolved scope.
 
 ### 4. Implement
 

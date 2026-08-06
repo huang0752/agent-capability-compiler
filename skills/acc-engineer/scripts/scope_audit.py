@@ -437,6 +437,81 @@ def audit_route_exclusion_decision(
     return diagnostics
 
 
+def valid_structured_exclusion_route_ids(document: Mapping[str, object]) -> set[str]:
+    """Return routes whose rule and distinct route decision form a valid authority."""
+
+    routes = index_routes(document)
+    raw_rules = document.get("exclusion_rules")
+    if not isinstance(raw_rules, list):
+        return set()
+    rules_by_id: dict[str, list[Mapping[str, object]]] = defaultdict(list)
+    route_memberships: dict[str, int] = defaultdict(int)
+    for raw_rule in raw_rules:
+        if not isinstance(raw_rule, Mapping):
+            continue
+        rule = cast(Mapping[str, object], raw_rule)
+        rule_id = string_at(rule, "id")
+        if rule_id:
+            rules_by_id[rule_id].append(rule)
+        route_ids = string_list_at(rule, "route_ids") or []
+        for route_id in route_ids:
+            route_memberships[route_id] += 1
+
+    rationale_counts: dict[str, int] = defaultdict(int)
+    for _, route in routes.values():
+        if (
+            string_at(route, "eligibility") == "eligible"
+            and string_at(route, "disposition") == "excluded"
+        ):
+            decision = mapping_at(route, "exclusion_decision")
+            rationale = string_at(decision or {}, "rationale")
+            if rationale is not None and rationale.strip():
+                rationale_counts[normalize_rationale(rationale)] += 1
+
+    valid: set[str] = set()
+    for route_id, (_, route) in routes.items():
+        if (
+            string_at(route, "eligibility") != "eligible"
+            or string_at(route, "disposition") != "excluded"
+        ):
+            continue
+        rule_id = string_at(route, "exclusion_rule_id")
+        matching_rules = rules_by_id.get(rule_id or "", [])
+        decision = mapping_at(route, "exclusion_decision")
+        if len(matching_rules) != 1 or decision is None:
+            continue
+        rule = matching_rules[0]
+        rule_route_ids = non_empty_string_list(rule.get("route_ids"))
+        rule_rationale = string_at(rule, "rationale")
+        decision_rationale = string_at(decision, "rationale")
+        if (
+            string_at(rule, "category") not in EXCLUSION_CATEGORIES
+            or rule_route_ids is None
+            or route_id not in rule_route_ids
+            or route_memberships[route_id] != 1
+            or rule_rationale is None
+            or not rule_rationale.strip()
+            or non_empty_string_list(rule.get("evidence_sources")) is None
+            or decision_rationale is None
+            or not decision_rationale.strip()
+            or rationale_counts[normalize_rationale(decision_rationale)] != 1
+            or non_empty_string_list(decision.get("evidence_sources")) is None
+        ):
+            continue
+        relation_valid = True
+        for member_route_id in rule_route_ids:
+            member = routes.get(member_route_id)
+            if member is None or (
+                string_at(member[1], "eligibility") != "eligible"
+                or string_at(member[1], "disposition") != "excluded"
+                or string_at(member[1], "exclusion_rule_id") != rule_id
+            ):
+                relation_valid = False
+        if relation_valid:
+            valid.add(route_id)
+    return valid
+
+
 def audit_inventory(
     document: Mapping[str, object], *, path: str
 ) -> tuple[dict[str, object], list[dict[str, object]]]:
@@ -514,6 +589,7 @@ def audit_inventory(
                     pointer=f"/scope/selected_domains/{index}",
                 )
 
+    valid_structured_exclusions = valid_structured_exclusion_route_ids(document)
     seen: set[str] = set()
     operation_ids: set[str] = set()
     counters = {name: 0 for name in SUMMARY_FIELDS}
@@ -667,8 +743,16 @@ def audit_inventory(
             )
 
         reason = string_at(route, "reason")
-        if disposition in {"excluded", "blocked_on_evidence", "out_of_scope"} and (
-            reason is None or not reason.strip()
+        structured_reason_authority = (
+            mode == "system_readonly_complete"
+            and eligibility == "eligible"
+            and disposition == "excluded"
+            and route_id in valid_structured_exclusions
+        )
+        if (
+            disposition in {"excluded", "blocked_on_evidence", "out_of_scope"}
+            and not structured_reason_authority
+            and (reason is None or not reason.strip())
         ):
             add_issue(
                 diagnostics,
@@ -1147,6 +1231,122 @@ def audit_exclusion_heuristics(
     return diagnostics
 
 
+def audit_plan_scope_coverage(
+    inventory: Mapping[str, object], capability_plan: Mapping[str, object]
+) -> list[dict[str, object]]:
+    """Close system-complete Capability Plan coverage over the Scope Inventory."""
+
+    diagnostics: list[dict[str, object]] = []
+    scope = mapping_at(inventory, "scope") or {}
+    if string_at(scope, "mode") != "system_readonly_complete":
+        return diagnostics
+    coverage = mapping_at(capability_plan, "coverage")
+    if coverage is None:
+        add_issue(
+            diagnostics,
+            "ACC_SCOPE_PLAN_ROUTE_DISPOSITIONS_MISMATCH",
+            "system-complete capability plan requires structured route dispositions",
+            path="capability-plan.yaml",
+            pointer="/coverage",
+        )
+        add_issue(
+            diagnostics,
+            "ACC_SCOPE_PLAN_EXCLUSION_DECISION_REFS_INVALID",
+            "system-complete capability plan requires exact exclusion decision references",
+            path="capability-plan.yaml",
+            pointer="/coverage",
+        )
+        return diagnostics
+    if "deliberately_excluded" in coverage:
+        add_issue(
+            diagnostics,
+            "ACC_SCOPE_PLAN_FREE_TEXT_EXCLUSION_FORBIDDEN",
+            "capability plan must not duplicate authoritative exclusion facts",
+            path="capability-plan.yaml",
+            pointer="/coverage/deliberately_excluded",
+        )
+
+    expected_dispositions: dict[str, set[str]] = {
+        disposition: set() for disposition in sorted(DISPOSITIONS)
+    }
+    expected_decision_refs: set[str] = set()
+    routes = inventory.get("routes")
+    if isinstance(routes, list):
+        for index, raw_route in enumerate(routes):
+            if not isinstance(raw_route, Mapping):
+                continue
+            route = cast(Mapping[str, object], raw_route)
+            route_id = string_at(route, "id")
+            disposition = string_at(route, "disposition")
+            if route_id and disposition in expected_dispositions:
+                expected_dispositions[disposition].add(route_id)
+            if string_at(route, "eligibility") == "eligible" and disposition == "excluded":
+                expected_decision_refs.add(f"/routes/{index}/exclusion_decision")
+
+    route_dispositions = mapping_at(coverage, "route_dispositions")
+    dispositions_valid = route_dispositions is not None and set(route_dispositions) == set(
+        expected_dispositions
+    )
+    seen_route_ids: set[str] = set()
+    if route_dispositions is not None:
+        for disposition, expected_ids in expected_dispositions.items():
+            raw_ids = route_dispositions.get(disposition)
+            if (
+                not isinstance(raw_ids, list)
+                or not all(isinstance(item, str) and bool(item.strip()) for item in raw_ids)
+                or len(raw_ids) != len(set(raw_ids))
+                or set(cast(list[str], raw_ids)) != expected_ids
+            ):
+                dispositions_valid = False
+                continue
+            if seen_route_ids.intersection(cast(list[str], raw_ids)):
+                dispositions_valid = False
+            seen_route_ids.update(cast(list[str], raw_ids))
+    if not dispositions_valid:
+        add_issue(
+            diagnostics,
+            "ACC_SCOPE_PLAN_ROUTE_DISPOSITIONS_MISMATCH",
+            "capability plan route dispositions must exactly match the inventory",
+            path="capability-plan.yaml",
+            pointer="/coverage/route_dispositions",
+        )
+
+    raw_refs = coverage.get("exclusion_decision_refs")
+    refs_valid = (
+        isinstance(raw_refs, list)
+        and all(isinstance(item, str) and bool(item.strip()) for item in raw_refs)
+        and len(raw_refs) == len(set(raw_refs))
+        and set(cast(list[str], raw_refs)) == expected_decision_refs
+    )
+    if refs_valid and isinstance(routes, list):
+        for reference in cast(list[str], raw_refs):
+            match = re.fullmatch(r"/routes/(0|[1-9][0-9]*)/exclusion_decision", reference)
+            if match is None:
+                refs_valid = False
+                break
+            route_index = int(match.group(1))
+            if route_index >= len(routes):
+                refs_valid = False
+                break
+            referenced_route = routes[route_index]
+            if (
+                not isinstance(referenced_route, Mapping)
+                or mapping_at(cast(Mapping[str, object], referenced_route), "exclusion_decision")
+                is None
+            ):
+                refs_valid = False
+                break
+    if not refs_valid:
+        add_issue(
+            diagnostics,
+            "ACC_SCOPE_PLAN_EXCLUSION_DECISION_REFS_INVALID",
+            "capability plan must exactly reference existing structured exclusion decisions",
+            path="capability-plan.yaml",
+            pointer="/coverage/exclusion_decision_refs",
+        )
+    return diagnostics
+
+
 def audit_cross_artifacts(
     result: Mapping[str, object],
     *,
@@ -1215,6 +1415,7 @@ def audit_cross_artifacts(
         audit_domain_capability_coverage(inventory, valid_subsumed_routes=valid_subsumed_routes)
     )
     diagnostics.extend(audit_exclusion_heuristics(inventory, rules))
+    diagnostics.extend(audit_plan_scope_coverage(inventory, capability_plan))
     return diagnostics
 
 

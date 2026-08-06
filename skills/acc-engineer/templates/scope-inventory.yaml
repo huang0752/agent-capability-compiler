@@ -19,6 +19,8 @@ exclusion_rules: []
 # For every eligible excluded route, add exactly one rule with:
 # id, category, route_ids, rationale, and evidence_sources. The route must
 # reference it through exclusion_rule_id and carry its own exclusion_decision.
+# A valid structured system-complete exclusion leaves legacy reason null.
+# Ineligible, blocked, out-of-scope, pilot/domain legacy exclusions still need reason.
 routes:
   - id: REPLACE_WITH_SCOPE_ROUTE_ID
     # Keep the established `domain` key; do not rename it to `domain_id`.

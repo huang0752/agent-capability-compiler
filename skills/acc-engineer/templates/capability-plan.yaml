@@ -33,8 +33,10 @@ coverage:
     excluded: []
     blocked_on_evidence: []
     out_of_scope: []
-  # JSON Pointer-style references only. The authoritative rationale, evidence,
-  # approval, replacement routes, and capability IDs remain in Scope Inventory.
+  # Exact JSON Pointers only: /routes/{index}/exclusion_decision. This list
+  # covers every system-complete eligible excluded decision. The authoritative
+  # rationale, evidence, approval, replacements, and capability IDs remain in
+  # Scope Inventory; never add a free-text deliberately_excluded section here.
   exclusion_decision_refs: []
   high_value_operations:
     - REPLACE_WITH_OPERATION_ID

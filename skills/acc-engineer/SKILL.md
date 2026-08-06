@@ -22,7 +22,7 @@ If the request is only to audit or refine an existing ACC project, still run Pre
 - `pilot` is allowed 只有用户明确提出 MVP/试点范围并记录其确认时；不得为加快交付自行缩小范围。
 - First perform 浅层全局发现 to establish the route denominator, then use bounded `--include` paths for deep Evidence capture. An include list is never the discovery denominator.
 - Normalize 前端 call evidence into route `usage_evidence_sources`; the auditor does not parse framework source. Excluding a frontend-used eligible route always emits a warning, and `system_readonly_complete` also errors when that exact route 未精确批准.
-- In system-complete scope, every eligible exclusion uses one `exclusion_rules` entry plus a distinct route `exclusion_decision`. Keep legacy `reason` for ineligible compatibility, but require its Evidence; `blocked_on_evidence` remains a release blocker.
+- In system-complete scope, every eligible exclusion uses one `exclusion_rules` entry plus a distinct route `exclusion_decision`; a valid pair replaces legacy `reason`. Ineligible, blocked, out-of-scope, and pilot/domain legacy exclusions still require reason and Evidence. Capability Plan coverage must exactly mirror route dispositions and reference decisions without duplicating their prose.
 - Label Fake Runtime/E2E results `offline_candidate`. Use `source_connected_verified` only after an explicitly authorized local/test source connection succeeds; neither label proves production behavior.
 
 ## Authentication and request identity
