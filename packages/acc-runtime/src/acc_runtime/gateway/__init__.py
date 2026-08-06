@@ -12,6 +12,11 @@ from acc_runtime.gateway.audit import (
     NoopAuditSink,
     OperationObserver,
 )
+from acc_runtime.gateway.auth import (
+    GatewayPrincipalResolver,
+    GatewaySessionLookup,
+    GatewayTokenVerifier,
+)
 from acc_runtime.gateway.models import (
     GatewaySessionRecord,
     GatewaySessionStatus,
@@ -36,15 +41,18 @@ __all__ = [
     "AuditResultCategory",
     "AuditSink",
     "AuditSpan",
+    "GatewayPrincipalResolver",
     "GatewayReauthRequiredError",
     "GatewaySessionCapacityError",
     "GatewaySessionExpiredError",
     "GatewaySessionInvalidError",
+    "GatewaySessionLookup",
     "GatewaySessionRecord",
     "GatewaySessionService",
     "GatewaySessionStatus",
     "GatewaySessionStore",
     "GatewaySettings",
+    "GatewayTokenVerifier",
     "InMemoryGatewaySessionStore",
     "LoggingAuditSink",
     "MemoryAuditSink",
