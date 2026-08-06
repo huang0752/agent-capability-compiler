@@ -72,6 +72,71 @@ def string_list_at(document: Mapping[str, object], key: str) -> list[str] | None
     return cast(list[str], value)
 
 
+def declared_domain_ids(document: Mapping[str, object]) -> set[str]:
+    """Return non-empty domain identifiers declared by the inventory."""
+
+    domains = document.get("domains")
+    if not isinstance(domains, list):
+        return set()
+    return {
+        domain_id
+        for item in domains
+        if isinstance(item, Mapping)
+        and (domain_id := string_at(item, "id")) is not None
+        and bool(domain_id.strip())
+    }
+
+
+def system_operation_ids(document: Mapping[str, object]) -> set[str]:
+    """Index operation identifiers declared in the System Map."""
+
+    operations = document.get("candidate_operations")
+    if not isinstance(operations, list):
+        return set()
+    return {
+        operation_id
+        for item in operations
+        if isinstance(item, Mapping)
+        and (operation_id := string_at(item, "id")) is not None
+        and bool(operation_id)
+    }
+
+
+def plan_operation_ids(document: Mapping[str, object]) -> set[str]:
+    """Index all operation dependencies declared by planned capabilities."""
+
+    capabilities = document.get("capabilities")
+    if not isinstance(capabilities, list):
+        return set()
+    result: set[str] = set()
+    for capability in capabilities:
+        if not isinstance(capability, Mapping):
+            continue
+        dependencies = capability.get("operation_dependencies")
+        if isinstance(dependencies, list):
+            result.update(
+                item for item in dependencies if isinstance(item, str) and item
+            )
+    return result
+
+
+def coverage_source_scope(source_scope: Mapping[str, object]) -> dict[str, object]:
+    """Project inventory counters onto the coverage baseline denominator."""
+
+    planned = source_scope.get("planned")
+    composed = source_scope.get("composed")
+    planned_or_composed: object = None
+    if isinstance(planned, int) and isinstance(composed, int):
+        planned_or_composed = planned + composed
+    return {
+        "eligible_read_routes": source_scope.get("eligible_read_routes"),
+        "planned_or_composed": planned_or_composed,
+        "excluded": source_scope.get("excluded"),
+        "blocked_on_evidence": source_scope.get("blocked_on_evidence"),
+        "unresolved": source_scope.get("unresolved"),
+    }
+
+
 def is_origin_relative_path(value: str | None) -> bool:
     """Return whether a route path is an unambiguous origin-relative path."""
 
@@ -148,6 +213,7 @@ def audit_inventory(
     mode = string_at(scope, "mode")
     confirmation = string_at(scope, "user_confirmation")
     selected_domains = string_list_at(scope, "selected_domains")
+    selected_domain_ids = set(selected_domains or [])
     if mode not in SCOPE_MODES:
         add_issue(
             diagnostics,
@@ -172,6 +238,17 @@ def audit_inventory(
             path=path,
             pointer="/scope/selected_domains",
         )
+    if mode == "domain_complete" and selected_domains:
+        declared_domains = declared_domain_ids(document)
+        for index, domain_id in enumerate(selected_domains):
+            if domain_id not in declared_domains:
+                add_issue(
+                    diagnostics,
+                    "ACC_SCOPE_DOMAIN_UNDECLARED",
+                    "selected domain must be declared in the inventory",
+                    path=path,
+                    pointer=f"/scope/selected_domains/{index}",
+                )
 
     seen: set[str] = set()
     operation_ids: set[str] = set()
@@ -274,6 +351,28 @@ def audit_inventory(
             continue
         counters[disposition] += 1
 
+        if mode == "domain_complete" and selected_domain_ids:
+            if (
+                domain in selected_domain_ids
+                and eligibility == "eligible"
+                and disposition not in TERMINAL_COMPLETE
+            ):
+                add_issue(
+                    diagnostics,
+                    "ACC_SCOPE_DOMAIN_INCOMPLETE",
+                    "eligible selected-domain route must have a complete disposition",
+                    path=path,
+                    pointer=f"{pointer}/disposition",
+                )
+            if domain not in selected_domain_ids and disposition != "out_of_scope":
+                add_issue(
+                    diagnostics,
+                    "ACC_SCOPE_DOMAIN_BOUNDARY_AMBIGUOUS",
+                    "route outside selected domains must be explicitly out of scope",
+                    path=path,
+                    pointer=f"{pointer}/disposition",
+                )
+
         if eligibility == "ineligible" and disposition in {"planned", "composed"}:
             add_issue(
                 diagnostics,
@@ -342,6 +441,60 @@ def audit_inventory(
     return result, diagnostics
 
 
+def audit_cross_artifacts(
+    result: Mapping[str, object],
+    *,
+    system_map: Mapping[str, object],
+    capability_plan: Mapping[str, object],
+    coverage_baseline: Mapping[str, object],
+) -> list[dict[str, object]]:
+    """Validate operation references and the source-scope denominator."""
+
+    diagnostics: list[dict[str, object]] = []
+    operation_ids = result.get("operation_ids")
+    required_operations = (
+        sorted(item for item in operation_ids if isinstance(item, str))
+        if isinstance(operation_ids, list)
+        else []
+    )
+    mapped_operations = system_operation_ids(system_map)
+    planned_operations = plan_operation_ids(capability_plan)
+    for operation_id in required_operations:
+        if operation_id not in mapped_operations:
+            add_issue(
+                diagnostics,
+                "ACC_SCOPE_SYSTEM_MAP_MISSING_OPERATION",
+                "planned or composed operation must exist in the System Map",
+                path="system-map.yaml",
+                pointer="/candidate_operations",
+            )
+        if operation_id not in planned_operations:
+            add_issue(
+                diagnostics,
+                "ACC_SCOPE_PLAN_MISSING_OPERATION",
+                "planned or composed operation must exist in the capability plan",
+                path="capability-plan.yaml",
+                pointer="/capabilities",
+            )
+
+    inventory_source_scope = result.get("source_scope")
+    baseline_source_scope = mapping_at(coverage_baseline, "source_scope")
+    expected_source_scope = (
+        coverage_source_scope(inventory_source_scope)
+        if isinstance(inventory_source_scope, Mapping)
+        else None
+    )
+    if baseline_source_scope != expected_source_scope:
+        add_issue(
+            diagnostics,
+            "ACC_SCOPE_COVERAGE_MISMATCH",
+            "coverage source scope must match the inventory denominator",
+            path="coverage-baseline.json",
+            pointer="/source_scope",
+        )
+    return diagnostics
+
+
 def parser() -> JsonArgumentParser:
     value = JsonArgumentParser(command="scope-audit")
     value.add_argument("--project", required=True)
@@ -356,8 +509,25 @@ def main(argv: list[str] | None = None) -> int:
         inventory_path = safe_existing_path(
             str(project / "scope-inventory.yaml"), kind="file"
         )
+        system_map_path = safe_existing_path(
+            str(project / "system-map.yaml"), kind="file"
+        )
+        capability_plan_path = safe_existing_path(
+            str(project / "capability-plan.yaml"), kind="file"
+        )
+        coverage_baseline_path = safe_existing_path(
+            str(project / "coverage-baseline.json"), kind="file"
+        )
         result, diagnostics = audit_inventory(
             load_document(inventory_path), path="scope-inventory.yaml"
+        )
+        diagnostics.extend(
+            audit_cross_artifacts(
+                result,
+                system_map=load_document(system_map_path),
+                capability_plan=load_document(capability_plan_path),
+                coverage_baseline=load_document(coverage_baseline_path),
+            )
         )
         emit(
             command,

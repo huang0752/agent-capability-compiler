@@ -16,6 +16,7 @@ SCRIPT = ROOT / "skills" / "acc-engineer" / "scripts" / "scope_audit.py"
 def _route(
     route_id: str,
     *,
+    domain: str = "customer",
     disposition: str = "planned",
     method: str = "GET",
     evidence_sources: list[str] | None = None,
@@ -24,7 +25,7 @@ def _route(
 ) -> dict[str, object]:
     return {
         "id": route_id,
-        "domain": "customer",
+        "domain": domain,
         "method": method,
         "path": f"/api/{route_id.replace('.', '/')}",
         "evidence_sources": (
@@ -63,14 +64,29 @@ def _summary(routes: list[object]) -> dict[str, int]:
     return result
 
 
+def _source_scope(routes: list[object]) -> dict[str, int]:
+    summary = _summary(routes)
+    return {
+        "eligible_read_routes": summary["eligible_read_routes"],
+        "planned_or_composed": summary["planned"] + summary["composed"],
+        "excluded": summary["excluded"],
+        "blocked_on_evidence": summary["blocked_on_evidence"],
+        "unresolved": summary["unresolved"],
+    }
+
+
 def _write_project(
     tmp_path: Path,
     *,
     mode: str | None = "system_readonly_complete",
     user_confirmation: str | None = None,
     selected_domains: list[str] | None = None,
+    declared_domains: list[str] | None = None,
     routes: list[object] | None = None,
     summary_overrides: dict[str, int] | None = None,
+    system_operations: list[str] | None = None,
+    plan_dependencies: list[str] | None = None,
+    baseline_source_scope: dict[str, int] | None = None,
 ) -> Path:
     project = tmp_path / "acc-project"
     project.mkdir()
@@ -88,20 +104,76 @@ def _write_project(
     inventory = {
         "schema_version": "1",
         "scope": scope,
+        "domains": [
+            {"id": domain}
+            for domain in (
+                declared_domains
+                if declared_domains is not None
+                else sorted(
+                    {
+                        str(route["domain"])
+                        for route in actual_routes
+                        if isinstance(route, dict)
+                        and isinstance(route.get("domain"), str)
+                        and route["domain"]
+                    }
+                )
+            )
+        ],
         "routes": actual_routes,
         "summary": summary,
     }
     (project / "scope-inventory.yaml").write_text(
         yaml.safe_dump(inventory, sort_keys=False), encoding="utf-8"
     )
+    operation_ids = sorted(
+        {
+            str(route["operation_id"])
+            for route in actual_routes
+            if isinstance(route, dict)
+            and route.get("disposition") in {"planned", "composed"}
+            and isinstance(route.get("operation_id"), str)
+            and route["operation_id"]
+        }
+    )
+    actual_system_operations = (
+        operation_ids if system_operations is None else system_operations
+    )
     (project / "system-map.yaml").write_text(
-        yaml.safe_dump({"candidate_operations": []}), encoding="utf-8"
+        yaml.safe_dump(
+            {
+                "candidate_operations": [
+                    {"id": operation_id}
+                    for operation_id in actual_system_operations
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    actual_plan_dependencies = (
+        operation_ids if plan_dependencies is None else plan_dependencies
     )
     (project / "capability-plan.yaml").write_text(
-        yaml.safe_dump({"capabilities": []}), encoding="utf-8"
+        yaml.safe_dump(
+            {
+                "capabilities": [
+                    {"id": "scope-capability", "operation_dependencies": actual_plan_dependencies}
+                ]
+            }
+        ),
+        encoding="utf-8",
     )
     (project / "coverage-baseline.json").write_text(
-        json.dumps({"source_scope": {}}), encoding="utf-8"
+        json.dumps(
+            {
+                "source_scope": (
+                    _source_scope(actual_routes)
+                    if baseline_source_scope is None
+                    else baseline_source_scope
+                )
+            }
+        ),
+        encoding="utf-8",
     )
     return project
 
@@ -340,3 +412,156 @@ def test_ineligible_routes_are_not_counted_as_eligible(tmp_path: Path) -> None:
 
     assert completed.returncode == 0
     assert payload["result"]["source_scope"]["eligible_read_routes"] == 0
+
+
+def test_planned_and_composed_routes_must_exist_in_system_map_and_plan(
+    tmp_path: Path,
+) -> None:
+    project = _write_project(
+        tmp_path,
+        routes=[
+            _route("customer.search", operation_id="customer.search"),
+            _route(
+                "customer.context",
+                disposition="composed",
+                operation_id="customer.context",
+            ),
+        ],
+        system_operations=[],
+        plan_dependencies=[],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert [item["code"] for item in payload["diagnostics"]].count(
+        "ACC_SCOPE_SYSTEM_MAP_MISSING_OPERATION"
+    ) == 2
+    assert [item["code"] for item in payload["diagnostics"]].count(
+        "ACC_SCOPE_PLAN_MISSING_OPERATION"
+    ) == 2
+
+
+def test_coverage_baseline_source_scope_must_match_inventory_denominator(
+    tmp_path: Path,
+) -> None:
+    project = _write_project(
+        tmp_path,
+        baseline_source_scope={
+            "eligible_read_routes": 99,
+            "planned_or_composed": 1,
+            "excluded": 0,
+            "blocked_on_evidence": 0,
+            "unresolved": 0,
+        },
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert payload["diagnostics"][0]["code"] == "ACC_SCOPE_COVERAGE_MISMATCH"
+    assert payload["diagnostics"][0]["path"] == "coverage-baseline.json"
+    assert payload["diagnostics"][0]["pointer"] == "/source_scope"
+
+
+def test_domain_complete_rejects_an_undeclared_selected_domain(tmp_path: Path) -> None:
+    project = _write_project(
+        tmp_path,
+        mode="domain_complete",
+        selected_domains=["customer"],
+        declared_domains=["report"],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert payload["diagnostics"][0]["code"] == "ACC_SCOPE_DOMAIN_UNDECLARED"
+    assert payload["diagnostics"][0]["pointer"] == "/scope/selected_domains/0"
+
+
+def test_domain_complete_requires_selected_domain_routes_to_be_complete(
+    tmp_path: Path,
+) -> None:
+    project = _write_project(
+        tmp_path,
+        mode="domain_complete",
+        selected_domains=["customer"],
+        routes=[
+            _route(
+                "customer.search",
+                disposition="blocked_on_evidence",
+                operation_id=None,
+                reason="missing permission evidence",
+            )
+        ],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert payload["diagnostics"][0]["code"] == "ACC_SCOPE_DOMAIN_INCOMPLETE"
+    assert payload["diagnostics"][0]["pointer"] == "/routes/0/disposition"
+
+
+def test_domain_complete_requires_outside_routes_to_be_explicitly_out_of_scope(
+    tmp_path: Path,
+) -> None:
+    project = _write_project(
+        tmp_path,
+        mode="domain_complete",
+        selected_domains=["customer"],
+        routes=[
+            _route("customer.search"),
+            _route("report.get", domain="report", operation_id="report.get"),
+        ],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert payload["diagnostics"][0]["code"] == "ACC_SCOPE_DOMAIN_BOUNDARY_AMBIGUOUS"
+    assert payload["diagnostics"][0]["pointer"] == "/routes/1/disposition"
+
+
+@pytest.mark.parametrize(
+    ("mode", "confirmation", "selected_domains", "routes"),
+    [
+        ("pilot", "Approved bounded pilot.", [], [_route("customer.search")]),
+        (
+            "domain_complete",
+            None,
+            ["customer"],
+            [
+                _route("customer.search"),
+                _route(
+                    "report.get",
+                    domain="report",
+                    disposition="out_of_scope",
+                    operation_id=None,
+                    reason="outside selected domain",
+                ),
+            ],
+        ),
+        ("system_readonly_complete", None, [], [_route("customer.search")]),
+    ],
+)
+def test_all_three_scope_modes_accept_consistent_artifacts(
+    tmp_path: Path,
+    mode: str,
+    confirmation: str | None,
+    selected_domains: list[str],
+    routes: list[object],
+) -> None:
+    project = _write_project(
+        tmp_path,
+        mode=mode,
+        user_confirmation=confirmation,
+        selected_domains=selected_domains,
+        routes=routes,
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 0
+    assert payload["ok"] is True
+    assert payload["result"]["scope_mode"] == mode
