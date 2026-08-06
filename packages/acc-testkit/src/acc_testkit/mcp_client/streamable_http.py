@@ -23,39 +23,39 @@ class _OpenFailure:
     cancelled_type: type[BaseException] | None = None
 
 
-class _BorrowedClientTransport(httpx.AsyncBaseTransport):
-    """Send pre-built clean requests without applying a borrowed client's defaults."""
+class _BorrowedTransport(httpx.AsyncBaseTransport):
+    """Use a caller-owned pure transport without transferring close ownership."""
 
-    def __init__(self, client: httpx.AsyncClient) -> None:
-        self._client = client
+    def __init__(self, transport: httpx.AsyncBaseTransport) -> None:
+        self._transport = transport
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        return await self._client.send(
-            request,
-            auth=None,
-            follow_redirects=False,
-            stream=True,
-        )
+        return await self._transport.handle_async_request(request)
 
     async def aclose(self) -> None:
-        """The caller owns the borrowed client."""
+        """The caller owns the borrowed transport."""
 
 
 class McpStreamableHttpTestClient:
-    """Connect to a protected MCP Streamable HTTP endpoint for test assertions."""
+    """Connect with an owned clean client; an injected pure transport remains caller-owned."""
 
     def __init__(
         self,
         url: str,
         gateway_token: SecretValue,
         *,
+        transport: httpx.AsyncBaseTransport | None = None,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
         if not isinstance(gateway_token, SecretValue):
             raise TypeError("gateway_token must be a SecretValue")
+        if http_client is not None:
+            raise ValueError(
+                "injecting AsyncClient is unsafe; pass its pure AsyncBaseTransport via transport"
+            )
         self.url = _validated_endpoint(url)
         self.gateway_token = gateway_token
-        self.http_client = http_client
+        self.transport = transport
         self._state: Literal["idle", "opening", "active", "closing"] = "idle"
         self._stack: AsyncExitStack | None = None
         self._session: ClientSession | None = None
@@ -118,9 +118,7 @@ class McpStreamableHttpTestClient:
     def _new_clean_client(self) -> httpx.AsyncClient:
         raw_token = self.gateway_token.get_secret_value()
         try:
-            transport = (
-                _BorrowedClientTransport(self.http_client) if self.http_client is not None else None
-            )
+            transport = _BorrowedTransport(self.transport) if self.transport is not None else None
             return httpx.AsyncClient(
                 transport=transport,
                 headers=_gateway_headers(self.url, raw_token),

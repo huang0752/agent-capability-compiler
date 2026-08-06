@@ -17,6 +17,19 @@ from acc_testkit.mcp_client import McpStdioTestClient, McpStreamableHttpTestClie
 ROOT = Path(__file__).resolve().parents[3]
 
 
+class _TrackingTransport(httpx.AsyncBaseTransport):
+    def __init__(self, handler: httpx.AsyncBaseTransport) -> None:
+        self.handler = handler
+        self.closed = False
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        return await self.handler.handle_async_request(request)
+
+    async def aclose(self) -> None:
+        self.closed = True
+        await self.handler.aclose()
+
+
 def _assert_testkit_traceback_has_no_raw_secret(error: BaseException, *secrets: str) -> None:
     pending: list[object] = []
     traceback = error.__traceback__
@@ -175,8 +188,9 @@ async def test_mcp_streamable_http_client_initializes_lists_calls_and_deletes_wi
             return httpx.Response(204, request=request)
         return _jsonrpc_response(request)
 
+    shared_transport = _TrackingTransport(httpx.MockTransport(handler))
     injected = httpx.AsyncClient(
-        transport=httpx.MockTransport(handler),
+        transport=shared_transport,
         headers={
             "Origin": "https://evil.test",
             "Cookie": "session=client-default-cookie",
@@ -190,7 +204,7 @@ async def test_mcp_streamable_http_client_initializes_lists_calls_and_deletes_wi
         async with McpStreamableHttpTestClient(
             "https://gateway.test/mcp",
             token,
-            http_client=injected,
+            transport=shared_transport,
         ) as client:
             assert client.initialized.serverInfo.name == "fake-gateway"
             assert client.session_id == "mcp-session-a"
@@ -200,6 +214,7 @@ async def test_mcp_streamable_http_client_initializes_lists_calls_and_deletes_wi
         assert [tool.name for tool in tools.tools] == ["example.echo"]
         assert result.structuredContent == {"value": "hello"}
         assert injected.is_closed is False
+        assert shared_transport.closed is False
         assert requests[-1].method == "DELETE"
         assert all(
             request.headers["authorization"] == "Bearer gateway-token-private"
@@ -293,13 +308,9 @@ async def test_mcp_streamable_http_connection_error_traceback_drops_raw_client_s
     def fail(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError(f"{token} {other_secret}", request=request)
 
-    injected = httpx.AsyncClient(
-        transport=httpx.MockTransport(fail),
-        headers={"X-Unrelated-Secret": other_secret},
-        follow_redirects=False,
-    )
+    transport = _TrackingTransport(httpx.MockTransport(fail))
     client = McpStreamableHttpTestClient(
-        "https://gateway.test/mcp", SecretValue(token), http_client=injected
+        "https://gateway.test/mcp", SecretValue(token), transport=transport
     )
     try:
         with pytest.raises(RuntimeError, match="connection failed") as caught:
@@ -308,17 +319,14 @@ async def test_mcp_streamable_http_connection_error_traceback_drops_raw_client_s
         assert caught.value.__cause__ is None
         assert caught.value.__context__ is None
         _assert_testkit_traceback_has_no_raw_secret(caught.value, token)
-        assert "authorization" not in injected.headers
-        assert "origin" not in injected.headers
-        assert injected.is_closed is False
+        assert transport.closed is False
     finally:
-        await injected.aclose()
+        await transport.aclose()
 
 
 @pytest.mark.asyncio
-async def test_cancelled_http_open_cleans_headers_without_closing_injected_client() -> None:
+async def test_cancelled_http_open_does_not_close_borrowed_transport() -> None:
     token = "gateway-token-private"
-    other_secret = "preconfigured-client-secret"
     started = asyncio.Event()
 
     async def wait_forever(_request: httpx.Request) -> httpx.Response:
@@ -326,13 +334,9 @@ async def test_cancelled_http_open_cleans_headers_without_closing_injected_clien
         await asyncio.Event().wait()
         raise AssertionError("unreachable")
 
-    injected = httpx.AsyncClient(
-        transport=httpx.MockTransport(wait_forever),
-        headers={"X-Unrelated-Secret": other_secret},
-        follow_redirects=False,
-    )
+    transport = _TrackingTransport(httpx.MockTransport(wait_forever))
     client = McpStreamableHttpTestClient(
-        "https://gateway.test/mcp", SecretValue(token), http_client=injected
+        "https://gateway.test/mcp", SecretValue(token), transport=transport
     )
 
     async def connect() -> None:
@@ -346,17 +350,15 @@ async def test_cancelled_http_open_cleans_headers_without_closing_injected_clien
         with pytest.raises(asyncio.CancelledError) as caught:
             await task
         _assert_testkit_traceback_has_no_raw_secret(caught.value, token)
-        assert "authorization" not in injected.headers
-        assert "origin" not in injected.headers
-        assert injected.is_closed is False
+        assert transport.closed is False
     finally:
         if not task.done():
             task.cancel()
-        await injected.aclose()
+        await transport.aclose()
 
 
 @pytest.mark.asyncio
-async def test_failed_http_open_keeps_injected_client_for_a_clean_retry() -> None:
+async def test_failed_http_open_keeps_borrowed_transport_for_a_clean_retry() -> None:
     attempts = 0
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -372,14 +374,11 @@ async def test_failed_http_open_keeps_injected_client_for_a_clean_retry() -> Non
                 raise httpx.ConnectError("temporary failure", request=request)
         return _jsonrpc_response(request)
 
-    injected = httpx.AsyncClient(
-        transport=httpx.MockTransport(handler),
-        headers={"X-Default-Secret": "keep-me"},
-    )
+    transport = _TrackingTransport(httpx.MockTransport(handler))
     client = McpStreamableHttpTestClient(
         "https://gateway.test/mcp",
         SecretValue("gateway-token-private"),
-        http_client=injected,
+        transport=transport,
     )
     try:
         with pytest.raises(RuntimeError, match="connection failed"):
@@ -388,10 +387,9 @@ async def test_failed_http_open_keeps_injected_client_for_a_clean_retry() -> Non
         async with client:
             assert client.session_id == "mcp-session-a"
         assert attempts == 2
-        assert injected.headers["x-default-secret"] == "keep-me"
-        assert injected.is_closed is False
+        assert transport.closed is False
     finally:
-        await injected.aclose()
+        await transport.aclose()
 
 
 @pytest.mark.asyncio
@@ -410,9 +408,9 @@ async def test_http_client_rejects_concurrent_enter_before_first_await_completes
             return httpx.Response(204, request=request)
         return _jsonrpc_response(request)
 
-    injected = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    transport = _TrackingTransport(httpx.MockTransport(handler))
     client = McpStreamableHttpTestClient(
-        "https://gateway.test/mcp", SecretValue("gateway-token-private"), http_client=injected
+        "https://gateway.test/mcp", SecretValue("gateway-token-private"), transport=transport
     )
     close_first = asyncio.Event()
 
@@ -432,11 +430,11 @@ async def test_http_client_rejects_concurrent_enter_before_first_await_completes
         release.set()
         if not first.done():
             first.cancel()
-        await injected.aclose()
+        await transport.aclose()
 
 
 @pytest.mark.asyncio
-async def test_two_gateway_clients_share_injected_client_without_token_or_default_leaks() -> None:
+async def test_two_gateway_clients_share_transport_without_token_or_default_leaks() -> None:
     seen: list[tuple[str, str | None, str | None]] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -460,17 +458,18 @@ async def test_two_gateway_clients_share_injected_client_without_token_or_defaul
             response.headers["mcp-session-id"] = "session-b"
         return response
 
-    injected = httpx.AsyncClient(
-        transport=httpx.MockTransport(handler),
+    shared_transport = _TrackingTransport(httpx.MockTransport(handler))
+    external = httpx.AsyncClient(
+        transport=shared_transport,
         headers={"Cookie": "default=cookie", "X-Default-Secret": "do-not-send"},
         auth=httpx.BasicAuth("default", "secret"),
         follow_redirects=True,
     )
     client_a = McpStreamableHttpTestClient(
-        "https://gateway.test/mcp", SecretValue("token-a"), http_client=injected
+        "https://gateway.test/mcp", SecretValue("token-a"), transport=shared_transport
     )
     client_b = McpStreamableHttpTestClient(
-        "https://gateway.test/mcp", SecretValue("token-b"), http_client=injected
+        "https://gateway.test/mcp", SecretValue("token-b"), transport=shared_transport
     )
     try:
 
@@ -488,15 +487,16 @@ async def test_two_gateway_clients_share_injected_client_without_token_or_defaul
             "Bearer token-b",
         }
         assert all(cookie is None and default_secret is None for _, cookie, default_secret in seen)
-        assert injected.headers["cookie"] == "default=cookie"
-        assert injected.headers["x-default-secret"] == "do-not-send"
-        assert injected.is_closed is False
+        assert external.headers["cookie"] == "default=cookie"
+        assert external.headers["x-default-secret"] == "do-not-send"
+        assert external.is_closed is False
+        assert shared_transport.closed is False
     finally:
-        await injected.aclose()
+        await external.aclose()
 
 
 @pytest.mark.asyncio
-async def test_gateway_requests_never_follow_injected_client_redirects_to_another_origin() -> None:
+async def test_gateway_requests_never_follow_redirects_to_another_origin() -> None:
     requests: list[httpx.Request] = []
 
     def redirect(request: httpx.Request) -> httpx.Response:
@@ -505,14 +505,11 @@ async def test_gateway_requests_never_follow_injected_client_redirects_to_anothe
             307, headers={"Location": "https://evil.test/capture"}, request=request
         )
 
-    injected = httpx.AsyncClient(
-        transport=httpx.MockTransport(redirect),
-        follow_redirects=True,
-    )
+    transport = _TrackingTransport(httpx.MockTransport(redirect))
     client = McpStreamableHttpTestClient(
         "https://gateway.test/mcp",
         SecretValue("gateway-token-private"),
-        http_client=injected,
+        transport=transport,
     )
     try:
         with pytest.raises(RuntimeError, match="connection failed"):
@@ -520,6 +517,65 @@ async def test_gateway_requests_never_follow_injected_client_redirects_to_anothe
                 pass
         assert [request.url for request in requests] == [httpx.URL("https://gateway.test/mcp")]
         assert requests[0].headers["origin"] == "https://gateway.test"
+    finally:
+        await transport.aclose()
+
+
+@pytest.mark.asyncio
+async def test_gateway_bearer_never_reaches_borrowed_client_request_hooks() -> None:
+    hook_headers: list[httpx.Headers] = []
+    transport_requests: list[httpx.Request] = []
+
+    async def malicious_hook(request: httpx.Request) -> None:
+        hook_headers.append(request.headers)
+        request.url = httpx.URL("https://evil.test/capture")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        transport_requests.append(request)
+        if request.method == "DELETE":
+            return httpx.Response(204, request=request)
+        if request.method == "GET":
+            return httpx.Response(405, request=request)
+        return _jsonrpc_response(request)
+
+    shared_transport = _TrackingTransport(httpx.MockTransport(handler))
+    hooked_client = httpx.AsyncClient(
+        transport=shared_transport,
+        event_hooks={"request": [malicious_hook]},
+    )
+    with pytest.raises(ValueError, match="AsyncBaseTransport via transport"):
+        McpStreamableHttpTestClient(
+            "https://gateway.test/mcp",
+            SecretValue("gateway-token-private"),
+            http_client=hooked_client,
+        )
+    client = McpStreamableHttpTestClient(
+        "https://gateway.test/mcp",
+        SecretValue("gateway-token-private"),
+        transport=shared_transport,
+    )
+    try:
+        async with client:
+            pass
+        assert hook_headers == []
+        assert all(request.url.host == "gateway.test" for request in transport_requests)
+        assert hooked_client.is_closed is False
+        assert shared_transport.closed is False
+    finally:
+        await hooked_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_gateway_client_rejects_async_client_injection_with_safe_migration() -> None:
+    injected = httpx.AsyncClient()
+    try:
+        with pytest.raises(ValueError, match="AsyncBaseTransport via transport"):
+            McpStreamableHttpTestClient(
+                "https://gateway.test/mcp",
+                SecretValue("gateway-token-private"),
+                http_client=injected,
+            )
+        assert injected.is_closed is False
     finally:
         await injected.aclose()
 
@@ -540,11 +596,11 @@ async def test_http_client_rejects_a_second_exit_while_the_owner_is_closing() ->
             return httpx.Response(405, request=request)
         return _jsonrpc_response(request)
 
-    injected = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    transport = _TrackingTransport(httpx.MockTransport(handler))
     client = McpStreamableHttpTestClient(
         "https://gateway.test/mcp",
         SecretValue("gateway-token-private"),
-        http_client=injected,
+        transport=transport,
     )
 
     async def owner() -> None:
@@ -566,4 +622,4 @@ async def test_http_client_rejects_a_second_exit_while_the_owner_is_closing() ->
         release_delete.set()
         if not task.done():
             task.cancel()
-        await injected.aclose()
+        await transport.aclose()
