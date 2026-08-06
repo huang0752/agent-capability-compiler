@@ -586,14 +586,25 @@ def audit_inventory(
                 path=path,
                 pointer=f"{pointer}/method",
             )
-        evidence = string_list_at(route, "evidence_sources")
-        if evidence is None or not evidence or any(not item for item in evidence):
+        evidence = non_empty_string_list(route.get("evidence_sources"))
+        if evidence is None:
             add_issue(
                 diagnostics,
                 "ACC_SCOPE_EVIDENCE_REQUIRED",
                 "route evidence is required",
                 path=path,
                 pointer=f"{pointer}/evidence_sources",
+            )
+        if (
+            "usage_evidence_sources" in route
+            and non_empty_string_list(route.get("usage_evidence_sources")) is None
+        ):
+            add_issue(
+                diagnostics,
+                "ACC_SCOPE_EVIDENCE_REQUIRED",
+                "route usage evidence must contain unique non-empty references",
+                path=path,
+                pointer=f"{pointer}/usage_evidence_sources",
             )
 
         eligibility = string_at(route, "eligibility")
@@ -757,8 +768,33 @@ def audit_operation_route_traces(
 ) -> list[dict[str, object]]:
     diagnostics: list[dict[str, object]] = []
     routes = index_routes(inventory)
-    operations = system_operations(system_map)
-    for operation_id, (index, operation) in operations.items():
+    raw_operations = system_map.get("candidate_operations")
+    operations = raw_operations if isinstance(raw_operations, list) else []
+    seen_operation_ids: set[str] = set()
+    operation_traces: dict[str, set[str]] = defaultdict(set)
+    for index, raw_operation in enumerate(operations):
+        if not isinstance(raw_operation, Mapping):
+            add_issue(
+                diagnostics,
+                "ACC_SCOPE_OPERATION_ROUTE_TRACE_REQUIRED",
+                "candidate operation must be an object with a unique id",
+                path="system-map.yaml",
+                pointer=f"/candidate_operations/{index}",
+            )
+            continue
+        operation = cast(Mapping[str, object], raw_operation)
+        operation_id = string_at(operation, "id")
+        if operation_id is None or not operation_id.strip() or operation_id in seen_operation_ids:
+            add_issue(
+                diagnostics,
+                "ACC_SCOPE_OPERATION_ROUTE_TRACE_REQUIRED",
+                "candidate operation id must be non-empty and unique",
+                path="system-map.yaml",
+                pointer=f"/candidate_operations/{index}/id",
+            )
+            if operation_id is None or not operation_id.strip():
+                continue
+        seen_operation_ids.add(operation_id)
         route_ids = non_empty_string_list(operation.get("scope_route_ids"))
         if route_ids is None:
             add_issue(
@@ -769,6 +805,7 @@ def audit_operation_route_traces(
                 pointer=f"/candidate_operations/{index}/scope_route_ids",
             )
             continue
+        operation_traces[operation_id].update(route_ids)
         for offset, route_id in enumerate(route_ids):
             entry = routes.get(route_id)
             pointer = f"/candidate_operations/{index}/scope_route_ids/{offset}"
@@ -801,8 +838,53 @@ def audit_operation_route_traces(
                     pointer=pointer,
                 )
 
-    mapped_ids = set(operations)
-    for _, (index, capability) in plan_capabilities(capability_plan).items():
+    for route_id, (index, route) in routes.items():
+        if string_at(route, "eligibility") == "eligible" and string_at(route, "disposition") in {
+            "planned",
+            "composed",
+        }:
+            operation_id = string_at(route, "operation_id")
+            if operation_id is not None and route_id not in operation_traces.get(
+                operation_id, set()
+            ):
+                add_issue(
+                    diagnostics,
+                    "ACC_SCOPE_OPERATION_ROUTE_TRACE_REQUIRED",
+                    "planned or composed route must be traced by its candidate operation",
+                    path="scope-inventory.yaml",
+                    pointer=f"/routes/{index}/operation_id",
+                )
+
+    mapped_ids = seen_operation_ids
+    raw_capabilities = capability_plan.get("capabilities")
+    capabilities = raw_capabilities if isinstance(raw_capabilities, list) else []
+    seen_capability_ids: set[str] = set()
+    for index, raw_capability in enumerate(capabilities):
+        if not isinstance(raw_capability, Mapping):
+            add_issue(
+                diagnostics,
+                "ACC_SCOPE_CAPABILITY_DEPENDENCY_UNKNOWN",
+                "capability must be an object with a unique id",
+                path="capability-plan.yaml",
+                pointer=f"/capabilities/{index}",
+            )
+            continue
+        capability = cast(Mapping[str, object], raw_capability)
+        capability_id = string_at(capability, "id")
+        if (
+            capability_id is None
+            or not capability_id.strip()
+            or capability_id in seen_capability_ids
+        ):
+            add_issue(
+                diagnostics,
+                "ACC_SCOPE_CAPABILITY_DEPENDENCY_UNKNOWN",
+                "capability id must be non-empty and unique",
+                path="capability-plan.yaml",
+                pointer=f"/capabilities/{index}/id",
+            )
+        if capability_id:
+            seen_capability_ids.add(capability_id)
         dependencies = capability.get("operation_dependencies")
         if not isinstance(dependencies, list):
             continue
@@ -973,14 +1055,19 @@ def audit_domain_capability_coverage(
 ) -> list[dict[str, object]]:
     diagnostics: list[dict[str, object]] = []
     scope = mapping_at(inventory, "scope") or {}
-    if string_at(scope, "mode") != "system_readonly_complete":
+    mode = string_at(scope, "mode")
+    if mode not in {"system_readonly_complete", "domain_complete"}:
         return diagnostics
+    selected_domains = set(string_list_at(scope, "selected_domains") or [])
     routes_by_domain: dict[str, list[tuple[str, int, Mapping[str, object]]]] = defaultdict(list)
     for route_id, (index, route) in index_routes(inventory).items():
         domain = string_at(route, "domain")
         if domain and string_at(route, "eligibility") == "eligible":
             routes_by_domain[domain].append((route_id, index, route))
     for routes in routes_by_domain.values():
+        domain = string_at(routes[0][2], "domain") if routes else None
+        if mode == "domain_complete" and domain not in selected_domains:
+            continue
         if any(
             string_at(route, "disposition") not in {"planned", "composed", "excluded"}
             for _, _, route in routes
@@ -992,7 +1079,6 @@ def audit_domain_capability_coverage(
             continue
         if routes and all(route_id in valid_subsumed_routes for route_id, _, _ in routes):
             replacement_is_external = True
-            domain = string_at(routes[0][2], "domain")
             indexed = index_routes(inventory)
             for _, _, route in routes:
                 decision = mapping_at(route, "exclusion_decision") or {}

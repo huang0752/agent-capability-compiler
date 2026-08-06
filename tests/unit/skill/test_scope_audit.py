@@ -933,6 +933,24 @@ def test_ineligible_still_requires_reason_and_route_evidence(tmp_path: Path) -> 
     }
 
 
+def test_ineligible_route_rejects_whitespace_only_evidence(tmp_path: Path) -> None:
+    route = _route(
+        "internal.write",
+        disposition="excluded",
+        operation_id=None,
+        eligibility="ineligible",
+        evidence_sources=["   "],
+        reason="write route",
+    )
+    project = _write_project(tmp_path, routes=[route])
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert payload["diagnostics"][0]["code"] == "ACC_SCOPE_EVIDENCE_REQUIRED"
+    assert payload["diagnostics"][0]["pointer"] == "/routes/0/evidence_sources"
+
+
 def test_system_complete_still_rejects_blocked_on_evidence(tmp_path: Path) -> None:
     route = _route(
         "customer.blocked",
@@ -1031,6 +1049,59 @@ def test_operation_trace_requires_matching_route_operation_id(tmp_path: Path) ->
 
     assert completed.returncode == 3
     assert "ACC_SCOPE_OPERATION_ROUTE_TRACE_OPERATION_MISMATCH" in {
+        item["code"] for item in payload["diagnostics"]
+    }
+
+
+def test_every_planned_route_must_be_traced_by_its_operation(tmp_path: Path) -> None:
+    project = _write_project(
+        tmp_path,
+        routes=[
+            _route("customer.search", operation_id="customer.read"),
+            _route("customer.detail", operation_id="customer.read"),
+        ],
+        system_operation_records=[{"id": "customer.read", "scope_route_ids": ["customer.search"]}],
+        plan_capabilities=[{"id": "read_customers", "operation_dependencies": ["customer.read"]}],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert "ACC_SCOPE_OPERATION_ROUTE_TRACE_REQUIRED" in {
+        item["code"] for item in payload["diagnostics"]
+    }
+
+
+def test_candidate_operation_ids_must_be_unique(tmp_path: Path) -> None:
+    project = _write_project(
+        tmp_path,
+        system_operation_records=[
+            {"id": "customer.search", "scope_route_ids": ["customer.search"]},
+            {"id": "customer.search", "scope_route_ids": ["unknown.route"]},
+        ],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert "ACC_SCOPE_OPERATION_ROUTE_TRACE_REQUIRED" in {
+        item["code"] for item in payload["diagnostics"]
+    }
+
+
+def test_capability_ids_must_be_unique(tmp_path: Path) -> None:
+    project = _write_project(
+        tmp_path,
+        plan_capabilities=[
+            {"id": "read", "operation_dependencies": ["customer.search"]},
+            {"id": "read", "operation_dependencies": ["unknown.operation"]},
+        ],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert "ACC_SCOPE_CAPABILITY_DEPENDENCY_UNKNOWN" in {
         item["code"] for item in payload["diagnostics"]
     }
 
@@ -1290,12 +1361,56 @@ def test_frontend_used_exclusion_is_warning_in_pilot(tmp_path: Path) -> None:
     assert payload["diagnostics"][0]["severity"] == "warning"
 
 
+def test_malformed_frontend_usage_evidence_cannot_disable_the_risk_signal(
+    tmp_path: Path,
+) -> None:
+    route = _route(
+        "customer.visible",
+        disposition="excluded",
+        operation_id=None,
+        reason="approved pilot omission",
+        usage_evidence_sources=[""],
+    )
+    project = _write_project(
+        tmp_path,
+        mode="pilot",
+        user_confirmation="Approved pilot.",
+        routes=[route, _route("customer.search")],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert payload["diagnostics"][0]["code"] == "ACC_SCOPE_EVIDENCE_REQUIRED"
+    assert payload["diagnostics"][0]["pointer"] == "/routes/0/usage_evidence_sources"
+
+
 def test_domain_with_eligible_routes_requires_a_capability(tmp_path: Path) -> None:
     route, rule = _excluded_route("report.download", domain="report")
     project = _write_project(
         tmp_path,
         routes=[route, _route("customer.search")],
         exclusion_rules=[rule],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert "ACC_SCOPE_DOMAIN_ZERO_CAPABILITY" in {item["code"] for item in payload["diagnostics"]}
+
+
+def test_domain_complete_selected_domain_cannot_have_zero_capabilities(tmp_path: Path) -> None:
+    route = _route(
+        "customer.download",
+        disposition="excluded",
+        operation_id=None,
+        reason="legacy domain exclusion",
+    )
+    project = _write_project(
+        tmp_path,
+        mode="domain_complete",
+        selected_domains=["customer"],
+        routes=[route],
     )
 
     completed, payload = _run(project)
