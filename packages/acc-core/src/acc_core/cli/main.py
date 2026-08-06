@@ -769,13 +769,24 @@ def _run_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope]:
     try:
         import anyio
 
+        from acc_core.models import Project
         from acc_runtime import GenericRuntime
         from acc_runtime.errors import RuntimeError as AccRuntimeError
+        from acc_runtime.loader import load_pack
         from acc_runtime.mcp import CapabilityMcpServer
+        from acc_runtime.runtime import RuntimeConfigurationError
 
+        pack_path = Path(str(arguments.pack))
+        loaded_pack = load_pack(pack_path)
+        project = Project.model_validate(loaded_pack.ir.get("project"))
+        if project.runtime.transport != ["stdio"]:
+            raise RuntimeConfigurationError(
+                "Streamable HTTP packs must be served by the ACC Gateway.",
+                details={"reason": "streamable_http_requires_gateway"},
+            )
         tenant_id = arguments.tenant_id or os.environ.get("ACC_TENANT_ID")
         runtime = GenericRuntime.from_pack(
-            Path(str(arguments.pack)),
+            pack_path,
             environment=os.environ,
             granted_scopes=_runtime_scopes(cast(Sequence[str], arguments.scope)),
             tenant_id=tenant_id,
@@ -793,12 +804,18 @@ def _run_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope]:
         )
     except (AccRuntimeError, OSError, ValueError) as exc:
         code = getattr(exc, "code", "ACC_RUNTIME_START_FAILED")
+        message = (
+            "Streamable HTTP packs require the ACC Gateway."
+            if isinstance(exc, RuntimeConfigurationError)
+            and exc.details.get("reason") == "streamable_http_requires_gateway"
+            else "ACC runtime could not start."
+        )
         return EXIT_RUNTIME, _failure(
             "run",
             Diagnostic(
                 code=str(code),
                 severity="error",
-                message="ACC runtime could not start.",
+                message=message,
                 path=None,
                 pointer=None,
             ),

@@ -247,6 +247,50 @@ def test_run_reports_pack_failures_as_stable_json(tmp_path: Path) -> None:
     assert payload["diagnostics"][0]["code"] == "ACC_RUNTIME_PACK_VERIFICATION_FAILED"
 
 
+def test_run_rejects_streamable_http_until_gateway_phase(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    project_path = project / "project.yaml"
+    document = yaml.safe_load(project_path.read_text(encoding="utf-8"))
+    document["runtime"]["transport"] = ["streamable_http"]
+    document["provider"]["auth"] = {
+        "kind": "password_bearer",
+        "credentials": {"kind": "gateway_session"},
+        "login_path": "/auth/login",
+        "identity_field": "username",
+        "password_field": "password",
+        "token_pointer": "/access_token",
+        "scopes_pointer": "/permissions",
+        "scope_mapping": {"customer:read": ["customer.read"]},
+    }
+    _write_yaml(project_path, document)
+    operation_path = project / "operations" / "crm.get_customer.yaml"
+    operation = yaml.safe_load(operation_path.read_text(encoding="utf-8"))
+    operation["http"].pop("credential_ref")
+    _write_yaml(operation_path, operation)
+    packed = _payload(_run_acc("pack", "--output", "gateway.accpkg", "--json", cwd=project))
+
+    completed = _run_acc(
+        "run",
+        packed["result"]["path"],
+        "--json",
+        cwd=project,
+        environment={"CRM_BASE_URL": "http://127.0.0.1:9"},
+    )
+
+    assert completed.returncode == 6
+    payload = json.loads(completed.stdout)
+    assert payload["ok"] is False
+    assert payload["diagnostics"] == [
+        {
+            "code": "ACC_RUNTIME_CONFIGURATION_INVALID",
+            "message": "Streamable HTTP packs require the ACC Gateway.",
+            "path": None,
+            "pointer": None,
+            "severity": "error",
+        }
+    ]
+
+
 def test_contract_eval_cli_returns_structured_case_report(tmp_path: Path) -> None:
     project = _make_project(tmp_path)
 
