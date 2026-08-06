@@ -21,6 +21,28 @@ def _run(*arguments: str) -> tuple[subprocess.CompletedProcess[str], dict[str, A
     return completed, json.loads(completed.stdout)
 
 
+def test_diagnostic_optionally_includes_a_json_pointer() -> None:
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("verify_read_only_workspace", SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert module.diagnostic("ACC_SCOPE_INVALID", "invalid", path="scope.yaml") == {
+        "code": "ACC_SCOPE_INVALID",
+        "severity": "error",
+        "message": "invalid",
+        "path": "scope.yaml",
+    }
+    assert module.diagnostic(
+        "ACC_SCOPE_INVALID",
+        "invalid",
+        path="scope.yaml",
+        pointer="/routes/0/disposition",
+    )["pointer"] == "/routes/0/disposition"
+
+
 def test_verify_snapshots_regular_files_without_following_symlinks(tmp_path: Path) -> None:
     workspace = tmp_path / "source"
     workspace.mkdir()

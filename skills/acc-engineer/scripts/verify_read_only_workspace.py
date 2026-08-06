@@ -49,7 +49,13 @@ class JsonArgumentParser(argparse.ArgumentParser):
         raise SystemExit(2)
 
 
-def diagnostic(code: str, message: str, *, path: str | None = None) -> dict[str, object]:
+def diagnostic(
+    code: str,
+    message: str,
+    *,
+    path: str | None = None,
+    pointer: str | None = None,
+) -> dict[str, object]:
     value: dict[str, object] = {
         "code": code,
         "severity": "error",
@@ -57,6 +63,8 @@ def diagnostic(code: str, message: str, *, path: str | None = None) -> dict[str,
     }
     if path is not None:
         value["path"] = path
+    if pointer is not None:
+        value["pointer"] = pointer
     return value
 
 
