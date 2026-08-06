@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from itertools import pairwise
 from typing import Annotated, Literal
 from urllib.parse import unquote, urlsplit
 
@@ -47,11 +46,23 @@ _SENSITIVE_CONTEXT_WORDS = frozenset(
         "token",
     }
 )
-_SENSITIVE_CONTEXT_PHRASES = frozenset(
+_COMPACT_SENSITIVE_CONTEXT_MARKERS = frozenset(
     {
-        ("api", "key"),
-        ("private", "key"),
-        ("set", "cookie"),
+        "accesstoken",
+        "apikey",
+        "apisecret",
+        "apitoken",
+        "authorizationheader",
+        "authtoken",
+        "clientsecret",
+        "idtoken",
+        "jwttoken",
+        "oauthtoken",
+        "passwordhash",
+        "privatekey",
+        "refreshtoken",
+        "sessiontoken",
+        "setcookie",
     }
 )
 
@@ -72,12 +83,18 @@ def _context_segment_words(segment: str) -> tuple[str, ...]:
 def _validate_tenant_context_binding_reference(value: str) -> str:
     for segment in value.removeprefix("tenant_context.").split("."):
         words = _context_segment_words(segment)
+        word_set = frozenset(words)
         normalized = "_".join(words)
-        contains_sensitive_phrase = not _SENSITIVE_CONTEXT_PHRASES.isdisjoint(pairwise(words))
+        compact = re.sub(r"[^A-Za-z0-9]", "", segment).casefold()
+        contains_compact_marker = any(
+            marker in compact for marker in _COMPACT_SENSITIVE_CONTEXT_MARKERS
+        )
+        contains_key_pair = "key" in word_set and bool({"api", "private"} & word_set)
         if (
             any(word in _SENSITIVE_CONTEXT_WORDS for word in words)
             or normalized in {"header", "headers"}
-            or contains_sensitive_phrase
+            or contains_compact_marker
+            or contains_key_pair
         ):
             raise ValueError("tenant context binding path contains a sensitive segment")
     return value

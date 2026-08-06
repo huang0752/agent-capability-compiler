@@ -286,6 +286,17 @@ def test_compile_project_rejects_sensitive_context_binding_before_ir(
         "tenant_context.passwordHash",
         "tenant_context.xApiKey",
         "tenant_context.authorizationHeader",
+        "tenant_context.idtoken",
+        "tenant_context.oauthtoken",
+        "tenant_context.apikey",
+        "tenant_context.xapikey",
+        "tenant_context.passwordhash",
+        "tenant_context.authorizationheader",
+        "tenant_context.clientsecret",
+        "tenant_context.privatekey",
+        "tenant_context.setcookie",
+        "tenant_context.privateRegionKey",
+        "tenant_context.apiRegionKey",
     ],
 )
 def test_compile_project_rejects_sensitive_compound_context_binding_words(
