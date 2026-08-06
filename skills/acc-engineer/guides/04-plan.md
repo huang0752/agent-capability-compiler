@@ -13,7 +13,7 @@
 2. 在 `system_readonly_complete` 中，每个 eligible excluded 路由必须引用一条顶层 `exclusion_rules` 规则，并有逐 route 的 `exclusion_decision`（独立 rationale、Evidence、capability IDs 与 replacement route IDs）。结构合法时它们是唯一权威，不再要求 legacy `reason`；若结构不合法，仍以缺 reason 报错。Capability Plan 只保存 decision 引用，禁止维护第二份自由文本权威排除事实。
 3. `operational_polling` 和 `low_business_value` 必须在 `scope.exclusion_approval` 记录用户批准原文与精确 route IDs；前端使用路由的排除同样需要精确批准。
 4. ineligible、`blocked_on_evidence`、`out_of_scope`，以及 pilot/domain 模式的 legacy excluded 路由仍要求 route-level `reason` 与 Evidence；ineligible 不进入 eligible 分母。`blocked_on_evidence` 在系统完整模式下是发布阻断，不得计为完成。
-5. 根据 `scope-inventory.yaml` 重算并对账 `coverage-baseline.json` 的 `source_scope`；Capability Plan 的 `route_dispositions` 必须与 Inventory 按 disposition 精确一致，`exclusion_decision_refs` 必须用 `/routes/{index}/exclusion_decision` 精确覆盖系统完整模式的 eligible excluded decisions，再选择高价值场景与组合能力。
+5. 根据 `scope-inventory.yaml` 重算并对账 `coverage-baseline.json` 的 `source_scope`；Capability Plan 的 `coverage.scope_mode` 必须精确等于 Inventory mode，`coverage.scope_inventory` 必须精确为 `scope-inventory.yaml`，`route_dispositions` 必须与 Inventory 按 disposition 精确一致，`exclusion_decision_refs` 必须用 `/routes/{index}/exclusion_decision` 精确覆盖系统完整模式的 eligible excluded decisions，再选择高价值场景与组合能力。
 6. 区分 Agent 推理与 Runtime 确定性工作流，规划窄 Schema、Policy、权限和租户约束。
 7. 为每个 Capability 设计正常、缺失/空数据和错误场景；权限相关能力必须包含权限或跨租户负例。
 8. 移除或合并低价值、重复、高风险或“一接口一工具”候选；`duplicate_or_subsumed` 必须形成 excluded route → replacement planned/composed route → Operation → Capability dependency 的闭包。

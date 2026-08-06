@@ -269,7 +269,7 @@ def audit_exclusion_rules(
             continue
         rule = cast(Mapping[str, object], raw_rule)
         rule_id = string_at(rule, "id")
-        if rule_id is None or not rule_id.strip() or rule_id in rules:
+        if rule_id is None or not rule_id.strip() or rule_id != rule_id.strip() or rule_id in rules:
             add_issue(
                 diagnostics,
                 "ACC_SCOPE_EXCLUSION_RULE_ROUTE_MISMATCH",
@@ -388,8 +388,14 @@ def audit_route_exclusion_decision(
     scope = mapping_at(document, "scope") or {}
     if string_at(scope, "mode") != "system_readonly_complete":
         return diagnostics
-    seen: dict[str, int] = {}
-    for _route_id, (index, route) in index_routes(document).items():
+    routes = index_routes(document)
+    rationale_counts: dict[str, int] = defaultdict(int)
+    for _, route in routes.values():
+        decision = mapping_at(route, "exclusion_decision")
+        rationale = string_at(decision or {}, "rationale")
+        if rationale is not None and rationale.strip():
+            rationale_counts[normalize_rationale(rationale)] += 1
+    for _route_id, (index, route) in routes.items():
         if (
             string_at(route, "eligibility") != "eligible"
             or string_at(route, "disposition") != "excluded"
@@ -416,7 +422,7 @@ def audit_route_exclusion_decision(
             )
         else:
             normalized = normalize_rationale(rationale)
-            if normalized in seen:
+            if rationale_counts[normalized] > 1:
                 add_issue(
                     diagnostics,
                     "ACC_SCOPE_EXCLUSION_DECISION_REUSED",
@@ -424,8 +430,6 @@ def audit_route_exclusion_decision(
                     path=path,
                     pointer=f"/routes/{index}/exclusion_decision/rationale",
                 )
-            else:
-                seen[normalized] = index
         if non_empty_string_list(decision.get("evidence_sources")) is None:
             add_issue(
                 diagnostics,
@@ -437,79 +441,76 @@ def audit_route_exclusion_decision(
     return diagnostics
 
 
-def valid_structured_exclusion_route_ids(document: Mapping[str, object]) -> set[str]:
-    """Return routes whose rule and distinct route decision form a valid authority."""
+def subsumed_decision_fields(
+    decision: Mapping[str, object],
+) -> tuple[list[str] | None, list[str] | None]:
+    """Return the two dedicated subsumption relations through one shared contract."""
 
+    return (
+        non_empty_string_list(decision.get("capability_ids")),
+        non_empty_string_list(decision.get("replacement_route_ids")),
+    )
+
+
+def audit_structured_exclusion_authorities(
+    document: Mapping[str, object], *, path: str
+) -> tuple[set[str], list[dict[str, object]]]:
+    """Audit structured exclusions and return only fully valid reason authorities."""
+
+    rules, rule_diagnostics = audit_exclusion_rules(document, path=path)
+    decision_diagnostics = audit_route_exclusion_decision(document, path=path)
+    diagnostics = [*rule_diagnostics, *decision_diagnostics]
+    invalid_route_indexes: set[int] = set()
+    invalid_rule_ids: set[str] = set()
     routes = index_routes(document)
     raw_rules = document.get("exclusion_rules")
-    if not isinstance(raw_rules, list):
-        return set()
-    rules_by_id: dict[str, list[Mapping[str, object]]] = defaultdict(list)
-    route_memberships: dict[str, int] = defaultdict(int)
-    for raw_rule in raw_rules:
-        if not isinstance(raw_rule, Mapping):
+    rules_list = raw_rules if isinstance(raw_rules, list) else []
+    for issue in diagnostics:
+        pointer = issue.get("pointer")
+        if not isinstance(pointer, str):
             continue
-        rule = cast(Mapping[str, object], raw_rule)
-        rule_id = string_at(rule, "id")
-        if rule_id:
-            rules_by_id[rule_id].append(rule)
-        route_ids = string_list_at(rule, "route_ids") or []
-        for route_id in route_ids:
-            route_memberships[route_id] += 1
-
-    rationale_counts: dict[str, int] = defaultdict(int)
-    for _, route in routes.values():
-        if (
-            string_at(route, "eligibility") == "eligible"
-            and string_at(route, "disposition") == "excluded"
-        ):
-            decision = mapping_at(route, "exclusion_decision")
-            rationale = string_at(decision or {}, "rationale")
-            if rationale is not None and rationale.strip():
-                rationale_counts[normalize_rationale(rationale)] += 1
+        route_match = re.match(r"/routes/([0-9]+)(?:/|$)", pointer)
+        if route_match is not None:
+            invalid_route_indexes.add(int(route_match.group(1)))
+        rule_match = re.match(r"/exclusion_rules/([0-9]+)(?:/|$)", pointer)
+        if rule_match is None:
+            continue
+        rule_index = int(rule_match.group(1))
+        if rule_index >= len(rules_list) or not isinstance(rules_list[rule_index], Mapping):
+            continue
+        invalid_rule = cast(Mapping[str, object], rules_list[rule_index])
+        invalid_rule_id = string_at(invalid_rule, "id")
+        if invalid_rule_id is not None:
+            invalid_rule_ids.add(invalid_rule_id)
+        for route_id in string_list_at(invalid_rule, "route_ids") or []:
+            indexed_route = routes.get(route_id)
+            if indexed_route is not None:
+                invalid_route_indexes.add(indexed_route[0])
 
     valid: set[str] = set()
-    for route_id, (_, route) in routes.items():
+    for route_id, (route_index, route) in routes.items():
+        if route_index in invalid_route_indexes:
+            continue
+        rule_id = string_at(route, "exclusion_rule_id")
         if (
             string_at(route, "eligibility") != "eligible"
             or string_at(route, "disposition") != "excluded"
+            or rule_id is None
+            or not rule_id.strip()
+            or rule_id != rule_id.strip()
+            or rule_id in invalid_rule_ids
         ):
             continue
-        rule_id = string_at(route, "exclusion_rule_id")
-        matching_rules = rules_by_id.get(rule_id or "", [])
+        rule = rules.get(rule_id)
         decision = mapping_at(route, "exclusion_decision")
-        if len(matching_rules) != 1 or decision is None:
+        if rule is None or decision is None:
             continue
-        rule = matching_rules[0]
-        rule_route_ids = non_empty_string_list(rule.get("route_ids"))
-        rule_rationale = string_at(rule, "rationale")
-        decision_rationale = string_at(decision, "rationale")
-        if (
-            string_at(rule, "category") not in EXCLUSION_CATEGORIES
-            or rule_route_ids is None
-            or route_id not in rule_route_ids
-            or route_memberships[route_id] != 1
-            or rule_rationale is None
-            or not rule_rationale.strip()
-            or non_empty_string_list(rule.get("evidence_sources")) is None
-            or decision_rationale is None
-            or not decision_rationale.strip()
-            or rationale_counts[normalize_rationale(decision_rationale)] != 1
-            or non_empty_string_list(decision.get("evidence_sources")) is None
-        ):
-            continue
-        relation_valid = True
-        for member_route_id in rule_route_ids:
-            member = routes.get(member_route_id)
-            if member is None or (
-                string_at(member[1], "eligibility") != "eligible"
-                or string_at(member[1], "disposition") != "excluded"
-                or string_at(member[1], "exclusion_rule_id") != rule_id
-            ):
-                relation_valid = False
-        if relation_valid:
-            valid.add(route_id)
-    return valid
+        if string_at(rule, "category") == "duplicate_or_subsumed":
+            capability_ids, replacement_ids = subsumed_decision_fields(decision)
+            if capability_ids is None or replacement_ids is None:
+                continue
+        valid.add(route_id)
+    return valid, diagnostics
 
 
 def audit_inventory(
@@ -589,7 +590,9 @@ def audit_inventory(
                     pointer=f"/scope/selected_domains/{index}",
                 )
 
-    valid_structured_exclusions = valid_structured_exclusion_route_ids(document)
+    valid_structured_exclusions, structured_diagnostics = audit_structured_exclusion_authorities(
+        document, path=path
+    )
     seen: set[str] = set()
     operation_ids: set[str] = set()
     counters = {name: 0 for name in SUMMARY_FIELDS}
@@ -806,9 +809,7 @@ def audit_inventory(
         "operation_ids": sorted(operation_ids),
         "source_scope": source_counters,
     }
-    _, rule_diagnostics = audit_exclusion_rules(document, path=path)
-    diagnostics.extend(rule_diagnostics)
-    diagnostics.extend(audit_route_exclusion_decision(document, path=path))
+    diagnostics.extend(structured_diagnostics)
     return result, diagnostics
 
 
@@ -1007,13 +1008,8 @@ def audit_subsumed_replacement_closure(
         if rule is None or string_at(rule, "category") != "duplicate_or_subsumed":
             continue
         decision = mapping_at(route, "exclusion_decision")
-        capability_ids = (
-            non_empty_string_list(decision.get("capability_ids")) if decision is not None else None
-        )
-        replacement_ids = (
-            non_empty_string_list(decision.get("replacement_route_ids"))
-            if decision is not None
-            else None
+        capability_ids, replacement_ids = (
+            subsumed_decision_fields(decision) if decision is not None else (None, None)
         )
         if capability_ids is None:
             add_issue(
@@ -1257,6 +1253,17 @@ def audit_plan_scope_coverage(
             pointer="/coverage",
         )
         return diagnostics
+    if (
+        string_at(coverage, "scope_mode") != "system_readonly_complete"
+        or string_at(coverage, "scope_inventory") != "scope-inventory.yaml"
+    ):
+        add_issue(
+            diagnostics,
+            "ACC_SCOPE_PLAN_COVERAGE_BINDING_INVALID",
+            "capability plan coverage must bind to the current system-complete inventory",
+            path="capability-plan.yaml",
+            pointer="/coverage",
+        )
     if "deliberately_excluded" in coverage:
         add_issue(
             diagnostics,

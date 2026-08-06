@@ -890,6 +890,81 @@ def test_malformed_structured_system_exclusion_still_requires_legacy_reason(
     }
 
 
+@pytest.mark.parametrize(
+    ("rule_id", "route_rule_id"),
+    [("   ", "   "), (" binary-rule ", " binary-rule ")],
+)
+def test_blank_or_padded_rule_identity_cannot_waive_legacy_reason(
+    tmp_path: Path, rule_id: str, route_rule_id: str
+) -> None:
+    route, rule = _excluded_route("customer.download")
+    route.update(reason=None, exclusion_rule_id=route_rule_id)
+    rule["id"] = rule_id
+    project = _write_project(
+        tmp_path,
+        routes=[route, _route("customer.search")],
+        exclusion_rules=[rule],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert {item["code"] for item in payload["diagnostics"]} >= {
+        "ACC_SCOPE_REASON_REQUIRED",
+        "ACC_SCOPE_EXCLUSION_RULE_ROUTE_MISMATCH",
+    }
+
+
+def test_subsumed_authority_missing_dedicated_fields_cannot_waive_reason(
+    tmp_path: Path,
+) -> None:
+    route, rule = _excluded_route("customer.duplicate", category="duplicate_or_subsumed")
+    route["reason"] = None
+    project = _write_project(
+        tmp_path,
+        routes=[route, _route("customer.search")],
+        exclusion_rules=[rule],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert {item["code"] for item in payload["diagnostics"]} >= {
+        "ACC_SCOPE_REASON_REQUIRED",
+        "ACC_SCOPE_SUBSUMED_CAPABILITY_REQUIRED",
+        "ACC_SCOPE_SUBSUMED_REPLACEMENT_REQUIRED",
+    }
+
+
+def test_reused_decisions_cannot_waive_reason_for_either_route(tmp_path: Path) -> None:
+    first, first_rule = _excluded_route(
+        "customer.download", rule_id="first", rationale=" Reused  authority "
+    )
+    second, second_rule = _excluded_route(
+        "report.download", rule_id="second", rationale="reused authority", domain="report"
+    )
+    first["reason"] = None
+    second["reason"] = None
+    project = _write_project(
+        tmp_path,
+        routes=[
+            first,
+            second,
+            _route("customer.search"),
+            _route("report.list", domain="report", operation_id="report.list"),
+        ],
+        exclusion_rules=[first_rule, second_rule],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    reason_diagnostics = [
+        item for item in payload["diagnostics"] if item["code"] == "ACC_SCOPE_REASON_REQUIRED"
+    ]
+    assert len(reason_diagnostics) == 2
+
+
 def test_exclusion_rule_must_exist_match_route_and_have_evidence(tmp_path: Path) -> None:
     route, _ = _excluded_route("customer.download", rule_id="missing")
     project = _write_project(
@@ -1742,6 +1817,70 @@ def test_plan_coverage_diagnostic_does_not_echo_invalid_pointer_value(
 
     assert completed.returncode == 3
     assert payload["diagnostics"][0]["code"] == ("ACC_SCOPE_PLAN_EXCLUSION_DECISION_REFS_INVALID")
+    assert secret not in completed.stdout
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("scope_mode", None),
+        ("scope_mode", "pilot"),
+        ("scope_inventory", None),
+        ("scope_inventory", "other-inventory.yaml"),
+    ],
+)
+def test_system_complete_plan_coverage_requires_exact_inventory_binding(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    coverage: dict[str, object] = {
+        "scope_mode": "system_readonly_complete",
+        "scope_inventory": "scope-inventory.yaml",
+        "route_dispositions": {
+            "planned": ["customer.search"],
+            "composed": [],
+            "excluded": [],
+            "blocked_on_evidence": [],
+            "out_of_scope": [],
+        },
+        "exclusion_decision_refs": [],
+    }
+    if value is None:
+        del coverage[field]
+    else:
+        coverage[field] = value
+    project = _write_project(tmp_path, plan_coverage=coverage)
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert {item["code"] for item in payload["diagnostics"]} == {
+        "ACC_SCOPE_PLAN_COVERAGE_BINDING_INVALID"
+    }
+
+
+def test_plan_coverage_binding_diagnostic_does_not_echo_invalid_value(
+    tmp_path: Path,
+) -> None:
+    secret = "coverage-binding-secret-never-output"
+    project = _write_project(
+        tmp_path,
+        plan_coverage={
+            "scope_mode": secret,
+            "scope_inventory": secret,
+            "route_dispositions": {
+                "planned": ["customer.search"],
+                "composed": [],
+                "excluded": [],
+                "blocked_on_evidence": [],
+                "out_of_scope": [],
+            },
+            "exclusion_decision_refs": [],
+        },
+    )
+
+    completed, _payload = _run(project)
+
+    assert completed.returncode == 3
     assert secret not in completed.stdout
 
 

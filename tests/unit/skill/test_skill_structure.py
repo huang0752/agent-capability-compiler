@@ -241,6 +241,8 @@ def test_scope_governance_guides_define_each_phase_contract() -> None:
     assert "pilot/domain" in plan
     assert "精确一致" in plan
     assert "/routes/{index}/exclusion_decision" in plan
+    assert "coverage.scope_mode" in plan
+    assert "coverage.scope_inventory" in plan
     assert "warning" in validate
     assert "不阻断" in validate
     for risk in ("重复 decision", "整域零能力", "高排除率", ">= 10", ">= 70%"):
