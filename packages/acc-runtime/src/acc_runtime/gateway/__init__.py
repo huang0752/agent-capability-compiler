@@ -19,6 +19,7 @@ from acc_runtime.gateway.models import (
     SessionCreateRequest,
     SessionCreateResponse,
 )
+from acc_runtime.gateway.service import GatewaySessionService
 from acc_runtime.gateway.sessions import (
     GatewayReauthRequiredError,
     GatewaySessionCapacityError,
@@ -40,6 +41,7 @@ __all__ = [
     "GatewaySessionExpiredError",
     "GatewaySessionInvalidError",
     "GatewaySessionRecord",
+    "GatewaySessionService",
     "GatewaySessionStatus",
     "GatewaySessionStore",
     "GatewaySettings",
