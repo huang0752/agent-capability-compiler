@@ -18,7 +18,7 @@ from acc_testkit.fake_system import (
     SimulatedTimeoutError,
 )
 from acc_testkit.faults import Fault
-from acc_testkit.mcp_client import McpStdioTestClient
+from acc_testkit.mcp_client import McpStdioTestClient, McpStreamableHttpTestClient
 from acc_testkit.recording import (
     CallRecorder,
     OperationCallRecord,
@@ -36,6 +36,7 @@ __all__ = [
     "Fault",
     "FixtureConfigurationError",
     "McpStdioTestClient",
+    "McpStreamableHttpTestClient",
     "OperationCallLike",
     "OperationCallRecord",
     "OperationProvider",

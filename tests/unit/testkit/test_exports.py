@@ -6,6 +6,7 @@ from acc_testkit import (
     FakeRestSystem,
     Fault,
     McpStdioTestClient,
+    McpStreamableHttpTestClient,
     RecordingOperationProvider,
     ResponseSpec,
     RouteFixture,
@@ -19,6 +20,7 @@ def test_primary_testkit_api_is_exported_from_package_root() -> None:
     assert RouteFixture.__name__ == "RouteFixture"
     assert Fault.__name__ == "Fault"
     assert McpStdioTestClient.__name__ == "McpStdioTestClient"
+    assert McpStreamableHttpTestClient.__name__ == "McpStreamableHttpTestClient"
     assert RecordingOperationProvider.__name__ == "RecordingOperationProvider"
     assert CallRecorder.__name__ == "CallRecorder"
     assert E2EAssertionError.__name__ == "E2EAssertionError"
