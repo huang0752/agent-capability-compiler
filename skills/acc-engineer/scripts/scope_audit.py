@@ -388,14 +388,21 @@ def audit_route_exclusion_decision(
     scope = mapping_at(document, "scope") or {}
     if string_at(scope, "mode") != "system_readonly_complete":
         return diagnostics
-    routes = index_routes(document)
+    raw_routes = document.get("routes")
+    routes = raw_routes if isinstance(raw_routes, list) else []
     rationale_counts: dict[str, int] = defaultdict(int)
-    for _, route in routes.values():
+    for raw_route in routes:
+        if not isinstance(raw_route, Mapping):
+            continue
+        route = cast(Mapping[str, object], raw_route)
         decision = mapping_at(route, "exclusion_decision")
         rationale = string_at(decision or {}, "rationale")
         if rationale is not None and rationale.strip():
             rationale_counts[normalize_rationale(rationale)] += 1
-    for _route_id, (index, route) in routes.items():
+    for index, raw_route in enumerate(routes):
+        if not isinstance(raw_route, Mapping):
+            continue
+        route = cast(Mapping[str, object], raw_route)
         if (
             string_at(route, "eligibility") != "eligible"
             or string_at(route, "disposition") != "excluded"
@@ -454,7 +461,7 @@ def subsumed_decision_fields(
 
 def audit_structured_exclusion_authorities(
     document: Mapping[str, object], *, path: str
-) -> tuple[set[str], list[dict[str, object]]]:
+) -> tuple[set[int], list[dict[str, object]]]:
     """Audit structured exclusions and return only fully valid reason authorities."""
 
     rules, rule_diagnostics = audit_exclusion_rules(document, path=path)
@@ -462,7 +469,18 @@ def audit_structured_exclusion_authorities(
     diagnostics = [*rule_diagnostics, *decision_diagnostics]
     invalid_route_indexes: set[int] = set()
     invalid_rule_ids: set[str] = set()
-    routes = index_routes(document)
+    raw_routes = document.get("routes")
+    routes = raw_routes if isinstance(raw_routes, list) else []
+    route_indexes_by_id: dict[str, list[int]] = defaultdict(list)
+    for route_index, raw_route in enumerate(routes):
+        if not isinstance(raw_route, Mapping):
+            continue
+        route_id = string_at(cast(Mapping[str, object], raw_route), "id")
+        if route_id:
+            route_indexes_by_id[route_id].append(route_index)
+    for indexes in route_indexes_by_id.values():
+        if len(indexes) > 1:
+            invalid_route_indexes.update(indexes)
     raw_rules = document.get("exclusion_rules")
     rules_list = raw_rules if isinstance(raw_rules, list) else []
     for issue in diagnostics:
@@ -483,18 +501,22 @@ def audit_structured_exclusion_authorities(
         if invalid_rule_id is not None:
             invalid_rule_ids.add(invalid_rule_id)
         for route_id in string_list_at(invalid_rule, "route_ids") or []:
-            indexed_route = routes.get(route_id)
-            if indexed_route is not None:
-                invalid_route_indexes.add(indexed_route[0])
+            invalid_route_indexes.update(route_indexes_by_id.get(route_id, []))
 
-    valid: set[str] = set()
-    for route_id, (route_index, route) in routes.items():
+    valid: set[int] = set()
+    for route_index, raw_route in enumerate(routes):
+        if not isinstance(raw_route, Mapping):
+            continue
+        route = cast(Mapping[str, object], raw_route)
+        route_id = string_at(route, "id")
         if route_index in invalid_route_indexes:
             continue
         rule_id = string_at(route, "exclusion_rule_id")
         if (
             string_at(route, "eligibility") != "eligible"
             or string_at(route, "disposition") != "excluded"
+            or route_id is None
+            or not route_id
             or rule_id is None
             or not rule_id.strip()
             or rule_id != rule_id.strip()
@@ -509,7 +531,7 @@ def audit_structured_exclusion_authorities(
             capability_ids, replacement_ids = subsumed_decision_fields(decision)
             if capability_ids is None or replacement_ids is None:
                 continue
-        valid.add(route_id)
+        valid.add(route_index)
     return valid, diagnostics
 
 
@@ -750,7 +772,7 @@ def audit_inventory(
             mode == "system_readonly_complete"
             and eligibility == "eligible"
             and disposition == "excluded"
-            and route_id in valid_structured_exclusions
+            and index in valid_structured_exclusions
         )
         if (
             disposition in {"excluded", "blocked_on_evidence", "out_of_scope"}

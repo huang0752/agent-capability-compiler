@@ -965,6 +965,39 @@ def test_reused_decisions_cannot_waive_reason_for_either_route(tmp_path: Path) -
     assert len(reason_diagnostics) == 2
 
 
+def test_duplicate_raw_route_ids_cannot_borrow_structured_authority(
+    tmp_path: Path,
+) -> None:
+    first, rule = _excluded_route("customer.download")
+    first["reason"] = None
+    second = _route(
+        "customer.download",
+        disposition="excluded",
+        operation_id=None,
+        reason=None,
+        exclusion_rule_id="binary-rule",
+    )
+    project = _write_project(
+        tmp_path,
+        routes=[first, second, _route("customer.search")],
+        exclusion_rules=[rule],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    codes = {item["code"] for item in payload["diagnostics"]}
+    assert codes >= {
+        "ACC_SCOPE_ROUTE_DUPLICATE",
+        "ACC_SCOPE_ROUTE_EXCLUSION_DECISION_REQUIRED",
+        "ACC_SCOPE_REASON_REQUIRED",
+    }
+    assert any(
+        item["code"] == "ACC_SCOPE_REASON_REQUIRED" and item["pointer"] == "/routes/1/reason"
+        for item in payload["diagnostics"]
+    )
+
+
 def test_exclusion_rule_must_exist_match_route_and_have_evidence(tmp_path: Path) -> None:
     route, _ = _excluded_route("customer.download", rule_id="missing")
     project = _write_project(
