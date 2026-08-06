@@ -4,12 +4,18 @@ import json
 import os
 import subprocess
 import sys
+from argparse import Namespace
 from collections.abc import Sequence
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
 import yaml
+
+from acc_core.cli.main import EXIT_RUNTIME, EXIT_SUCCESS
+from acc_core.cli.main import _run_command as run_pack_command
+from acc_runtime.errors import RuntimeError as AccRuntimeError
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 ACC_CORE_SRC = REPOSITORY_ROOT / "packages" / "acc-core" / "src"
@@ -23,6 +29,131 @@ EXPORTED_SCHEMAS = {
     "project.schema.json",
 }
 PROJECT_DIRECTORIES = {"capabilities", "evals", "evidence", "operations", "policies"}
+
+
+class _FakeRuntime:
+    def __init__(self, *, close_error: Exception | None = None) -> None:
+        self.close_error = close_error
+        self.close_calls = 0
+
+    def tools(self) -> list[dict[str, object]]:
+        return [{"name": "safe-tool"}]
+
+    async def aclose(self) -> None:
+        self.close_calls += 1
+        if self.close_error is not None:
+            raise self.close_error
+
+
+class _FakeAdapter:
+    def __init__(self, *, run_error: Exception | None = None) -> None:
+        self.run_error = run_error
+        self.run_calls = 0
+
+    async def run_stdio(self) -> None:
+        self.run_calls += 1
+        if self.run_error is not None:
+            raise self.run_error
+
+
+class _FakeStdioError(AccRuntimeError):
+    code = "ACC_RUNTIME_FAKE_STDIO_FAILED"
+    status = 500
+
+
+def _patch_run_composition(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    runtime: _FakeRuntime,
+    adapter: _FakeAdapter,
+) -> None:
+    import acc_runtime
+    import acc_runtime.loader
+    import acc_runtime.mcp
+
+    project = {
+        "schema_version": "1",
+        "project": {"id": "fake-runtime", "version": "0.1.0"},
+        "source_workspace": {"path": "../system", "mode": "read_only"},
+        "runtime": {"transport": ["stdio"]},
+        "provider": {"kind": "http", "base_url_ref": "FAKE_BASE_URL"},
+    }
+
+    class FakeGenericRuntime:
+        @classmethod
+        def from_pack(cls, *args: object, **kwargs: object) -> _FakeRuntime:
+            del cls, args, kwargs
+            return runtime
+
+    monkeypatch.setattr(acc_runtime, "GenericRuntime", FakeGenericRuntime)
+    monkeypatch.setattr(
+        acc_runtime.loader,
+        "load_pack",
+        lambda path: SimpleNamespace(ir={"project": project}),
+    )
+    monkeypatch.setattr(acc_runtime.mcp, "CapabilityMcpServer", lambda value: adapter)
+
+
+def _run_arguments(*, json_output: bool) -> Namespace:
+    return Namespace(
+        pack="offline.accpkg",
+        scope=[],
+        tenant_id=None,
+        json_output=json_output,
+    )
+
+
+@pytest.mark.parametrize("json_output", [False, True])
+def test_run_composition_closes_runtime_on_stdio_and_inspect_success(
+    monkeypatch: pytest.MonkeyPatch,
+    json_output: bool,
+) -> None:
+    runtime = _FakeRuntime()
+    adapter = _FakeAdapter()
+    _patch_run_composition(monkeypatch, runtime=runtime, adapter=adapter)
+
+    exit_code, envelope = run_pack_command(_run_arguments(json_output=json_output))
+
+    assert exit_code == EXIT_SUCCESS
+    assert envelope.ok is True
+    assert runtime.close_calls == 1
+    assert adapter.run_calls == (0 if json_output else 1)
+
+
+def test_run_composition_closes_runtime_when_stdio_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _FakeRuntime()
+    adapter = _FakeAdapter(run_error=_FakeStdioError("private stdio failure"))
+    _patch_run_composition(monkeypatch, runtime=runtime, adapter=adapter)
+
+    exit_code, envelope = run_pack_command(_run_arguments(json_output=False))
+
+    assert exit_code == EXIT_RUNTIME
+    assert envelope.ok is False
+    assert runtime.close_calls == 1
+    assert envelope.diagnostics[0].code == "ACC_RUNTIME_FAKE_STDIO_FAILED"
+    assert "private stdio failure" not in repr(envelope)
+
+
+@pytest.mark.parametrize("json_output", [False, True])
+def test_run_composition_maps_close_failure_to_a_stable_safe_error(
+    monkeypatch: pytest.MonkeyPatch,
+    json_output: bool,
+) -> None:
+    close_secret = "close-secret-must-not-leak"
+    runtime = _FakeRuntime(close_error=ValueError(close_secret))
+    adapter = _FakeAdapter()
+    _patch_run_composition(monkeypatch, runtime=runtime, adapter=adapter)
+
+    exit_code, envelope = run_pack_command(_run_arguments(json_output=json_output))
+
+    assert exit_code == EXIT_RUNTIME
+    assert envelope.ok is False
+    assert runtime.close_calls == 1
+    assert envelope.diagnostics[0].code == "ACC_RUNTIME_START_FAILED"
+    assert envelope.diagnostics[0].message == "ACC runtime could not start."
+    assert close_secret not in repr(envelope)
 
 
 def _run_command(

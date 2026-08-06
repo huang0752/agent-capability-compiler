@@ -791,15 +791,24 @@ def _run_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope]:
             granted_scopes=_runtime_scopes(cast(Sequence[str], arguments.scope)),
             tenant_id=tenant_id,
         )
-        adapter = CapabilityMcpServer(runtime)
-        if not bool(arguments.json_output):
-            anyio.run(adapter.run_stdio)
+
+        async def inspect_or_serve_stdio() -> list[dict[str, object]]:
+            try:
+                tools = runtime.tools()
+                adapter = CapabilityMcpServer(runtime)
+                if not bool(arguments.json_output):
+                    await adapter.run_stdio()
+                return tools
+            finally:
+                await runtime.aclose()
+
+        tools = anyio.run(inspect_or_serve_stdio)
         return EXIT_SUCCESS, _success(
             "run",
             {
                 "pack": str(Path(str(arguments.pack)).resolve()),
                 "transport": "stdio",
-                "tools": runtime.tools(),
+                "tools": tools,
             },
         )
     except (AccRuntimeError, OSError, ValueError) as exc:
