@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Never, Protocol, cast
 
@@ -19,7 +19,6 @@ from pydantic import JsonValue
 from acc_runtime.context import (
     PrincipalContext,
     normalize_security_name,
-    sensitive_auth_name_candidates,
     sensitive_auth_name_marker,
 )
 from acc_runtime.errors import RuntimeError as AccRuntimeError
@@ -349,31 +348,49 @@ def _reserved_schema_property_names(schema: Mapping[str, object]) -> frozenset[s
                         reserved = _reserved_argument_name(key)
                         if reserved is not None:
                             found.add(reserved)
-            required = current.get("required")
-            if isinstance(required, list):
-                for key in required:
-                    if isinstance(key, str):
+            if "required" in current:
+                required = _schema_string_sequence(current.get("required"))
+                if required is None:
+                    found.add("invalid_dynamic_name_contract")
+                else:
+                    for key in required:
                         reserved = _reserved_argument_name(key)
                         if reserved is not None:
                             found.add(reserved)
-            pattern_properties = current.get("patternProperties")
-            if isinstance(pattern_properties, Mapping):
-                for pattern in pattern_properties:
-                    if isinstance(pattern, str) and _pattern_matches_reserved_name(pattern):
-                        found.add("dynamic_reserved_name")
-            property_names = current.get("propertyNames")
-            if isinstance(property_names, Mapping):
-                for keyword in ("const", "enum"):
-                    values = property_names.get(keyword)
-                    candidates = values if isinstance(values, list) else [values]
-                    for key in candidates:
-                        if isinstance(key, str):
-                            reserved = _reserved_argument_name(key)
+            if "patternProperties" in current:
+                pattern_properties = current.get("patternProperties")
+                if not isinstance(pattern_properties, Mapping):
+                    found.add("invalid_dynamic_name_contract")
+                else:
+                    for pattern in pattern_properties:
+                        if not isinstance(pattern, str) or not _pattern_is_provably_safe(pattern):
+                            found.add("dynamic_reserved_name")
+            if "propertyNames" in current:
+                property_names = current.get("propertyNames")
+                if not isinstance(property_names, Mapping):
+                    found.add("invalid_dynamic_name_contract")
+                else:
+                    if "const" in property_names:
+                        const = property_names.get("const")
+                        if not isinstance(const, str):
+                            found.add("invalid_dynamic_name_contract")
+                        else:
+                            reserved = _reserved_argument_name(const)
                             if reserved is not None:
                                 found.add(reserved)
-                pattern = property_names.get("pattern")
-                if isinstance(pattern, str) and _pattern_matches_reserved_name(pattern):
-                    found.add("dynamic_reserved_name")
+                    if "enum" in property_names:
+                        enum = _schema_string_sequence(property_names.get("enum"))
+                        if enum is None:
+                            found.add("invalid_dynamic_name_contract")
+                        else:
+                            for key in enum:
+                                reserved = _reserved_argument_name(key)
+                                if reserved is not None:
+                                    found.add(reserved)
+                    if "pattern" in property_names:
+                        pattern = property_names.get("pattern")
+                        if not isinstance(pattern, str) or not _pattern_is_provably_safe(pattern):
+                            found.add("dynamic_reserved_name")
             pending.extend(current.values())
         elif isinstance(current, (list, tuple)):
             pending.extend(current)
@@ -390,38 +407,24 @@ def _reserved_argument_name(value: str) -> str | None:
     return sensitive_auth_name_marker(value)
 
 
-def _pattern_matches_reserved_name(pattern: str) -> bool:
-    if _reserved_argument_name(pattern) is not None:
-        return True
+def _schema_string_sequence(value: object) -> tuple[str, ...] | None:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        return None
+    if any(not isinstance(item, str) for item in value):
+        return None
+    return tuple(value)
+
+
+_SAFE_EXACT_PROPERTY_PATTERN = re.compile(r"\^([A-Za-z][A-Za-z0-9_-]*)\$")
+
+
+def _pattern_is_provably_safe(pattern: str) -> bool:
     try:
-        compiled = re.compile(pattern)
+        re.compile(pattern)
     except re.error:
-        return True
-    return any(compiled.search(candidate) for candidate in _reserved_name_pattern_probes())
-
-
-def _reserved_name_pattern_probes() -> frozenset[str]:
-    canonical_names = _GATEWAY_RESERVED_ARGUMENTS | sensitive_auth_name_candidates()
-    probes: set[str] = set()
-    for canonical in canonical_names:
-        parts = canonical.split("_")
-        compact = canonical.replace("_", "")
-        camel = parts[0] + "".join(part.title() for part in parts[1:])
-        probes.update(
-            {
-                canonical,
-                compact,
-                canonical.replace("_", "-"),
-                camel,
-                f"{canonical}_v2",
-                f"{canonical}_value",
-                f"my_{canonical}",
-                f"{compact}s",
-                f"my{compact}",
-                f"{camel}Value",
-            }
-        )
-    return frozenset(probes)
+        return False
+    exact = _SAFE_EXACT_PROPERTY_PATTERN.fullmatch(pattern)
+    return exact is not None and _reserved_argument_name(exact.group(1)) is None
 
 
 def _raise_mcp_cancelled() -> Never:

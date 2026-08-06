@@ -366,9 +366,34 @@ def test_sensitive_auth_name_marker_is_shared_and_canonical(name: str, marker: s
     assert sensitive_auth_name_marker(name) == marker
 
 
-@pytest.mark.parametrize("name", ["tokenized_at", "private_label", "api_version", "user_id"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "tokenized_at",
+        "private_label",
+        "api_version",
+        "user_id",
+        "client_secretary",
+        "clientsecretary",
+    ],
+)
 def test_sensitive_auth_name_marker_does_not_match_ordinary_business_names(name: str) -> None:
     assert sensitive_auth_name_marker(name) is None
+
+
+@pytest.mark.parametrize(
+    ("name", "marker"),
+    [
+        ("my_client_secret", "secret"),
+        ("client_secret_value", "secret"),
+        ("api_keys", "api_key"),
+    ],
+)
+def test_sensitive_auth_name_marker_rejects_explicit_credential_word_boundaries(
+    name: str,
+    marker: str,
+) -> None:
+    assert sensitive_auth_name_marker(name) == marker
 
 
 @pytest.mark.parametrize(

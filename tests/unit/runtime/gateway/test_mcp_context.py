@@ -220,12 +220,22 @@ def test_principal_mcp_rejects_tools_whose_schema_exposes_reserved_identity_inpu
     [
         {"patternProperties": {r"^(?:auth[_-]?token|authtoken)$": {"type": "string"}}},
         {"patternProperties": {r"^auth_token_v2$": {"type": "string"}}},
-        {"patternProperties": {r"^myclientsecret$": {"type": "string"}}},
+        {"patternProperties": {r"^my_client_secret$": {"type": "string"}}},
         {"patternProperties": {r"^api_keys$": {"type": "string"}}},
+        {"patternProperties": {r"^auth\x2etoken$": {"type": "string"}}},
+        {"patternProperties": {r"^auth\u002etoken$": {"type": "string"}}},
+        {"patternProperties": {"[": {"type": "string"}}},
+        {"patternProperties": {r"^[a-z_]+$": {"type": "string"}}},
         {"propertyNames": {"enum": ["customer_id", "clientSecret"]}},
         {"propertyNames": {"const": "api-key"}},
         {"propertyNames": {"pattern": r"session[_-]?token"}},
         {"required": ["customer_id", "privatekey"]},
+        {"required": ("customer_id", "clientSecret")},
+        {"required": {"clientSecret"}},
+        {"propertyNames": {"enum": ("customer_id", "apiToken")}},
+        {"propertyNames": {"enum": "apiToken"}},
+        {"propertyNames": {"pattern": "["}},
+        {"required": ["customer_id", 7]},
         {
             "properties": {
                 "filters": {
@@ -260,9 +270,12 @@ def test_principal_mcp_allows_safe_pattern_and_property_name_contracts() -> None
             assert isinstance(input_schema, dict)
             input_schema.update(
                 {
-                    "patternProperties": {r"^business_[a-z]+$": {"type": "string"}},
-                    "propertyNames": {"pattern": r"^business_[a-z]+$"},
-                    "required": ["customer_id"],
+                    "patternProperties": {r"^business_label$": {"type": "string"}},
+                    "propertyNames": {
+                        "pattern": r"^business_label$",
+                        "enum": ("business_label",),
+                    },
+                    "required": ("customer_id",),
                 }
             )
             return tools
@@ -290,11 +303,17 @@ async def test_gateway_reserved_matching_does_not_use_unsafe_substrings() -> Non
     runtime = ContextualRuntime()
     result = await PrincipalCapabilityMcpServer(runtime, resolver=Resolver()).call_tool(
         "get_customer",
-        {"tokenized_at": "ordinary-business-label"},
+        {
+            "tokenized_at": "ordinary-business-label",
+            "client_secretary": "ordinary-business-role",
+        },
         access_token=_access("a"),
     )
     assert result.isError is False
-    assert runtime.calls[0][1] == {"tokenized_at": "ordinary-business-label"}
+    assert runtime.calls[0][1] == {
+        "tokenized_at": "ordinary-business-label",
+        "client_secretary": "ordinary-business-role",
+    }
 
 
 def test_principal_server_uses_public_sdk_server_without_private_owner_maps() -> None:

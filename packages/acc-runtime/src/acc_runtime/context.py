@@ -43,6 +43,14 @@ _DENIED_TENANT_WORDS = frozenset(
         "csrf",
     }
 )
+_DENIED_TENANT_PLURAL_WORDS = {
+    "cookies": "cookie",
+    "credentials": "credential",
+    "jwts": "jwt",
+    "passwords": "password",
+    "secrets": "secret",
+    "tokens": "token",
+}
 _SENSITIVE_AUTH_COMPACT_MARKERS = {
     "accesstoken": "access_token",
     "refreshtoken": "refresh_token",
@@ -57,6 +65,7 @@ _SENSITIVE_AUTH_COMPACT_MARKERS = {
     "clientsecret": "client_secret",
     "apisecret": "api_secret",
     "apikey": "api_key",
+    "xapikey": "api_key",
     "privatekey": "private_key",
     "setcookie": "set_cookie",
 }
@@ -260,31 +269,22 @@ def sensitive_auth_name_marker(name: str) -> str | None:
     compact = normalized.replace("_", "")
     if normalized in {"header", "headers"}:
         return normalized
-    for compact_marker, canonical in sorted(
-        _SENSITIVE_AUTH_COMPACT_MARKERS.items(), key=lambda item: len(item[0]), reverse=True
-    ):
-        if compact_marker in compact:
+    for compact_marker, canonical in _SENSITIVE_AUTH_COMPACT_MARKERS.items():
+        if compact_marker == compact:
             return canonical
     denied_words = words & _DENIED_TENANT_WORDS
     if denied_words:
         return sorted(denied_words)[0]
-    if {"api", "key"} <= words:
+    for plural, canonical in _DENIED_TENANT_PLURAL_WORDS.items():
+        if plural in words:
+            return canonical
+    if "api" in words and bool({"key", "keys"} & words):
         return "api_key"
-    if {"private", "key"} <= words:
+    if "private" in words and bool({"key", "keys"} & words):
         return "private_key"
     if {"set", "cookie"} <= words:
         return "set_cookie"
     return None
-
-
-def sensitive_auth_name_candidates() -> frozenset[str]:
-    """Return canonical probes used to audit dynamic public input schemas."""
-
-    return frozenset(
-        _DENIED_TENANT_WORDS
-        | {"header", "headers"}
-        | frozenset(_SENSITIVE_AUTH_COMPACT_MARKERS.values())
-    )
 
 
 def _segment_is_sensitive(segment: str) -> bool:
@@ -321,6 +321,5 @@ __all__ = [
     "map_effective_scopes",
     "normalize_security_name",
     "resolve_context_binding",
-    "sensitive_auth_name_candidates",
     "sensitive_auth_name_marker",
 ]
