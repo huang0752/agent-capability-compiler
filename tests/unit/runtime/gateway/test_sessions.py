@@ -61,7 +61,7 @@ def _assert_runtime_traceback_cannot_reach_secret(
             assert secret not in value
             continue
         if isinstance(value, bytes):
-            assert secret.encode() not in value
+            assert secret.encode(errors="surrogatepass") not in value
             continue
         if isinstance(value, SecretValue):
             assert secret not in value.get_secret_value()
@@ -165,7 +165,7 @@ async def test_create_caps_ttl_at_source_token_expiry() -> None:
 
 
 @pytest.mark.anyio
-async def test_expired_source_token_cannot_create_session() -> None:
+async def test_expired_source_token_requires_reauthentication_before_session_creation() -> None:
     store = InMemoryGatewaySessionStore(
         max_sessions=1,
         ttl_seconds=60,
@@ -173,14 +173,14 @@ async def test_expired_source_token_cannot_create_session() -> None:
         token_generator=lambda: "g" * 43,
     )
 
-    with pytest.raises(GatewaySessionExpiredError) as caught:
+    with pytest.raises(GatewayReauthRequiredError) as caught:
         await store.create(
             session_id="session-a",
             principal_context=_context("a", "session-a"),
             source_expires_at=100.0,
         )
 
-    assert caught.value.code == "ACC_GATEWAY_SESSION_EXPIRED"
+    assert caught.value.code == "ACC_GATEWAY_REAUTH_REQUIRED"
     assert "source-a" not in str(caught.value)
 
 
@@ -421,3 +421,154 @@ async def test_create_error_traceback_drops_invalid_generated_token_and_store() 
 
     _assert_runtime_traceback_cannot_reach_secret(caught.value, invalid_token)
     _assert_runtime_traceback_cannot_reach_secret(caught.value, other_users_token)
+
+
+@pytest.mark.anyio
+async def test_cancelled_token_resolution_drops_raw_tokens_and_store_graph() -> None:
+    token_a = base64.urlsafe_b64encode(b"a" * 32).rstrip(b"=").decode("ascii")
+    token_b = base64.urlsafe_b64encode(b"b" * 32).rstrip(b"=").decode("ascii")
+    store = InMemoryGatewaySessionStore(
+        max_sessions=2,
+        ttl_seconds=60,
+        clock=Clock(),
+        token_generator=TokenGenerator(token_a, token_b),
+    )
+    returned_a, _ = await store.create(
+        session_id="session-a",
+        principal_context=_context("a", "session-a"),
+    )
+    await store._lock.acquire()
+    resolving = asyncio.create_task(store.resolve_token(returned_a))
+    await asyncio.sleep(0)
+    resolving.cancel()
+    store._lock.release()
+
+    with pytest.raises(asyncio.CancelledError) as caught:
+        await resolving
+
+    _assert_runtime_traceback_cannot_reach_secret(caught.value, token_a)
+    _assert_runtime_traceback_cannot_reach_secret(caught.value, token_b)
+
+
+@pytest.mark.anyio
+async def test_non_utf8_gateway_token_is_stably_rejected_without_leaking() -> None:
+    invalid_token = "surrogate-token-secret-\ud800"
+    store = InMemoryGatewaySessionStore(max_sessions=1, ttl_seconds=60, clock=Clock())
+
+    with pytest.raises(GatewaySessionInvalidError) as caught:
+        await store.resolve_token(SecretValue(invalid_token))
+
+    assert caught.value.code == "ACC_GATEWAY_SESSION_INVALID"
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    _assert_runtime_traceback_cannot_reach_secret(caught.value, invalid_token)
+
+
+@pytest.mark.anyio
+async def test_create_uses_fresh_clock_inside_linearization_lock() -> None:
+    clock = Clock()
+    store = InMemoryGatewaySessionStore(
+        max_sessions=1,
+        ttl_seconds=60,
+        clock=clock,
+        token_generator=lambda: "a" * 43,
+    )
+    await store._lock.acquire()
+    creating = asyncio.create_task(
+        store.create(
+            session_id="session-a",
+            principal_context=_context("a", "session-a"),
+            source_expires_at=105.0,
+        )
+    )
+    await asyncio.sleep(0)
+    clock.value = 110.0
+    store._lock.release()
+
+    with pytest.raises(GatewayReauthRequiredError):
+        await creating
+
+
+@pytest.mark.anyio
+async def test_source_expiry_marks_only_that_session_reauth_required() -> None:
+    clock = Clock()
+    generator = _tokens("a" * 43, "b" * 43)
+    store = InMemoryGatewaySessionStore(
+        max_sessions=2,
+        ttl_seconds=60,
+        clock=clock,
+        token_generator=lambda: next(generator),
+    )
+    token_a, _ = await store.create(
+        session_id="session-a",
+        principal_context=_context("a", "session-a"),
+        source_expires_at=105.0,
+    )
+    token_b, record_b = await store.create(
+        session_id="session-b",
+        principal_context=_context("b", "session-b"),
+        source_expires_at=130.0,
+    )
+    clock.value = 105.0
+
+    with pytest.raises(GatewayReauthRequiredError):
+        await store.resolve_token(token_a)
+    assert (await store.resolve_token(token_b)) == record_b
+    with pytest.raises(GatewayReauthRequiredError):
+        await store.resolve_session_id("session-a")
+
+
+@pytest.mark.anyio
+async def test_source_refresh_boundary_requires_reauthentication_before_expiry() -> None:
+    clock = Clock()
+    store = InMemoryGatewaySessionStore(
+        max_sessions=1,
+        ttl_seconds=60,
+        clock=clock,
+        token_generator=lambda: "a" * 43,
+    )
+    token, record = await store.create(
+        session_id="session-a",
+        principal_context=_context("a", "session-a"),
+        source_refresh_at=104.0,
+        source_expires_at=110.0,
+    )
+    assert record.source_refresh_at == 104.0
+    assert record.source_expires_at == 110.0
+    clock.value = 104.0
+
+    with pytest.raises(GatewayReauthRequiredError):
+        await store.resolve_token(token)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("operation", ["mark_reauth", "revoke"])
+async def test_cancelled_session_mutation_drops_store_token_graph(operation: str) -> None:
+    token_a = base64.urlsafe_b64encode(b"a" * 32).rstrip(b"=").decode("ascii")
+    token_b = base64.urlsafe_b64encode(b"b" * 32).rstrip(b"=").decode("ascii")
+    store = InMemoryGatewaySessionStore(
+        max_sessions=2,
+        ttl_seconds=60,
+        clock=Clock(),
+        token_generator=TokenGenerator(token_a, token_b),
+    )
+    await store.create(
+        session_id="session-a",
+        principal_context=_context("a", "session-a"),
+    )
+    await store._lock.acquire()
+    call = (
+        store.mark_reauth_required("session-a")
+        if operation == "mark_reauth"
+        else store.revoke("session-a")
+    )
+    task = asyncio.create_task(call)
+    await asyncio.sleep(0)
+    task.cancel()
+    store._lock.release()
+
+    with pytest.raises(asyncio.CancelledError) as caught:
+        await task
+
+    _assert_runtime_traceback_cannot_reach_secret(caught.value, token_a)
+    _assert_runtime_traceback_cannot_reach_secret(caught.value, token_b)

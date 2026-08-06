@@ -127,6 +127,26 @@ def test_session_create_validation_errors_never_echo_password(
     assert "validation-password-secret" not in str(caught.value)
 
 
+@pytest.mark.parametrize(
+    "malformed_password",
+    [
+        {"value": "nested-password-secret"},
+        ["nested-password-secret"],
+    ],
+)
+def test_malformed_password_type_is_redacted_from_every_validation_view(
+    malformed_password: object,
+) -> None:
+    with pytest.raises(ValidationError) as caught:
+        SessionCreateRequest.model_validate(
+            {"identity": "a@example.com", "password": malformed_password}
+        )
+
+    assert "nested-password-secret" not in str(caught.value)
+    assert "nested-password-secret" not in str(caught.value.errors())
+    assert "nested-password-secret" not in caught.value.json()
+
+
 def test_session_response_secret_is_one_shot_and_not_publicly_serialized() -> None:
     response = SessionCreateResponse.model_validate(
         {"gateway_token": "gateway-token-secret", "expires_in_seconds": 120}
@@ -193,3 +213,49 @@ def test_gateway_session_record_defensively_keeps_immutable_context() -> None:
         "tenant_id": "tenant-a",
         "nested": {"region": "east"},
     }
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "example.com:",
+        "[::1]:",
+        "exa mple.com",
+        ".example.com",
+        "example..com",
+        "-example.com",
+        "example-.com",
+        "example.com:0",
+        "example.com:65536",
+    ],
+)
+def test_gateway_settings_rejects_invalid_exact_host_authority(host: str) -> None:
+    with pytest.raises(ValidationError):
+        GatewaySettings(allowed_hosts=(host,))
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "https://example.com:",
+        "https://[::1]:",
+        "https://exa mple.com",
+        "https://.example.com",
+        "https://example..com",
+        "https://example.com:0",
+        "https://example.com:65536",
+    ],
+)
+def test_gateway_settings_rejects_invalid_exact_origin_authority(origin: str) -> None:
+    with pytest.raises(ValidationError):
+        GatewaySettings(allowed_hosts=("localhost",), allowed_origins=(origin,))
+
+
+def test_gateway_settings_normalizes_dns_ipv6_and_default_origin_ports() -> None:
+    settings = GatewaySettings(
+        allowed_hosts=("EXAMPLE.COM:8443", "[0:0:0:0:0:0:0:1]:8443"),
+        allowed_origins=("HTTPS://EXAMPLE.COM:443", "http://[0:0:0:0:0:0:0:1]:80"),
+    )
+
+    assert settings.allowed_hosts == ("example.com:8443", "[::1]:8443")
+    assert settings.allowed_origins == ("https://example.com", "http://[::1]")

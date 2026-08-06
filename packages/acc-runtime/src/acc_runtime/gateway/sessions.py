@@ -47,6 +47,7 @@ class GatewaySessionStore(Protocol):
         session_id: str,
         principal_context: PrincipalContext,
         source_expires_at: float | None = None,
+        source_refresh_at: float | None = None,
     ) -> tuple[SecretValue, GatewaySessionRecord]: ...
 
     async def resolve_token(self, token: str | SecretValue) -> GatewaySessionRecord: ...
@@ -71,8 +72,16 @@ class _SessionFailure:
     reason: str
 
 
-type _RecordOutcome = GatewaySessionRecord | _SessionFailure
-type _CreateOutcome = tuple[SecretValue, GatewaySessionRecord] | _SessionFailure
+@dataclass(frozen=True, slots=True)
+class _CancelledDescriptor:
+    pass
+
+
+_CANCELLED = _CancelledDescriptor()
+type _RecordOutcome = GatewaySessionRecord | _SessionFailure | _CancelledDescriptor
+type _CreateOutcome = (
+    tuple[SecretValue, GatewaySessionRecord] | _SessionFailure | _CancelledDescriptor
+)
 
 
 class InMemoryGatewaySessionStore:
@@ -109,12 +118,19 @@ class InMemoryGatewaySessionStore:
         session_id: str,
         principal_context: PrincipalContext,
         source_expires_at: float | None = None,
+        source_refresh_at: float | None = None,
     ) -> tuple[SecretValue, GatewaySessionRecord]:
-        outcome = await self._create_outcome(
-            session_id=session_id,
-            principal_context=principal_context,
-            source_expires_at=source_expires_at,
-        )
+        try:
+            outcome = await self._create_outcome(
+                session_id=session_id,
+                principal_context=principal_context,
+                source_expires_at=source_expires_at,
+                source_refresh_at=source_refresh_at,
+            )
+        except asyncio.CancelledError:
+            outcome = _CANCELLED
+        except Exception:
+            outcome = _SessionFailure("invalid", "create_failed")
         del self, principal_context
         return _unwrap_create(outcome)
 
@@ -124,21 +140,40 @@ class InMemoryGatewaySessionStore:
         session_id: str,
         principal_context: PrincipalContext,
         source_expires_at: float | None,
+        source_refresh_at: float | None,
     ) -> _CreateOutcome:
-        now = self._clock()
-        expires_at = now + self._ttl_seconds
-        if source_expires_at is not None:
-            if not isinstance(source_expires_at, (int, float)) or not math.isfinite(
-                source_expires_at
-            ):
-                return _SessionFailure("expired", "source_expiry_invalid")
-            expires_at = min(expires_at, float(source_expires_at))
-        if expires_at <= now:
-            return _SessionFailure("expired", "source_authentication_expired")
-
         async with self._lock:
+            now = self._clock()
             if self._closed:
                 return _SessionFailure("invalid", "store_closed")
+            if not isinstance(now, (int, float)) or isinstance(now, bool) or not math.isfinite(now):
+                return _SessionFailure("invalid", "clock_invalid")
+            gateway_expires_at = float(now) + self._ttl_seconds
+            boundaries = [gateway_expires_at]
+            for value, reason in (
+                (source_expires_at, "source_expiry_invalid"),
+                (source_refresh_at, "source_refresh_invalid"),
+            ):
+                if value is None:
+                    continue
+                if (
+                    not isinstance(value, (int, float))
+                    or isinstance(value, bool)
+                    or not math.isfinite(value)
+                ):
+                    return _SessionFailure("invalid", reason)
+                boundaries.append(float(value))
+            if (
+                source_expires_at is not None
+                and source_refresh_at is not None
+                and source_refresh_at > source_expires_at
+            ):
+                return _SessionFailure("invalid", "source_refresh_after_expiry")
+            if source_refresh_at is not None and source_refresh_at <= now:
+                return _SessionFailure("reauth", "source_refresh_reached")
+            if source_expires_at is not None and source_expires_at <= now:
+                return _SessionFailure("reauth", "source_authentication_expired")
+            expires_at = min(boundaries)
             self._purge_expired_locked(now)
             if len(self._by_digest) >= self._max_sessions:
                 return _SessionFailure("capacity", "capacity_reached")
@@ -161,6 +196,9 @@ class InMemoryGatewaySessionStore:
                     principal_context=principal_context,
                     created_at=now,
                     expires_at=expires_at,
+                    gateway_expires_at=gateway_expires_at,
+                    source_expires_at=source_expires_at,
+                    source_refresh_at=source_refresh_at,
                 )
             except (TypeError, ValueError):
                 return _SessionFailure("invalid", "session_record_invalid")
@@ -170,11 +208,17 @@ class InMemoryGatewaySessionStore:
 
     async def resolve_token(self, token: str | SecretValue) -> GatewaySessionRecord:
         raw_token: object = token.get_secret_value() if isinstance(token, SecretValue) else token
-        if not isinstance(raw_token, str):
+        if not _is_256_bit_urlsafe_token(raw_token):
             outcome: _RecordOutcome = _SessionFailure("invalid", "token_invalid")
         else:
+            assert isinstance(raw_token, str)
             digest = _token_digest(raw_token)
-            outcome = await self._resolve_digest_outcome(digest)
+            try:
+                outcome = await self._resolve_digest_outcome(digest)
+            except asyncio.CancelledError:
+                outcome = _CANCELLED
+            except Exception:
+                outcome = _SessionFailure("invalid", "resolve_failed")
         del token, raw_token, self
         return _unwrap_record(outcome)
 
@@ -185,7 +229,12 @@ class InMemoryGatewaySessionStore:
             return self._resolve_digest_locked(digest, self._clock())
 
     async def resolve_session_id(self, session_id: str) -> GatewaySessionRecord:
-        outcome = await self._resolve_session_id_outcome(session_id)
+        try:
+            outcome = await self._resolve_session_id_outcome(session_id)
+        except asyncio.CancelledError:
+            outcome = _CANCELLED
+        except Exception:
+            outcome = _SessionFailure("invalid", "resolve_failed")
         del self
         return _unwrap_record(outcome)
 
@@ -199,13 +248,28 @@ class InMemoryGatewaySessionStore:
             return self._resolve_digest_locked(digest, self._clock())
 
     async def revoke(self, session_id: str) -> None:
+        cancelled = False
+        try:
+            await self._revoke_outcome(session_id)
+        except asyncio.CancelledError:
+            cancelled = True
+        del self
+        if cancelled:
+            raise asyncio.CancelledError() from None
+
+    async def _revoke_outcome(self, session_id: str) -> None:
         async with self._lock:
             digest = self._digest_by_session_id.pop(session_id, None)
             if digest is not None:
                 self._by_digest.pop(digest, None)
 
     async def mark_reauth_required(self, session_id: str) -> GatewaySessionRecord:
-        outcome = await self._mark_reauth_outcome(session_id)
+        try:
+            outcome = await self._mark_reauth_outcome(session_id)
+        except asyncio.CancelledError:
+            outcome = _CANCELLED
+        except Exception:
+            outcome = _SessionFailure("invalid", "mark_reauth_failed")
         del self
         return _unwrap_record(outcome)
 
@@ -217,7 +281,7 @@ class InMemoryGatewaySessionStore:
             if digest is None:
                 return _SessionFailure("invalid", "session_unknown")
             record = self._resolve_digest_locked(digest, self._clock(), allow_reauth=True)
-            if isinstance(record, _SessionFailure):
+            if not isinstance(record, GatewaySessionRecord):
                 return record
             marked = record.model_copy(update={"status": GatewaySessionStatus.REAUTH_REQUIRED})
             self._by_digest[digest] = marked
@@ -245,15 +309,27 @@ class InMemoryGatewaySessionStore:
         record = self._by_digest.get(digest)
         if record is None:
             return _SessionFailure("invalid", "token_unknown")
-        if record.expires_at <= now:
+        gateway_expires_at = record.gateway_expires_at or record.expires_at
+        if gateway_expires_at <= now:
             self._remove_locked(record)
             return _SessionFailure("expired", "session_expired")
         if record.status is GatewaySessionStatus.REAUTH_REQUIRED and not allow_reauth:
             return _SessionFailure("reauth", "reauth_required")
+        source_boundary_reached = (
+            record.source_refresh_at is not None and record.source_refresh_at <= now
+        ) or (record.source_expires_at is not None and record.source_expires_at <= now)
+        if source_boundary_reached and not allow_reauth:
+            marked = record.model_copy(update={"status": GatewaySessionStatus.REAUTH_REQUIRED})
+            self._by_digest[digest] = marked
+            return _SessionFailure("reauth", "source_authentication_expired")
         return record
 
     def _purge_expired_locked(self, now: float) -> int:
-        expired = [record for record in self._by_digest.values() if record.expires_at <= now]
+        expired = [
+            record
+            for record in self._by_digest.values()
+            if (record.gateway_expires_at or record.expires_at) <= now
+        ]
         for record in expired:
             self._remove_locked(record)
         return len(expired)
@@ -282,12 +358,16 @@ def _is_256_bit_urlsafe_token(token: object) -> bool:
 
 
 def _unwrap_create(outcome: _CreateOutcome) -> tuple[SecretValue, GatewaySessionRecord]:
+    if isinstance(outcome, _CancelledDescriptor):
+        raise asyncio.CancelledError() from None
     if isinstance(outcome, _SessionFailure):
         _raise_failure(outcome)
     return outcome
 
 
 def _unwrap_record(outcome: _RecordOutcome) -> GatewaySessionRecord:
+    if isinstance(outcome, _CancelledDescriptor):
+        raise asyncio.CancelledError() from None
     if isinstance(outcome, _SessionFailure):
         _raise_failure(outcome)
     return outcome
@@ -295,12 +375,12 @@ def _unwrap_record(outcome: _RecordOutcome) -> GatewaySessionRecord:
 
 def _raise_failure(failure: _SessionFailure) -> Never:
     if failure.kind == "expired":
-        raise GatewaySessionExpiredError("Gateway session has expired.")
+        raise GatewaySessionExpiredError("Gateway session has expired.") from None
     if failure.kind == "reauth":
-        raise GatewayReauthRequiredError("Gateway session requires reauthentication.")
+        raise GatewayReauthRequiredError("Gateway session requires reauthentication.") from None
     if failure.kind == "capacity":
-        raise GatewaySessionCapacityError("Gateway session capacity has been reached.")
-    raise GatewaySessionInvalidError("Gateway session is invalid.")
+        raise GatewaySessionCapacityError("Gateway session capacity has been reached.") from None
+    raise GatewaySessionInvalidError("Gateway session is invalid.") from None
 
 
 __all__ = [

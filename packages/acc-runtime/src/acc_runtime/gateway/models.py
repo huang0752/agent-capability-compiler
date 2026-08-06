@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import math
+import re
 import unicodedata
 from enum import StrEnum
 from urllib.parse import urlsplit
@@ -25,9 +26,38 @@ def _exact_text(value: str, *, field_name: str) -> str:
         raise ValueError(f"{field_name} must be a nonempty exact value")
     if any(unicodedata.category(character) == "Cc" for character in value):
         raise ValueError(f"{field_name} must not contain control characters")
+    if any(character.isspace() for character in value):
+        raise ValueError(f"{field_name} must not contain whitespace")
     if "*" in value:
         raise ValueError(f"{field_name} must not contain wildcards")
     return value
+
+
+_DNS_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+
+
+def _canonical_hostname(hostname: str) -> str:
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        normalized = hostname.casefold()
+        if not normalized.isascii() or len(normalized) > 253:
+            raise ValueError("authority hostname must be an ASCII DNS name or IP address") from None
+        labels = normalized.split(".")
+        if not labels or any(_DNS_LABEL.fullmatch(label) is None for label in labels):
+            raise ValueError("authority hostname contains an invalid DNS label") from None
+        return normalized
+    if isinstance(address, ipaddress.IPv6Address):
+        return f"[{address.compressed}]"
+    return address.compressed
+
+
+def _validated_port(netloc: str, parsed_port: int | None) -> int | None:
+    if netloc.endswith(":"):
+        raise ValueError("authority must not contain an empty port")
+    if parsed_port is not None and not 1 <= parsed_port <= 65535:
+        raise ValueError("authority port must be between 1 and 65535")
+    return parsed_port
 
 
 def _exact_host(value: str) -> str:
@@ -38,10 +68,11 @@ def _exact_host(value: str) -> str:
     if parsed.username is not None or parsed.password is not None or parsed.hostname is None:
         raise ValueError("allowed host must not contain credentials or an ambiguous host")
     try:
-        _ = parsed.port
+        port = _validated_port(parsed.netloc, parsed.port)
     except ValueError as exc:
         raise ValueError("allowed host contains an invalid port") from exc
-    return value
+    hostname = _canonical_hostname(parsed.hostname)
+    return hostname if port is None else f"{hostname}:{port}"
 
 
 def _exact_origin(value: str) -> str:
@@ -60,14 +91,24 @@ def _exact_origin(value: str) -> str:
     ):
         raise ValueError("allowed origin must be an exact HTTP origin without credentials or path")
     try:
-        _ = parsed.port
+        port = _validated_port(parsed.netloc, parsed.port)
     except ValueError as exc:
         raise ValueError("allowed origin contains an invalid port") from exc
-    return value
+    scheme = parsed.scheme.casefold()
+    hostname = _canonical_hostname(parsed.hostname)
+    if (scheme, port) in {("http", 80), ("https", 443)}:
+        port = None
+    authority = hostname if port is None else f"{hostname}:{port}"
+    return f"{scheme}://{authority}"
 
 
 class _StrictModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        strict=True,
+        hide_input_in_errors=True,
+    )
 
 
 class GatewaySettings(_StrictModel):
@@ -114,6 +155,13 @@ class SessionCreateRequest(_StrictModel):
 
     identity: str
     password: SecretStr = Field(repr=False, exclude=True)
+
+    @field_validator("password", mode="before")
+    @classmethod
+    def _redact_malformed_password(cls, value: object) -> object:
+        if isinstance(value, (str, SecretStr)):
+            return value
+        return {"redacted": True}
 
     @field_validator("identity")
     @classmethod
@@ -165,6 +213,9 @@ class GatewaySessionRecord(_StrictModel):
     principal_context: PrincipalContext = Field(repr=False, exclude=True)
     created_at: float
     expires_at: float
+    gateway_expires_at: float | None = Field(default=None, repr=False, exclude=True)
+    source_expires_at: float | None = Field(default=None, repr=False, exclude=True)
+    source_refresh_at: float | None = Field(default=None, repr=False, exclude=True)
     status: GatewaySessionStatus = GatewaySessionStatus.ACTIVE
 
     @field_validator("session_id")
@@ -172,9 +223,17 @@ class GatewaySessionRecord(_StrictModel):
     def _validate_session_id(cls, value: str) -> str:
         return _exact_text(value, field_name="session_id")
 
-    @field_validator("created_at", "expires_at")
+    @field_validator(
+        "created_at",
+        "expires_at",
+        "gateway_expires_at",
+        "source_expires_at",
+        "source_refresh_at",
+    )
     @classmethod
-    def _validate_time(cls, value: float) -> float:
+    def _validate_time(cls, value: float | None) -> float | None:
+        if value is None:
+            return None
         if not math.isfinite(value):
             raise ValueError("session timestamps must be finite")
         return value
@@ -183,6 +242,20 @@ class GatewaySessionRecord(_StrictModel):
     def _validate_lifetime(self) -> GatewaySessionRecord:
         if self.expires_at <= self.created_at:
             raise ValueError("session expiry must be after creation")
+        gateway_expires_at = self.gateway_expires_at or self.expires_at
+        if gateway_expires_at <= self.created_at:
+            raise ValueError("Gateway session expiry must be after creation")
+        object.__setattr__(self, "gateway_expires_at", gateway_expires_at)
+        if self.source_expires_at is not None and self.source_expires_at <= self.created_at:
+            raise ValueError("source expiry must be after session creation")
+        if self.source_refresh_at is not None and self.source_refresh_at <= self.created_at:
+            raise ValueError("source refresh must be after session creation")
+        if (
+            self.source_refresh_at is not None
+            and self.source_expires_at is not None
+            and self.source_refresh_at > self.source_expires_at
+        ):
+            raise ValueError("source refresh must not be after source expiry")
         if self.principal_context.gateway_session_id != self.session_id:
             raise ValueError("PrincipalContext must be bound to the Gateway session id")
         return self
