@@ -802,6 +802,48 @@ async def test_delete_failure_does_not_retain_gateway_bearer_in_traceback() -> N
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    "unowned_token",
+    [
+        "malformed-bearer",
+        "surrogate-bearer-\ud800",
+        "z" * 43,
+    ],
+)
+async def test_unowned_delete_token_is_idempotent_and_does_not_close_other_user(
+    unowned_token: str,
+) -> None:
+    clock = Clock()
+    config = _config()
+
+    def login(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "access_token": "private-token-b",
+                "expires_in": 300,
+                "user": {"id": "principal-b"},
+                "permissions": ["source.read"],
+                "tenant": {},
+            },
+            request=request,
+        )
+
+    store = _store(clock, "b" * 43)
+    strategy = _strategy(config, httpx.MockTransport(login), clock)
+    service = _service(config=config, strategy=strategy, store=store, clock=clock)
+    response = await service.create_session(identity="b", password="b")
+    token_b = _gateway_token(response)
+    record_b = await store.resolve_token(token_b)
+
+    await service.delete_current(unowned_token)
+
+    assert await store.resolve_token(token_b) == record_b
+    assert record_b.principal_context.auth_state_key in strategy._states
+    assert unowned_token not in repr(service)
+
+
+@pytest.mark.anyio
 async def test_late_401_after_one_session_ttl_does_not_close_other_user() -> None:
     clock = Clock()
     config = _config()

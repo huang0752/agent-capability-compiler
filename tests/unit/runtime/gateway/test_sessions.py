@@ -460,16 +460,15 @@ async def test_non_utf8_gateway_token_is_stably_rejected_without_leaking(
     invalid_token = "surrogate-token-secret-\ud800"
     store = InMemoryGatewaySessionStore(max_sessions=1, ttl_seconds=60, clock=Clock())
 
-    with pytest.raises(GatewaySessionInvalidError) as caught:
-        if operation == "resolve":
+    if operation == "resolve":
+        with pytest.raises(GatewaySessionInvalidError) as caught:
             await store.resolve_token(SecretValue(invalid_token))
-        else:
-            await store.revoke_token(SecretValue(invalid_token))
-
-    assert caught.value.code == "ACC_GATEWAY_SESSION_INVALID"
-    assert caught.value.__cause__ is None
-    assert caught.value.__context__ is None
-    _assert_runtime_traceback_cannot_reach_secret(caught.value, invalid_token)
+        assert caught.value.code == "ACC_GATEWAY_SESSION_INVALID"
+        assert caught.value.__cause__ is None
+        assert caught.value.__context__ is None
+        _assert_runtime_traceback_cannot_reach_secret(caught.value, invalid_token)
+    else:
+        assert await store.revoke_token(SecretValue(invalid_token)) is None
 
 
 @pytest.mark.anyio

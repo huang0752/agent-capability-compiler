@@ -312,7 +312,7 @@ class InMemoryGatewaySessionStore:
     async def revoke_token(self, token: str | SecretValue) -> GatewaySessionRecord | None:
         raw_token: object = token.get_secret_value() if isinstance(token, SecretValue) else token
         if not _is_256_bit_urlsafe_token(raw_token):
-            outcome: _OptionalRecordOutcome = _SessionFailure("invalid", "token_invalid")
+            outcome: _OptionalRecordOutcome = None
         else:
             assert isinstance(raw_token, str)
             digest = _token_digest(raw_token)
