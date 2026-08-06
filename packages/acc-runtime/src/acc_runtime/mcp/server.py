@@ -16,7 +16,12 @@ from mcp.server.lowlevel import NotificationOptions, Server
 from mcp.server.stdio import stdio_server
 from pydantic import JsonValue
 
-from acc_runtime.context import PrincipalContext
+from acc_runtime.context import (
+    PrincipalContext,
+    normalize_security_name,
+    sensitive_auth_name_candidates,
+    sensitive_auth_name_marker,
+)
 from acc_runtime.errors import RuntimeError as AccRuntimeError
 
 
@@ -57,9 +62,6 @@ class _McpCancelled:
 _MCP_CANCELLED = _McpCancelled()
 type _McpCallOutcome = types.CallToolResult | _McpCancelled
 
-_CAMEL_ACRONYM_BOUNDARY = re.compile(r"([A-Z]+)([A-Z][a-z])")
-_CAMEL_WORD_BOUNDARY = re.compile(r"([a-z0-9])([A-Z])")
-_NON_ALNUM_RUN = re.compile(r"[^A-Za-z0-9]+")
 _GATEWAY_RESERVED_ARGUMENTS = frozenset(
     {
         "access_token",
@@ -307,12 +309,6 @@ def _translate_tools(
     return tools
 
 
-def _normalized_argument_name(value: str) -> str:
-    with_acronym_boundaries = _CAMEL_ACRONYM_BOUNDARY.sub(r"\1_\2", value)
-    with_word_boundaries = _CAMEL_WORD_BOUNDARY.sub(r"\1_\2", with_acronym_boundaries)
-    return _NON_ALNUM_RUN.sub("_", with_word_boundaries).strip("_").casefold()
-
-
 def _reserved_argument_names(arguments: Mapping[str, object] | None) -> list[str]:
     """Find reserved identity/auth names recursively without retaining their values."""
 
@@ -353,6 +349,31 @@ def _reserved_schema_property_names(schema: Mapping[str, object]) -> frozenset[s
                         reserved = _reserved_argument_name(key)
                         if reserved is not None:
                             found.add(reserved)
+            required = current.get("required")
+            if isinstance(required, list):
+                for key in required:
+                    if isinstance(key, str):
+                        reserved = _reserved_argument_name(key)
+                        if reserved is not None:
+                            found.add(reserved)
+            pattern_properties = current.get("patternProperties")
+            if isinstance(pattern_properties, Mapping):
+                for pattern in pattern_properties:
+                    if isinstance(pattern, str) and _pattern_matches_reserved_name(pattern):
+                        found.add("dynamic_reserved_name")
+            property_names = current.get("propertyNames")
+            if isinstance(property_names, Mapping):
+                for keyword in ("const", "enum"):
+                    values = property_names.get(keyword)
+                    candidates = values if isinstance(values, list) else [values]
+                    for key in candidates:
+                        if isinstance(key, str):
+                            reserved = _reserved_argument_name(key)
+                            if reserved is not None:
+                                found.add(reserved)
+                pattern = property_names.get("pattern")
+                if isinstance(pattern, str) and _pattern_matches_reserved_name(pattern):
+                    found.add("dynamic_reserved_name")
             pending.extend(current.values())
         elif isinstance(current, (list, tuple)):
             pending.extend(current)
@@ -360,10 +381,47 @@ def _reserved_schema_property_names(schema: Mapping[str, object]) -> frozenset[s
 
 
 def _reserved_argument_name(value: str) -> str | None:
-    normalized = _normalized_argument_name(value)
+    normalized = normalize_security_name(value)
     if normalized in _GATEWAY_RESERVED_ARGUMENTS:
         return normalized
-    return _GATEWAY_RESERVED_COMPACT_ARGUMENTS.get(normalized.replace("_", ""))
+    gateway_reserved = _GATEWAY_RESERVED_COMPACT_ARGUMENTS.get(normalized.replace("_", ""))
+    if gateway_reserved is not None:
+        return gateway_reserved
+    return sensitive_auth_name_marker(value)
+
+
+def _pattern_matches_reserved_name(pattern: str) -> bool:
+    if _reserved_argument_name(pattern) is not None:
+        return True
+    try:
+        compiled = re.compile(pattern)
+    except re.error:
+        return True
+    return any(compiled.search(candidate) for candidate in _reserved_name_pattern_probes())
+
+
+def _reserved_name_pattern_probes() -> frozenset[str]:
+    canonical_names = _GATEWAY_RESERVED_ARGUMENTS | sensitive_auth_name_candidates()
+    probes: set[str] = set()
+    for canonical in canonical_names:
+        parts = canonical.split("_")
+        compact = canonical.replace("_", "")
+        camel = parts[0] + "".join(part.title() for part in parts[1:])
+        probes.update(
+            {
+                canonical,
+                compact,
+                canonical.replace("_", "-"),
+                camel,
+                f"{canonical}_v2",
+                f"{canonical}_value",
+                f"my_{canonical}",
+                f"{compact}s",
+                f"my{compact}",
+                f"{camel}Value",
+            }
+        )
+    return frozenset(probes)
 
 
 def _raise_mcp_cancelled() -> Never:

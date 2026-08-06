@@ -170,6 +170,17 @@ async def test_principal_mcp_arguments_cannot_choose_the_resolved_identity() -> 
         {"refreshtoken": "source-token"},
         {"idtoken": "source-token"},
         {"tenantcontext": {"tenant_id": "forged"}},
+        {"auth_token": "source-token"},
+        {"authToken": "source-token"},
+        {"auth-token": "source-token"},
+        {"authtoken": "source-token"},
+        {"oauthToken": "source-token"},
+        {"api_token": "source-token"},
+        {"session-token": "source-token"},
+        {"clientsecret": "source-token"},
+        {"apiSecret": "source-token"},
+        {"api-key": "source-token"},
+        {"privateKey": "source-token"},
     ],
 )
 async def test_principal_mcp_rejects_normalized_reserved_arguments_recursively(
@@ -204,6 +215,61 @@ def test_principal_mcp_rejects_tools_whose_schema_exposes_reserved_identity_inpu
         adapter.list_tools()
 
 
+@pytest.mark.parametrize(
+    "schema_update",
+    [
+        {"patternProperties": {r"^(?:auth[_-]?token|authtoken)$": {"type": "string"}}},
+        {"patternProperties": {r"^auth_token_v2$": {"type": "string"}}},
+        {"patternProperties": {r"^myclientsecret$": {"type": "string"}}},
+        {"patternProperties": {r"^api_keys$": {"type": "string"}}},
+        {"propertyNames": {"enum": ["customer_id", "clientSecret"]}},
+        {"propertyNames": {"const": "api-key"}},
+        {"propertyNames": {"pattern": r"session[_-]?token"}},
+        {"required": ["customer_id", "privatekey"]},
+        {
+            "properties": {
+                "filters": {
+                    "type": "object",
+                    "required": ["oauthToken"],
+                    "properties": {"oauthToken": {"type": "string"}},
+                }
+            }
+        },
+    ],
+)
+def test_principal_mcp_rejects_indirect_schema_contracts_for_sensitive_names(
+    schema_update: Mapping[str, object],
+) -> None:
+    class ConflictingRuntime(ContextualRuntime):
+        def tools(self) -> list[dict[str, object]]:
+            tools = super().tools()
+            input_schema = tools[0]["input_schema"]
+            assert isinstance(input_schema, dict)
+            input_schema.update(schema_update)
+            return tools
+
+    with pytest.raises(TypeError, match="reserved Gateway argument"):
+        PrincipalCapabilityMcpServer(ConflictingRuntime(), resolver=Resolver()).list_tools()
+
+
+def test_principal_mcp_allows_safe_pattern_and_property_name_contracts() -> None:
+    class SafeRuntime(ContextualRuntime):
+        def tools(self) -> list[dict[str, object]]:
+            tools = super().tools()
+            input_schema = tools[0]["input_schema"]
+            assert isinstance(input_schema, dict)
+            input_schema.update(
+                {
+                    "patternProperties": {r"^business_[a-z]+$": {"type": "string"}},
+                    "propertyNames": {"pattern": r"^business_[a-z]+$"},
+                    "required": ["customer_id"],
+                }
+            )
+            return tools
+
+    assert PrincipalCapabilityMcpServer(SafeRuntime(), resolver=Resolver()).list_tools()
+
+
 @pytest.mark.asyncio
 async def test_gateway_allows_unbound_business_tenant_and_user_ids() -> None:
     runtime = ContextualRuntime()
@@ -224,11 +290,11 @@ async def test_gateway_reserved_matching_does_not_use_unsafe_substrings() -> Non
     runtime = ContextualRuntime()
     result = await PrincipalCapabilityMcpServer(runtime, resolver=Resolver()).call_tool(
         "get_customer",
-        {"myaccesstoken_label": "ordinary-business-label"},
+        {"tokenized_at": "ordinary-business-label"},
         access_token=_access("a"),
     )
     assert result.isError is False
-    assert runtime.calls[0][1] == {"myaccesstoken_label": "ordinary-business-label"}
+    assert runtime.calls[0][1] == {"tokenized_at": "ordinary-business-label"}
 
 
 def test_principal_server_uses_public_sdk_server_without_private_owner_maps() -> None:

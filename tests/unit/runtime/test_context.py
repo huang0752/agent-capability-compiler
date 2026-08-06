@@ -11,6 +11,7 @@ from acc_runtime.context import (
     PrincipalContext,
     map_effective_scopes,
     resolve_context_binding,
+    sensitive_auth_name_marker,
 )
 
 
@@ -343,6 +344,31 @@ def test_resolve_context_binding_rejects_auth_scope_and_secret_paths(reference: 
 
     with pytest.raises(ValueError, match="not permitted"):
         resolve_context_binding(context, reference, {reference})
+
+
+@pytest.mark.parametrize(
+    ("name", "marker"),
+    [
+        ("auth_token", "auth_token"),
+        ("authToken", "auth_token"),
+        ("auth-token", "auth_token"),
+        ("authtoken", "auth_token"),
+        ("oauth_token", "oauth_token"),
+        ("apiToken", "api_token"),
+        ("sessiontoken", "session_token"),
+        ("client-secret", "client_secret"),
+        ("apiSecret", "api_secret"),
+        ("apikey", "api_key"),
+        ("privateKey", "private_key"),
+    ],
+)
+def test_sensitive_auth_name_marker_is_shared_and_canonical(name: str, marker: str) -> None:
+    assert sensitive_auth_name_marker(name) == marker
+
+
+@pytest.mark.parametrize("name", ["tokenized_at", "private_label", "api_version", "user_id"])
+def test_sensitive_auth_name_marker_does_not_match_ordinary_business_names(name: str) -> None:
+    assert sensitive_auth_name_marker(name) is None
 
 
 @pytest.mark.parametrize(

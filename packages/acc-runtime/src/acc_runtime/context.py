@@ -27,7 +27,7 @@ _TENANT_CONTEXT_PATH = re.compile(
 )
 _CAMEL_ACRONYM_BOUNDARY = re.compile(r"([A-Z]+)([A-Z][a-z])")
 _CAMEL_WORD_BOUNDARY = re.compile(r"([a-z0-9])([A-Z])")
-_SEPARATOR_RUN = re.compile(r"[_-]+")
+_SECURITY_SEPARATOR_RUN = re.compile(r"[^A-Za-z0-9]+")
 _DENIED_TENANT_WORDS = frozenset(
     {
         "secret",
@@ -43,25 +43,23 @@ _DENIED_TENANT_WORDS = frozenset(
         "csrf",
     }
 )
-_DENIED_TENANT_COMPACT_MARKERS = frozenset(
-    {
-        "accesstoken",
-        "refreshtoken",
-        "authtoken",
-        "oauthtoken",
-        "idtoken",
-        "apitoken",
-        "jwttoken",
-        "sessiontoken",
-        "passwordhash",
-        "authorizationheader",
-        "clientsecret",
-        "apisecret",
-        "apikey",
-        "privatekey",
-        "setcookie",
-    }
-)
+_SENSITIVE_AUTH_COMPACT_MARKERS = {
+    "accesstoken": "access_token",
+    "refreshtoken": "refresh_token",
+    "authtoken": "auth_token",
+    "oauthtoken": "oauth_token",
+    "idtoken": "id_token",
+    "apitoken": "api_token",
+    "jwttoken": "jwt_token",
+    "sessiontoken": "session_token",
+    "passwordhash": "password_hash",
+    "authorizationheader": "authorization_header",
+    "clientsecret": "client_secret",
+    "apisecret": "api_secret",
+    "apikey": "api_key",
+    "privatekey": "private_key",
+    "setcookie": "set_cookie",
+}
 
 
 def _validated_text(value: object, *, field_name: str) -> str:
@@ -245,24 +243,52 @@ def resolve_context_binding(
     return _thaw_json(current)
 
 
-def _normalized_segment(segment: str) -> str:
-    with_acronym_boundaries = _CAMEL_ACRONYM_BOUNDARY.sub(r"\1_\2", segment)
+def normalize_security_name(name: str) -> str:
+    """Normalize a public field name for exact identity/auth safety checks."""
+
+    normalized_name = unicodedata.normalize("NFKC", name)
+    with_acronym_boundaries = _CAMEL_ACRONYM_BOUNDARY.sub(r"\1_\2", normalized_name)
     with_word_boundaries = _CAMEL_WORD_BOUNDARY.sub(r"\1_\2", with_acronym_boundaries)
-    return _SEPARATOR_RUN.sub("_", with_word_boundaries).casefold()
+    return _SECURITY_SEPARATOR_RUN.sub("_", with_word_boundaries).strip("_").casefold()
+
+
+def sensitive_auth_name_marker(name: str) -> str | None:
+    """Return a canonical marker when a field name denotes authentication material."""
+
+    normalized = normalize_security_name(name)
+    words = frozenset(normalized.split("_"))
+    compact = normalized.replace("_", "")
+    if normalized in {"header", "headers"}:
+        return normalized
+    for compact_marker, canonical in sorted(
+        _SENSITIVE_AUTH_COMPACT_MARKERS.items(), key=lambda item: len(item[0]), reverse=True
+    ):
+        if compact_marker in compact:
+            return canonical
+    denied_words = words & _DENIED_TENANT_WORDS
+    if denied_words:
+        return sorted(denied_words)[0]
+    if {"api", "key"} <= words:
+        return "api_key"
+    if {"private", "key"} <= words:
+        return "private_key"
+    if {"set", "cookie"} <= words:
+        return "set_cookie"
+    return None
+
+
+def sensitive_auth_name_candidates() -> frozenset[str]:
+    """Return canonical probes used to audit dynamic public input schemas."""
+
+    return frozenset(
+        _DENIED_TENANT_WORDS
+        | {"header", "headers"}
+        | frozenset(_SENSITIVE_AUTH_COMPACT_MARKERS.values())
+    )
 
 
 def _segment_is_sensitive(segment: str) -> bool:
-    normalized = _normalized_segment(segment)
-    words = frozenset(normalized.split("_"))
-    compact = "".join(character for character in segment if character.isalnum()).casefold()
-    return (
-        normalized in {"header", "headers"}
-        or bool(words & _DENIED_TENANT_WORDS)
-        or any(marker in compact for marker in _DENIED_TENANT_COMPACT_MARKERS)
-        or {"api", "key"} <= words
-        or {"private", "key"} <= words
-        or {"set", "cookie"} <= words
-    )
+    return sensitive_auth_name_marker(segment) is not None
 
 
 def _freeze_json(value: object) -> FrozenJsonValue:
@@ -293,5 +319,8 @@ __all__ = [
     "AuthStateKey",
     "PrincipalContext",
     "map_effective_scopes",
+    "normalize_security_name",
     "resolve_context_binding",
+    "sensitive_auth_name_candidates",
+    "sensitive_auth_name_marker",
 ]
