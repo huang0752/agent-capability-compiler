@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import copy
 import hashlib
 import json
@@ -105,7 +106,7 @@ def _parser() -> AccArgumentParser:
     _add_json_argument(pack_parser)
     pack_parser.set_defaults(handler=_pack_command)
 
-    run_parser = subparsers.add_parser("run", help="serve a capability pack over MCP stdio")
+    run_parser = subparsers.add_parser("run", help="serve a capability pack over its MCP transport")
     run_parser.add_argument("pack")
     run_parser.add_argument(
         "--scope",
@@ -117,6 +118,27 @@ def _parser() -> AccArgumentParser:
         "--tenant-id",
         help="runtime tenant context (defaults to ACC_TENANT_ID)",
     )
+    run_parser.add_argument("--host", default="127.0.0.1", help="Gateway listen IP")
+    run_parser.add_argument("--port", type=int, default=8000, help="Gateway listen port")
+    run_parser.add_argument(
+        "--allowed-host",
+        action="append",
+        default=[],
+        help="exact Gateway Host allowlist entry (repeatable)",
+    )
+    run_parser.add_argument(
+        "--allowed-origin",
+        action="append",
+        default=[],
+        help="exact Gateway Origin allowlist entry (repeatable)",
+    )
+    run_parser.add_argument("--session-ttl", type=int, default=3600)
+    run_parser.add_argument("--max-sessions", type=int, default=1000)
+    run_parser.add_argument("--mcp-idle-timeout", type=float, default=60.0)
+    run_parser.add_argument("--body-limit", type=int, default=4 * 1024 * 1024)
+    run_parser.add_argument("--workers", type=int, default=1)
+    run_parser.add_argument("--tls-certfile")
+    run_parser.add_argument("--tls-keyfile")
     _add_json_argument(run_parser)
     run_parser.set_defaults(handler=_run_command)
 
@@ -795,66 +817,168 @@ def _run_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope]:
     """Load one verified pack and either inspect or serve its capabilities."""
 
     try:
-        import anyio
-
         from acc_core.models import Project
-        from acc_runtime import GenericRuntime
         from acc_runtime.errors import RuntimeError as AccRuntimeError
         from acc_runtime.loader import load_pack
-        from acc_runtime.mcp import CapabilityMcpServer
         from acc_runtime.runtime import RuntimeConfigurationError
 
         pack_path = Path(str(arguments.pack))
         loaded_pack = load_pack(pack_path)
         project = Project.model_validate(loaded_pack.ir.get("project"))
-        if project.runtime.transport != ["stdio"]:
-            raise RuntimeConfigurationError(
-                "Streamable HTTP packs must be served by the ACC Gateway.",
-                details={"reason": "streamable_http_requires_gateway"},
+        transport = project.runtime.transport[0]
+        if transport == "stdio":
+            tools = _run_stdio_runtime(arguments, pack_path=pack_path)
+            safe_configuration: dict[str, object] = {}
+        elif transport == "streamable_http":
+            tools, safe_configuration = _run_streamable_http_gateway(
+                arguments,
+                pack_path=pack_path,
             )
-        tenant_id = arguments.tenant_id or os.environ.get("ACC_TENANT_ID")
-        runtime = GenericRuntime.from_pack(
-            pack_path,
-            environment=os.environ,
-            granted_scopes=_runtime_scopes(cast(Sequence[str], arguments.scope)),
-            tenant_id=tenant_id,
-        )
-
-        async def inspect_or_serve_stdio() -> list[dict[str, object]]:
-            async with runtime:
-                tools = runtime.tools()
-                adapter = CapabilityMcpServer(runtime)
-                if not bool(arguments.json_output):
-                    await adapter.run_stdio()
-                return tools
-
-        tools = anyio.run(inspect_or_serve_stdio)
+        else:  # pragma: no cover - Project restricts the transport union
+            raise RuntimeConfigurationError(
+                "Pack transport is unsupported.",
+                details={"reason": "transport_unsupported"},
+            )
         return EXIT_SUCCESS, _success(
             "run",
             {
                 "pack": str(Path(str(arguments.pack)).resolve()),
-                "transport": "stdio",
+                "transport": transport,
                 "tools": tools,
+                **safe_configuration,
             },
         )
     except (AccRuntimeError, OSError, ValueError) as exc:
         code = getattr(exc, "code", "ACC_RUNTIME_START_FAILED")
-        message = (
-            "Streamable HTTP packs require the ACC Gateway."
-            if isinstance(exc, RuntimeConfigurationError)
-            and exc.details.get("reason") == "streamable_http_requires_gateway"
-            else "ACC runtime could not start."
-        )
         return EXIT_RUNTIME, _failure(
             "run",
             Diagnostic(
                 code=str(code),
                 severity="error",
-                message=message,
+                message="ACC runtime could not start.",
                 path=None,
                 pointer=None,
             ),
         )
+
+
+def _run_stdio_runtime(
+    arguments: argparse.Namespace,
+    *,
+    pack_path: Path,
+) -> list[dict[str, object]]:
+    """Inspect or serve one stdio Pack while retaining its legacy lifecycle."""
+
+    import anyio
+
+    from acc_runtime import GenericRuntime
+    from acc_runtime.mcp import CapabilityMcpServer
+
+    tenant_id = arguments.tenant_id or os.environ.get("ACC_TENANT_ID")
+    runtime = GenericRuntime.from_pack(
+        pack_path,
+        environment=os.environ,
+        granted_scopes=_runtime_scopes(cast(Sequence[str], arguments.scope)),
+        tenant_id=tenant_id,
+    )
+
+    async def inspect_or_serve() -> list[dict[str, object]]:
+        async with runtime:
+            tools = runtime.tools()
+            adapter = CapabilityMcpServer(runtime)
+            if not bool(arguments.json_output):
+                await adapter.run_stdio()
+            return tools
+
+    return anyio.run(inspect_or_serve)
+
+
+def _run_streamable_http_gateway(
+    arguments: argparse.Namespace,
+    *,
+    pack_path: Path,
+) -> tuple[list[dict[str, object]], dict[str, object]]:
+    """Inspect or synchronously serve one single-worker HTTP Gateway."""
+
+    import anyio
+    import uvicorn
+    from pydantic import ValidationError
+
+    from acc_runtime.gateway import GatewaySettings, create_gateway_runtime
+    from acc_runtime.runtime import RuntimeConfigurationError
+
+    certfile = cast(str | None, arguments.tls_certfile)
+    keyfile = cast(str | None, arguments.tls_keyfile)
+    if (certfile is None) != (keyfile is None):
+        raise RuntimeConfigurationError(
+            "Gateway TLS certificate and key must be configured together.",
+            details={"reason": "gateway_tls_pair_invalid"},
+        )
+    if arguments.tenant_id is not None:
+        raise RuntimeConfigurationError(
+            "Gateway tenant context must come from the authenticated source user.",
+            details={"reason": "gateway_static_tenant_forbidden"},
+        )
+    try:
+        settings = GatewaySettings(
+            listen_host=str(arguments.host),
+            listen_port=arguments.port,
+            worker_count=arguments.workers,
+            tls_enabled=certfile is not None,
+            allowed_hosts=tuple(cast(Sequence[str], arguments.allowed_host)),
+            allowed_origins=tuple(cast(Sequence[str], arguments.allowed_origin)),
+            session_ttl_seconds=arguments.session_ttl,
+            max_sessions=arguments.max_sessions,
+        )
+    except ValidationError:
+        raise RuntimeConfigurationError(
+            "Gateway deployment settings are invalid.",
+            details={"reason": "gateway_settings_invalid"},
+        ) from None
+    composition = create_gateway_runtime(
+        pack_path=pack_path,
+        settings=settings,
+        environment=os.environ,
+        deployment_scope_ceiling=_runtime_scopes(cast(Sequence[str], arguments.scope)),
+        mcp_session_idle_timeout_seconds=arguments.mcp_idle_timeout,
+        max_request_body_size=arguments.body_limit,
+    )
+    safe_configuration: dict[str, object] = {
+        "gateway": {
+            "host": settings.listen_host,
+            "port": settings.listen_port,
+            "allowed_hosts": list(settings.allowed_hosts),
+            "allowed_origins": list(settings.allowed_origins),
+            "session_ttl_seconds": settings.session_ttl_seconds,
+            "max_sessions": settings.max_sessions,
+            "mcp_session_idle_timeout_seconds": arguments.mcp_idle_timeout,
+            "max_request_body_size": arguments.body_limit,
+            "workers": settings.worker_count,
+            "tls_enabled": settings.tls_enabled,
+            "scope_mode": "deployment_ceiling",
+        }
+    }
+    if bool(arguments.json_output):
+        try:
+            return composition.tools(), safe_configuration
+        finally:
+            anyio.run(composition.aclose)
+
+    try:
+        uvicorn.run(
+            composition.app,
+            host=settings.listen_host,
+            port=settings.listen_port,
+            workers=settings.worker_count,
+            ssl_certfile=certfile,
+            ssl_keyfile=keyfile,
+        )
+    except BaseException:
+        with contextlib.suppress(BaseException):
+            anyio.run(composition.aclose)
+        raise
+    anyio.run(composition.aclose)
+    return composition.tools(), safe_configuration
 
 
 def _render(envelope: ResultEnvelope, *, json_output: bool) -> None:

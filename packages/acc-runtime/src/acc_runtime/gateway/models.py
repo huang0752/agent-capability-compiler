@@ -119,6 +119,8 @@ class GatewaySettings(_StrictModel):
     """Deployment settings whose allowlists are exact, never pattern based."""
 
     listen_host: str = "127.0.0.1"
+    listen_port: int = Field(default=8000, ge=1, le=65535)
+    worker_count: int = Field(default=1, ge=1)
     tls_enabled: bool = False
     allowed_hosts: tuple[str, ...]
     allowed_origins: tuple[str, ...] = ()
@@ -145,6 +147,8 @@ class GatewaySettings(_StrictModel):
 
     @model_validator(mode="after")
     def _validate_listener(self) -> GatewaySettings:
+        if self.worker_count != 1:
+            raise ValueError("Gateway v1 requires exactly one worker")
         try:
             listen_address = ipaddress.ip_address(self.listen_host)
         except ValueError as exc:

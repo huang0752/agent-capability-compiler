@@ -78,6 +78,18 @@ class _FakeStdioError(AccRuntimeError):
     status = 500
 
 
+class _FakeGatewayComposition:
+    def __init__(self) -> None:
+        self.app = object()
+        self.close_calls = 0
+
+    def tools(self) -> list[dict[str, object]]:
+        return [{"name": "safe-gateway-tool"}]
+
+    async def aclose(self) -> None:
+        self.close_calls += 1
+
+
 def _patch_run_composition(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -116,8 +128,199 @@ def _run_arguments(*, json_output: bool) -> Namespace:
         pack="offline.accpkg",
         scope=[],
         tenant_id=None,
+        host="127.0.0.1",
+        port=8000,
+        allowed_host=[],
+        allowed_origin=[],
+        session_ttl=3600,
+        max_sessions=1000,
+        mcp_idle_timeout=60.0,
+        body_limit=4 * 1024 * 1024,
+        workers=1,
+        tls_certfile=None,
+        tls_keyfile=None,
         json_output=json_output,
     )
+
+
+def test_run_dispatches_streamable_http_and_json_only_inspects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import uvicorn
+
+    import acc_runtime.gateway
+    import acc_runtime.loader
+
+    project = {
+        "schema_version": "1",
+        "project": {"id": "fake-gateway", "version": "0.1.0"},
+        "source_workspace": {"path": "../system", "mode": "read_only"},
+        "runtime": {"transport": ["streamable_http"]},
+        "provider": {
+            "kind": "http",
+            "base_url_ref": "FAKE_BASE_URL",
+            "auth": {
+                "kind": "password_bearer",
+                "credentials": {"kind": "gateway_session"},
+                "login_path": "/auth/login",
+                "identity_field": "identity",
+                "password_field": "password",
+                "token_pointer": "/access_token",
+                "scopes_pointer": "/scopes",
+            },
+        },
+    }
+    composition = _FakeGatewayComposition()
+    captured: dict[str, object] = {}
+
+    def create_gateway_runtime(**kwargs: object) -> _FakeGatewayComposition:
+        captured.update(kwargs)
+        return composition
+
+    monkeypatch.setattr(
+        acc_runtime.loader,
+        "load_pack",
+        lambda path: SimpleNamespace(ir={"project": project}),
+    )
+    monkeypatch.setattr(acc_runtime.gateway, "create_gateway_runtime", create_gateway_runtime)
+    monkeypatch.setattr(
+        uvicorn,
+        "run",
+        lambda *args, **kwargs: pytest.fail("JSON inspection must not start uvicorn"),
+    )
+    arguments = _run_arguments(json_output=True)
+    arguments.allowed_host = ["gateway.test:8443"]
+    arguments.allowed_origin = ["https://agent.test"]
+    arguments.scope = ["customer.read"]
+
+    exit_code, envelope = run_pack_command(arguments)
+
+    assert exit_code == EXIT_SUCCESS
+    assert envelope.result is not None
+    assert envelope.result["transport"] == "streamable_http"
+    assert envelope.result["tools"] == [{"name": "safe-gateway-tool"}]
+    assert "token" not in repr(envelope).casefold()
+    settings = cast(acc_runtime.gateway.GatewaySettings, captured["settings"])
+    assert settings.allowed_hosts == ("gateway.test:8443",)
+    assert captured["deployment_scope_ceiling"] == frozenset({"customer.read"})
+    assert composition.close_calls == 1
+
+
+def test_run_streamable_http_starts_single_worker_and_closes_after_server_returns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import uvicorn
+
+    import acc_runtime.gateway
+    import acc_runtime.loader
+
+    project = {
+        "schema_version": "1",
+        "project": {"id": "fake-gateway", "version": "0.1.0"},
+        "source_workspace": {"path": "../system", "mode": "read_only"},
+        "runtime": {"transport": ["streamable_http"]},
+        "provider": {
+            "kind": "http",
+            "base_url_ref": "FAKE_BASE_URL",
+            "auth": {
+                "kind": "password_bearer",
+                "credentials": {"kind": "gateway_session"},
+                "login_path": "/auth/login",
+                "identity_field": "identity",
+                "password_field": "password",
+                "token_pointer": "/access_token",
+                "scopes_pointer": "/scopes",
+            },
+        },
+    }
+    composition = _FakeGatewayComposition()
+    calls: list[tuple[object, dict[str, object]]] = []
+    monkeypatch.setattr(
+        acc_runtime.loader,
+        "load_pack",
+        lambda path: SimpleNamespace(ir={"project": project}),
+    )
+    monkeypatch.setattr(
+        acc_runtime.gateway,
+        "create_gateway_runtime",
+        lambda **kwargs: composition,
+    )
+    monkeypatch.setattr(
+        uvicorn,
+        "run",
+        lambda app, **kwargs: calls.append((app, kwargs)),
+    )
+    arguments = _run_arguments(json_output=False)
+    arguments.allowed_host = ["127.0.0.1:8000"]
+
+    exit_code, envelope = run_pack_command(arguments)
+
+    assert exit_code == EXIT_SUCCESS
+    assert envelope.result is not None
+    assert calls == [
+        (
+            composition.app,
+            {
+                "host": "127.0.0.1",
+                "port": 8000,
+                "workers": 1,
+                "ssl_certfile": None,
+                "ssl_keyfile": None,
+            },
+        )
+    ]
+    assert composition.close_calls == 1
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("allowed_host", []),
+        ("workers", 2),
+        ("port", 0),
+        ("host", "0.0.0.0"),
+    ],
+)
+def test_run_streamable_http_rejects_unsafe_gateway_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: object,
+) -> None:
+    import acc_runtime.loader
+
+    project = {
+        "schema_version": "1",
+        "project": {"id": "fake-gateway", "version": "0.1.0"},
+        "source_workspace": {"path": "../system", "mode": "read_only"},
+        "runtime": {"transport": ["streamable_http"]},
+        "provider": {
+            "kind": "http",
+            "base_url_ref": "FAKE_BASE_URL",
+            "auth": {
+                "kind": "password_bearer",
+                "credentials": {"kind": "gateway_session"},
+                "login_path": "/auth/login",
+                "identity_field": "identity",
+                "password_field": "password",
+                "token_pointer": "/access_token",
+                "scopes_pointer": "/scopes",
+            },
+        },
+    }
+    monkeypatch.setattr(
+        acc_runtime.loader,
+        "load_pack",
+        lambda path: SimpleNamespace(ir={"project": project}),
+    )
+    arguments = _run_arguments(json_output=True)
+    arguments.allowed_host = ["127.0.0.1:8000"]
+    setattr(arguments, field, value)
+
+    exit_code, envelope = run_pack_command(arguments)
+
+    assert exit_code == EXIT_RUNTIME
+    assert envelope.ok is False
+    assert envelope.diagnostics[0].code == "ACC_RUNTIME_CONFIGURATION_INVALID"
 
 
 @pytest.mark.parametrize("json_output", [False, True])

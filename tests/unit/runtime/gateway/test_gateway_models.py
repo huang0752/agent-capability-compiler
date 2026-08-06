@@ -37,6 +37,8 @@ def test_gateway_settings_defaults_and_accepts_exact_allowlists() -> None:
     assert settings.session_ttl_seconds == 3600
     assert settings.max_sessions == 1000
     assert settings.listen_host == "127.0.0.1"
+    assert settings.listen_port == 8000
+    assert settings.worker_count == 1
     assert settings.allowed_hosts == (
         "gateway.example.com",
         "gateway.example.com:8443",
@@ -52,6 +54,17 @@ def test_gateway_settings_rejects_ttl_outside_safe_range(ttl: int) -> None:
 def test_gateway_settings_rejects_nonpositive_capacity() -> None:
     with pytest.raises(ValidationError):
         GatewaySettings(allowed_hosts=("localhost",), max_sessions=0)
+
+
+@pytest.mark.parametrize("listen_port", [0, 65536])
+def test_gateway_settings_rejects_invalid_listener_port(listen_port: int) -> None:
+    with pytest.raises(ValidationError):
+        GatewaySettings(allowed_hosts=("localhost",), listen_port=listen_port)
+
+
+def test_gateway_settings_rejects_multiple_workers() -> None:
+    with pytest.raises(ValidationError):
+        GatewaySettings(allowed_hosts=("localhost",), worker_count=2)
 
 
 @pytest.mark.parametrize(

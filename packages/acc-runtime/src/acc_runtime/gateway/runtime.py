@@ -1,0 +1,241 @@
+"""Public composition root for one single-process HTTP Gateway."""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import secrets
+from collections.abc import Collection, Mapping
+from pathlib import Path
+from typing import TYPE_CHECKING, Protocol
+
+import httpx
+from pydantic import JsonValue, ValidationError
+from starlette.applications import Starlette
+
+from acc_core.models import PasswordBearerAuthConfig, Project
+from acc_runtime.auth import AuthUnauthorizedError, PasswordBearerAuthStrategy
+from acc_runtime.auth.strategies import AsyncClientFactory
+from acc_runtime.context import PrincipalContext
+from acc_runtime.gateway.app import (
+    DEFAULT_GATEWAY_BODY_LIMIT,
+    DEFAULT_MCP_SESSION_IDLE_TIMEOUT_SECONDS,
+    create_gateway_app,
+)
+from acc_runtime.gateway.audit import AuditCollector, AuditSink, LoggingAuditSink
+from acc_runtime.gateway.auth import GatewayPrincipalResolver, GatewayTokenVerifier
+from acc_runtime.gateway.models import GatewaySettings, SessionCreateResponse
+from acc_runtime.gateway.service import GatewaySessionService
+from acc_runtime.gateway.sessions import InMemoryGatewaySessionStore
+from acc_runtime.loader import load_pack
+from acc_runtime.mcp import PrincipalCapabilityMcpServer
+from acc_runtime.providers import HttpProvider
+
+if TYPE_CHECKING:
+    from acc_runtime.runtime import GenericRuntime
+
+
+class _ContextualRuntime(Protocol):
+    def tools(self) -> list[dict[str, object]]: ...
+
+    async def call_with_context(
+        self,
+        capability_id: str,
+        arguments: Mapping[str, JsonValue],
+        principal_context: PrincipalContext,
+    ) -> JsonValue: ...
+
+
+class _ReauthService(Protocol):
+    async def mark_reauth_required(self, session_id: str) -> None: ...
+
+
+class _ReauthCoordinatingRuntime:
+    """Translate a source 401 into reauthentication for exactly one Gateway session."""
+
+    __slots__ = ("_runtime", "_service")
+
+    def __init__(self, runtime: _ContextualRuntime, *, service: _ReauthService) -> None:
+        self._runtime = runtime
+        self._service = service
+
+    def tools(self) -> list[dict[str, object]]:
+        return self._runtime.tools()
+
+    async def call_with_context(
+        self,
+        capability_id: str,
+        arguments: Mapping[str, JsonValue],
+        principal_context: PrincipalContext,
+    ) -> JsonValue:
+        try:
+            return await self._runtime.call_with_context(
+                capability_id,
+                arguments,
+                principal_context,
+            )
+        except AuthUnauthorizedError as error:
+            session_id = principal_context.gateway_session_id
+            if session_id is not None:
+                try:
+                    await self._service.mark_reauth_required(session_id)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    pass
+            raise error from None
+
+
+class _OwnedGatewayService:
+    """Give the ASGI lifespan sole, idempotent ownership of runtime resources."""
+
+    __slots__ = ("_close_lock", "_closed", "_runtime", "_service")
+
+    def __init__(self, service: GatewaySessionService, runtime: GenericRuntime) -> None:
+        self._service = service
+        self._runtime = runtime
+        self._close_lock = asyncio.Lock()
+        self._closed = False
+
+    async def create_session(self, *, identity: str, password: str) -> SessionCreateResponse:
+        return await self._service.create_session(identity=identity, password=password)
+
+    async def delete_current(self, token: str) -> None:
+        await self._service.delete_current(token)
+
+    async def aclose(self) -> None:
+        async with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
+        try:
+            await self._service.aclose()
+        finally:
+            await self._runtime.aclose()
+
+
+class GatewayRuntimeComposition:
+    """One safe public handle for an assembled Gateway and its lifecycle."""
+
+    __slots__ = ("_owned_service", "_runtime", "app")
+
+    def __init__(
+        self,
+        *,
+        app: Starlette,
+        owned_service: _OwnedGatewayService,
+        runtime: GenericRuntime,
+    ) -> None:
+        self.app = app
+        self._owned_service = owned_service
+        self._runtime = runtime
+
+    def __repr__(self) -> str:
+        return "GatewayRuntimeComposition(app=<protected>)"
+
+    def tools(self) -> list[dict[str, object]]:
+        """Return only the Runtime's public MCP tool projection."""
+
+        return self._runtime.tools()
+
+    async def aclose(self) -> None:
+        """Close resources if startup failed before ASGI lifespan entered."""
+
+        await self._owned_service.aclose()
+
+
+def create_gateway_runtime(
+    *,
+    pack_path: str | Path,
+    settings: GatewaySettings,
+    environment: Mapping[str, str] | None = None,
+    deployment_scope_ceiling: Collection[str] = (),
+    mcp_session_idle_timeout_seconds: float = DEFAULT_MCP_SESSION_IDLE_TIMEOUT_SECONDS,
+    max_request_body_size: int = DEFAULT_GATEWAY_BODY_LIMIT,
+    audit_sink: AuditSink | None = None,
+    audit_deployment_salt: bytes | None = None,
+    auth_client_factory: AsyncClientFactory | None = None,
+    provider_client: httpx.AsyncClient | None = None,
+) -> GatewayRuntimeComposition:
+    """Assemble a verified streamable-HTTP Pack without private runtime access."""
+
+    from acc_runtime.runtime import GenericRuntime, RuntimeConfigurationError
+
+    loaded = load_pack(pack_path)
+    try:
+        project = Project.model_validate(loaded.ir.get("project"))
+    except ValidationError:
+        raise RuntimeConfigurationError("compiled project contract is invalid") from None
+    if project.runtime.transport != ["streamable_http"]:
+        raise RuntimeConfigurationError(
+            "Gateway requires a streamable HTTP Pack.",
+            details={"reason": "gateway_transport_invalid"},
+        )
+    auth = project.provider.auth
+    if not isinstance(auth, PasswordBearerAuthConfig) or auth.credentials.kind != "gateway_session":
+        raise RuntimeConfigurationError(
+            "Gateway requires password bearer session authentication.",
+            details={"reason": "gateway_auth_invalid"},
+        )
+    source = os.environ if environment is None else environment
+    base_url = source.get(project.provider.base_url_ref)
+    if not isinstance(base_url, str) or not base_url:
+        raise RuntimeConfigurationError(
+            "Gateway source base URL is required.",
+            details={"reason": "authentication_base_url_missing"},
+        )
+
+    strategy = PasswordBearerAuthStrategy(
+        config=auth,
+        base_url=base_url,
+        credential_source=None,
+        client_factory=auth_client_factory,
+    )
+    provider = HttpProvider(
+        base_url_ref=project.provider.base_url_ref,
+        auth_strategy=strategy,
+        environment=source,
+        client=provider_client,
+    )
+    collector = AuditCollector(
+        sink=audit_sink or LoggingAuditSink(),
+        deployment_salt=audit_deployment_salt or secrets.token_bytes(32),
+    )
+    runtime = GenericRuntime(
+        loaded.ir,
+        provider=provider,
+        loaded_pack=loaded,
+        audit_collector=collector,
+    )
+    store = InMemoryGatewaySessionStore(
+        max_sessions=settings.max_sessions,
+        ttl_seconds=settings.session_ttl_seconds,
+    )
+    service = GatewaySessionService(
+        auth_strategy=strategy,
+        auth_config=auth,
+        store=store,
+        target_system_id=project.project.id,
+        deployment_scope_ceiling=deployment_scope_ceiling,
+    )
+    owned_service = _OwnedGatewayService(service, runtime)
+    resolver = GatewayPrincipalResolver(store=store, project_id=project.project.id)
+    token_verifier = GatewayTokenVerifier(store=store, project_id=project.project.id)
+    coordinated_runtime = _ReauthCoordinatingRuntime(runtime, service=service)
+    mcp_server = PrincipalCapabilityMcpServer(coordinated_runtime, resolver=resolver)
+    app = create_gateway_app(
+        settings=settings,
+        service=owned_service,
+        token_verifier=token_verifier,
+        mcp_server=mcp_server,
+        max_request_body_size=max_request_body_size,
+        mcp_session_idle_timeout_seconds=mcp_session_idle_timeout_seconds,
+    )
+    return GatewayRuntimeComposition(
+        app=app,
+        owned_service=owned_service,
+        runtime=runtime,
+    )
+
+
+__all__ = ["GatewayRuntimeComposition", "create_gateway_runtime"]

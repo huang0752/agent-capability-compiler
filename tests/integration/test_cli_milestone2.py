@@ -247,7 +247,7 @@ def test_run_reports_pack_failures_as_stable_json(tmp_path: Path) -> None:
     assert payload["diagnostics"][0]["code"] == "ACC_RUNTIME_PACK_VERIFICATION_FAILED"
 
 
-def test_run_rejects_streamable_http_until_gateway_phase(tmp_path: Path) -> None:
+def test_run_inspects_streamable_http_gateway_without_starting_server(tmp_path: Path) -> None:
     project = _make_project(tmp_path)
     project_path = project / "project.yaml"
     document = yaml.safe_load(project_path.read_text(encoding="utf-8"))
@@ -272,23 +272,28 @@ def test_run_rejects_streamable_http_until_gateway_phase(tmp_path: Path) -> None
     completed = _run_acc(
         "run",
         packed["result"]["path"],
+        "--allowed-host",
+        "127.0.0.1:8000",
         "--json",
         cwd=project,
         environment={"CRM_BASE_URL": "http://127.0.0.1:9"},
     )
 
-    assert completed.returncode == 6
-    payload = json.loads(completed.stdout)
-    assert payload["ok"] is False
-    assert payload["diagnostics"] == [
-        {
-            "code": "ACC_RUNTIME_CONFIGURATION_INVALID",
-            "message": "Streamable HTTP packs require the ACC Gateway.",
-            "path": None,
-            "pointer": None,
-            "severity": "error",
-        }
-    ]
+    payload = _payload(completed)
+    assert payload["result"]["transport"] == "streamable_http"
+    assert payload["result"]["gateway"] == {
+        "allowed_hosts": ["127.0.0.1:8000"],
+        "allowed_origins": [],
+        "host": "127.0.0.1",
+        "max_request_body_size": 4 * 1024 * 1024,
+        "max_sessions": 1000,
+        "mcp_session_idle_timeout_seconds": 60.0,
+        "port": 8000,
+        "scope_mode": "deployment_ceiling",
+        "session_ttl_seconds": 3600,
+        "tls_enabled": False,
+        "workers": 1,
+    }
 
 
 def test_contract_eval_cli_returns_structured_case_report(tmp_path: Path) -> None:
