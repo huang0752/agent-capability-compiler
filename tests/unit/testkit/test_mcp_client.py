@@ -30,6 +30,14 @@ class _TrackingTransport(httpx.AsyncBaseTransport):
         await self.handler.aclose()
 
 
+class _SentinelAuth(httpx.Auth):
+    def __init__(self, secret: str) -> None:
+        self.secret = secret
+
+    def auth_flow(self, request: httpx.Request):  # type: ignore[no-untyped-def]
+        yield request
+
+
 def _assert_testkit_traceback_has_no_raw_secret(error: BaseException, *secrets: str) -> None:
     pending: list[object] = []
     traceback = error.__traceback__
@@ -56,8 +64,16 @@ def _assert_testkit_traceback_has_no_raw_secret(error: BaseException, *secrets: 
         elif isinstance(value, (list, tuple, set, frozenset)):
             pending.extend(value)
         elif isinstance(value, httpx.AsyncClient):
-            pending.append(value.headers)
-        elif isinstance(value, McpStreamableHttpTestClient):
+            pending.extend(
+                [
+                    value.headers,
+                    value.cookies,
+                    getattr(value, "_auth", None),
+                ]
+            )
+        elif isinstance(value, httpx.Cookies):
+            pending.append(str(value))
+        elif isinstance(value, (_SentinelAuth, McpStreamableHttpTestClient)):
             pending.extend(vars(value).values())
         elif isinstance(value, BaseException):
             pending.extend([value.args, value.__cause__, value.__context__])
@@ -575,6 +591,36 @@ async def test_gateway_client_rejects_async_client_injection_with_safe_migration
                 SecretValue("gateway-token-private"),
                 http_client=injected,
             )
+        assert injected.is_closed is False
+    finally:
+        await injected.aclose()
+
+
+@pytest.mark.asyncio
+async def test_rejected_async_client_traceback_drops_all_injected_default_secrets() -> None:
+    header_secret = "rejected-header-secret"
+    cookie_secret = "rejected-cookie-secret"
+    auth_secret = "rejected-auth-secret"
+    injected = httpx.AsyncClient(
+        headers={"X-Secret": header_secret},
+        cookies={"session": cookie_secret},
+        auth=_SentinelAuth(auth_secret),
+    )
+    try:
+        with pytest.raises(ValueError, match="AsyncBaseTransport via transport") as caught:
+            McpStreamableHttpTestClient(
+                "https://gateway.test/mcp",
+                SecretValue("gateway-token-private"),
+                http_client=injected,
+            )
+        assert caught.value.__cause__ is None
+        assert caught.value.__context__ is None
+        _assert_testkit_traceback_has_no_raw_secret(
+            caught.value,
+            header_secret,
+            cookie_secret,
+            auth_secret,
+        )
         assert injected.is_closed is False
     finally:
         await injected.aclose()

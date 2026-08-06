@@ -50,9 +50,11 @@ class McpStreamableHttpTestClient:
         if not isinstance(gateway_token, SecretValue):
             raise TypeError("gateway_token must be a SecretValue")
         if http_client is not None:
-            raise ValueError(
+            rejection = ValueError(
                 "injecting AsyncClient is unsafe; pass its pure AsyncBaseTransport via transport"
             )
+            del http_client
+            raise rejection from None
         self.url = _validated_endpoint(url)
         self.gateway_token = gateway_token
         self.transport = transport
