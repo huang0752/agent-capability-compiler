@@ -10,7 +10,7 @@
 | 5 — engineer skill | Complete | skill-creator validation; Ruff/mypy; pytest (274 passed); independent Phase 0–3 forward test |
 | 6 — CRM acceptance | Complete | ACC gates 9/9 each; source 34 passed; repository 281 passed; deterministic Pack and real MCP stdio |
 | 7 — generic auth, identity, and scope governance | Complete | Provider auth, PrincipalContext, structured scope audit, stdio/source contracts |
-| 8 — optional multi-user HTTP Gateway | Verification in progress | Focused Gateway unit/integration/E2E passed; final repository-wide gates pending |
+| 8 — optional multi-user HTTP Gateway | Complete | 1100 passed; Ruff; mypy; Schema/CRM compile; Skill validation; independent security reviews |
 
 This file records fresh command evidence at each milestone. A status changes to complete only after its focused tests, the full test suite, lint, type checking, diff review, and milestone commit have succeeded.
 
@@ -116,7 +116,9 @@ This file records fresh command evidence at each milestone. A status changes to 
 - 每个已认证 HTTP 请求都重新解析 `PrincipalContext`。A/B/C 的 Gateway 与 MCP Session 相互独立；MCP Session owner 绑定阻止跨 token 的 POST/GET/DELETE/SSE 访问。有效 Scope 是映射后的源 Scope 与部署 ceiling 的交集，源系统仍会授权每次 REST 调用。
 - `DELETE /runtime/sessions/current`、过期、重启和源 401 都会使受影响的 Gateway 授权路径失效。源 401 只将当前用户标记为 `reauth_required`。MCP SDK 1.29 没有立即终止单个底层 Streamable HTTP 传输的公开 manager API，因此已有 SSE/传输受配置的 idle timeout 上限约束，但被撤销 token 不能授权新请求。
 - 仓库包含一个领域中立的多用户 Fake 源 E2E，以及 CRM、Warehouse 和 `baogao-jin` 的代表性 Provider 配置夹具。这些 Fake 结果都是 `offline_candidate`，不暗示已验证任何生产源。
-- 最新聚焦验证命令为 `uv run --frozen pytest -q tests/unit/runtime/gateway tests/integration/runtime/test_gateway_http.py tests/e2e/test_multi_user_http_gateway.py tests/unit/testkit/test_mcp_client.py tests/unit/core/test_cli.py`，已通过，仅有既有 Starlette deprecation warning。仓库级 pytest、Ruff、mypy、Skill 校验和发布门禁留给 Milestone 8 最终验证更新，本节不预报易漂移的最终全量数字。
+- 最新聚焦验证命令为 `uv run --frozen pytest -q tests/unit/runtime/gateway tests/integration/runtime/test_gateway_http.py tests/e2e/test_multi_user_http_gateway.py tests/unit/testkit/test_mcp_client.py tests/unit/core/test_cli.py`，已通过。
+- 最终仓库门禁：`uv run --frozen pytest -q` 为 1100 passed，仅有既有 Starlette TestClient 弃用警告；Ruff format/check 检查 168 个文件通过；mypy 检查 122 个源码文件通过。
+- `acc schema`、FastAPI CRM `acc validate` 与 `acc compile --check` 均通过，Skill quick validation 返回 `Skill is valid!`。Gateway 认证、MCP owner、Testkit、ASGI 生命周期、CLI factory 和多用户 E2E 的最终独立复审均为 0 Critical / 0 Important。
 
 ### `baogao-jin` 当前验证边界
 

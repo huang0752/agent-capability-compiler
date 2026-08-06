@@ -452,7 +452,7 @@ uv run ruff format packages tests skills
 | M5 | 完整 ACC Engineer Skill | 已完成 |
 | M6 | FastAPI CRM 端到端验收 | 已完成 |
 | M7 | Provider 级认证、PrincipalContext 与结构化范围治理 | 已完成 |
-| M8 | 可选多用户 Streamable HTTP Gateway | 验证中 |
+| M8 | 可选多用户 Streamable HTTP Gateway | 已完成 |
 
 更细的检出版本进度记录在 `docs/progress.md`。生产可用性必须以发布说明、对应 Pack/Runtime 测试证据和安全评审为准。
 
