@@ -13,8 +13,10 @@ from typing import Any, cast
 import pytest
 import yaml
 
-from acc_core.cli.main import EXIT_RUNTIME, EXIT_SUCCESS
+from acc_core.cli.main import EXIT_RUNTIME, EXIT_SUCCESS, _run_runtime_eval_report
 from acc_core.cli.main import _run_command as run_pack_command
+from acc_core.compiler import compile_project
+from acc_runtime import GenericRuntime
 from acc_runtime.errors import RuntimeError as AccRuntimeError
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
@@ -323,6 +325,40 @@ def _make_valid_project(root: Path) -> Path:
         },
     )
     return project
+
+
+@pytest.mark.parametrize("through_mcp", [False, True])
+def test_runtime_eval_composition_closes_every_created_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    through_mcp: bool,
+) -> None:
+    import anyio
+
+    project = _make_valid_project(tmp_path)
+    compilation = compile_project(project)
+    assert compilation.ok is True
+    assert compilation.ir is not None
+    close_calls = 0
+    original_close = GenericRuntime.aclose
+
+    async def counted_close(runtime: GenericRuntime) -> None:
+        nonlocal close_calls
+        close_calls += 1
+        await original_close(runtime)
+
+    monkeypatch.setattr(GenericRuntime, "aclose", counted_close)
+    monkeypatch.setenv("CRM_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("CRM_USER_TOKEN", "offline-token")
+
+    anyio.run(
+        _run_runtime_eval_report,
+        cast(dict[str, Any], compilation.ir),
+        project,
+        through_mcp,
+    )
+
+    assert close_calls == 1
 
 
 def test_acc_console_entrypoint_help_lists_milestone_one_commands() -> None:

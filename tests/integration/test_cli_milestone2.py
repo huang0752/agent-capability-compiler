@@ -362,6 +362,119 @@ def test_runtime_and_e2e_eval_cli_execute_declared_cases(tmp_path: Path) -> None
             }
 
 
+@contextmanager
+def _fake_provider_auth_server(auth_kind: str) -> Iterator[str]:
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            if auth_kind != "password_bearer" or self.path != "/auth/login":
+                self.send_response(404)
+                self.end_headers()
+                return
+            length = int(self.headers.get("content-length", "0"))
+            body = json.loads(self.rfile.read(length))
+            if body != {"username": "test-user", "password": "test-password"}:
+                self.send_response(401)
+                self.end_headers()
+                return
+            response = b'{"access_token":"test-token"}'
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(response)))
+            self.end_headers()
+            self.wfile.write(response)
+
+        def do_GET(self) -> None:
+            expected = None if auth_kind == "none" else "Bearer test-token"
+            if self.headers.get("authorization") != expected:
+                self.send_response(401)
+                self.end_headers()
+                return
+            body = (
+                b'{"id":"c-1","name":"Example","tenant_id":"tenant-a",'
+                b'"internal_note":"must-be-filtered"}'
+            )
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: object) -> None:
+            del format, args
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = cast(tuple[str, int], server.server_address)
+        yield f"http://{host}:{port}"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+def _use_provider_auth(project: Path, auth_kind: str) -> None:
+    project_path = project / "project.yaml"
+    document = yaml.safe_load(project_path.read_text(encoding="utf-8"))
+    if auth_kind == "none":
+        auth: dict[str, object] = {"kind": "none"}
+    elif auth_kind == "bearer_secret":
+        auth = {"kind": "bearer_secret", "token_ref": "CRM_USER_TOKEN"}
+    else:
+        auth = {
+            "kind": "password_bearer",
+            "credentials": {
+                "kind": "environment_secret",
+                "identity_ref": "CRM_USER",
+                "password_ref": "CRM_PASSWORD",
+            },
+            "login_path": "/auth/login",
+            "identity_field": "username",
+            "password_field": "password",
+            "token_pointer": "/access_token",
+        }
+    document["provider"]["auth"] = auth
+    _write_yaml(project_path, document)
+    operation_path = project / "operations" / "crm.get_customer.yaml"
+    operation = yaml.safe_load(operation_path.read_text(encoding="utf-8"))
+    operation["http"].pop("credential_ref")
+    _write_yaml(operation_path, operation)
+
+
+@pytest.mark.parametrize("auth_kind", ["none", "bearer_secret", "password_bearer"])
+def test_runtime_and_e2e_eval_cli_support_provider_auth(
+    tmp_path: Path,
+    auth_kind: str,
+) -> None:
+    project = _make_project(tmp_path)
+    _use_provider_auth(project, auth_kind)
+    with _fake_provider_auth_server(auth_kind) as base_url:
+        environment = {
+            "CRM_BASE_URL": base_url,
+            "CRM_USER_TOKEN": "test-token",
+            "CRM_USER": "test-user",
+            "CRM_PASSWORD": "test-password",
+            "ACC_GRANTED_SCOPES": "customer.read",
+            "ACC_TENANT_ID": "tenant-a",
+        }
+        for suite in ("runtime", "e2e"):
+            completed = _run_acc(
+                "test",
+                suite,
+                "--json",
+                cwd=project,
+                environment=environment,
+            )
+
+            payload = _payload(completed)
+            assert payload["result"]["summary"] == {
+                "total": 2,
+                "passed": 2,
+                "failed": 0,
+            }
+
+
 @pytest.mark.asyncio
 async def test_run_serves_real_mcp_stdio_tool_listing(tmp_path: Path) -> None:
     project = _make_project(tmp_path)

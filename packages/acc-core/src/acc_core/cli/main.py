@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import os
@@ -622,39 +623,73 @@ async def _run_runtime_eval_report(
 ) -> Any:
     """Compose Eval with Runtime lazily so ``acc-core`` has no package cycle."""
 
-    from pydantic import ValidationError
-
-    from acc_core.evals import RuntimeEvalRunner
-    from acc_core.models import Project
+    from acc_core.evals import AsyncCapabilityCaller, RuntimeEvalRunner
     from acc_runtime import GenericRuntime
+    from acc_runtime.context import PrincipalContext
     from acc_runtime.loader import load_pack
     from acc_runtime.mcp import CapabilityMcpServer
-    from acc_runtime.providers import HttpProvider
-    from acc_testkit import RecordingOperationProvider
+    from acc_runtime.runtime import ContextOperationProvider
 
-    try:
-        project = Project.model_validate(compiled_ir.get("project"))
-    except ValidationError as exc:
-        raise ValueError("compiled project contract is invalid") from exc
+    class EvalCallRecorder:
+        def __init__(self) -> None:
+            self._calls: list[dict[str, object]] = []
 
-    provider = RecordingOperationProvider(
-        HttpProvider(
-            base_url_ref=project.provider.base_url_ref,
-            environment=os.environ,
+        def snapshot(self) -> tuple[dict[str, object], ...]:
+            return tuple(copy.deepcopy(self._calls))
+
+        def reset(self) -> None:
+            self._calls.clear()
+
+        def bind(self, delegate: ContextOperationProvider) -> ContextOperationProvider:
+            recorder = self
+
+            class BoundRecordingProvider:
+                async def call(
+                    self,
+                    operation: Mapping[str, object],
+                    arguments: Mapping[str, JsonValue],
+                    principal_context: PrincipalContext,
+                ) -> JsonValue:
+                    operation_id = operation.get("id")
+                    if not isinstance(operation_id, str) or not operation_id:
+                        raise ValueError("recorded operation requires a stable id")
+                    recorder._calls.append(
+                        {
+                            "operation": operation_id,
+                            "arguments": copy.deepcopy(dict(arguments)),
+                        }
+                    )
+                    return await delegate.call(
+                        operation,
+                        arguments,
+                        principal_context=principal_context,
+                    )
+
+            return BoundRecordingProvider()
+
+    with tempfile.TemporaryDirectory(prefix="acc-eval-") as temporary_directory:
+        pack_path = Path(temporary_directory) / "eval.accpkg"
+        build_pack(project_root, pack_path, compiled_ir=compiled_ir)
+        loaded_pack = load_pack(pack_path)
+        runtime_ir = cast(dict[str, Any], loaded_pack.ir)
+        recorder = EvalCallRecorder()
+        context = _EvalRuntimeContext(
+            granted_scopes=_runtime_scopes(()),
+            tenant_id=os.environ.get("ACC_TENANT_ID"),
         )
-    )
-    runtime_ir = compiled_ir
-    loaded_pack = None
-    context = _EvalRuntimeContext(
-        granted_scopes=_runtime_scopes(()),
-        tenant_id=os.environ.get("ACC_TENANT_ID"),
-    )
-    if through_mcp:
-        with tempfile.TemporaryDirectory(prefix="acc-e2e-") as temporary_directory:
-            pack_path = Path(temporary_directory) / "eval.accpkg"
-            build_pack(project_root, pack_path, compiled_ir=compiled_ir)
-            loaded_pack = load_pack(pack_path)
-            runtime_ir = cast(dict[str, Any], loaded_pack.ir)
+
+        def create_runtime() -> GenericRuntime:
+            granted_scopes, tenant_id = context.take()
+            runtime = GenericRuntime.from_pack(
+                pack_path,
+                environment=os.environ,
+                granted_scopes=granted_scopes,
+                tenant_id=tenant_id,
+            )
+            runtime.provider = recorder.bind(cast(ContextOperationProvider, runtime.provider))
+            return runtime
+
+        if through_mcp:
 
             class McpCaller:
                 async def call(
@@ -662,56 +697,49 @@ async def _run_runtime_eval_report(
                     capability_id: str,
                     input_data: Mapping[str, JsonValue],
                 ) -> JsonValue:
-                    granted_scopes, tenant_id = context.take()
-                    runtime = GenericRuntime(
-                        runtime_ir,
-                        provider=provider,
-                        granted_scopes=granted_scopes,
-                        tenant_id=tenant_id,
-                        loaded_pack=loaded_pack,
-                    )
-                    adapter = CapabilityMcpServer(runtime)
-                    result = await adapter.call_tool(capability_id, input_data)
-                    structured = result.structuredContent or {}
-                    if result.isError:
-                        error = structured.get("error")
-                        if not isinstance(error, dict):
-                            raise _McpEvalFailure("ACC_RUNTIME_PROTOCOL_ERROR", 500)
-                        code = error.get("code")
-                        status = error.get("status")
-                        raise _McpEvalFailure(
-                            code if isinstance(code, str) else "ACC_RUNTIME_PROTOCOL_ERROR",
-                            status if isinstance(status, int) else 500,
+                    runtime = create_runtime()
+                    try:
+                        result = await CapabilityMcpServer(runtime).call_tool(
+                            capability_id,
+                            input_data,
                         )
-                    return cast(JsonValue, structured.get("result"))
+                        structured = result.structuredContent or {}
+                        if result.isError:
+                            error = structured.get("error")
+                            if not isinstance(error, dict):
+                                raise _McpEvalFailure("ACC_RUNTIME_PROTOCOL_ERROR", 500)
+                            code = error.get("code")
+                            status = error.get("status")
+                            raise _McpEvalFailure(
+                                code if isinstance(code, str) else "ACC_RUNTIME_PROTOCOL_ERROR",
+                                status if isinstance(status, int) else 500,
+                            )
+                        return cast(JsonValue, structured.get("result"))
+                    finally:
+                        await runtime.aclose()
 
-            return await RuntimeEvalRunner(
-                McpCaller(),
-                fixture_loader=context,
-                call_recorder=provider,
-            ).run(runtime_ir)
+            caller: AsyncCapabilityCaller = McpCaller()
+        else:
 
-    class RuntimeCaller:
-        async def call(
-            self,
-            capability_id: str,
-            input_data: Mapping[str, JsonValue],
-        ) -> JsonValue:
-            granted_scopes, tenant_id = context.take()
-            runtime = GenericRuntime(
-                runtime_ir,
-                provider=provider,
-                granted_scopes=granted_scopes,
-                tenant_id=tenant_id,
-                loaded_pack=loaded_pack,
-            )
-            return await runtime.call(capability_id, input_data)
+            class RuntimeCaller:
+                async def call(
+                    self,
+                    capability_id: str,
+                    input_data: Mapping[str, JsonValue],
+                ) -> JsonValue:
+                    runtime = create_runtime()
+                    try:
+                        return await runtime.call(capability_id, input_data)
+                    finally:
+                        await runtime.aclose()
 
-    return await RuntimeEvalRunner(
-        RuntimeCaller(),
-        fixture_loader=context,
-        call_recorder=provider,
-    ).run(runtime_ir)
+            caller = RuntimeCaller()
+
+        return await RuntimeEvalRunner(
+            caller,
+            fixture_loader=context,
+            call_recorder=recorder,
+        ).run(runtime_ir)
 
 
 class _EvalRuntimeContext:
