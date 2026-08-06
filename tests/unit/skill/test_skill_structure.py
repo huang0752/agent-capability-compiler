@@ -84,6 +84,36 @@ def test_templates_track_current_strict_public_models() -> None:
     Eval.model_validate(_yaml(SKILL / "references" / "examples" / "permission-negative-eval.yaml"))
     assert isinstance(_yaml(SKILL / "templates" / "system-map.yaml"), dict)
     assert isinstance(_yaml(SKILL / "templates" / "capability-plan.yaml"), dict)
+    scope = _yaml(SKILL / "templates" / "scope-inventory.yaml")
+    assert scope["scope"] == {
+        "mode": "system_readonly_complete",
+        "user_confirmation": None,
+        "selected_domains": [],
+    }
+    route = scope["routes"][0]
+    assert set(route) == {
+        "id",
+        "domain",
+        "method",
+        "path",
+        "evidence_sources",
+        "eligibility",
+        "disposition",
+        "operation_id",
+        "capability_ids",
+        "reason",
+    }
+    baseline = json.loads(
+        (SKILL / "templates" / "coverage-baseline.json").read_text(encoding="utf-8")
+    )
+    assert baseline["scope_mode"] == "system_readonly_complete"
+    assert set(baseline["source_scope"]) == {
+        "eligible_read_routes",
+        "planned_or_composed",
+        "excluded",
+        "blocked_on_evidence",
+        "unresolved",
+    }
     for name in ("preflight-report.json", "coverage-baseline.json"):
         value = json.loads((SKILL / "templates" / name).read_text(encoding="utf-8"))
         assert isinstance(value, dict)

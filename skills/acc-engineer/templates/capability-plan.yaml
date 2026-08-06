@@ -24,6 +24,14 @@ capabilities:
     status: blocked_on_evidence
 
 coverage:
+  scope_mode: system_readonly_complete
+  route_dispositions:
+    planned:
+      - REPLACE_WITH_SCOPE_ROUTE_ID
+    composed: []
+    excluded: []
+    blocked_on_evidence: []
+    out_of_scope: []
   high_value_operations:
     - REPLACE_WITH_OPERATION_ID
   deliberately_excluded:

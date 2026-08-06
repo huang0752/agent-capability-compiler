@@ -33,6 +33,8 @@ candidate_operations:
       tenant_boundary: REPLACE_WITH_EVIDENCED_TENANT_RULE
     evidence_sources:
       - REPLACE_WITH_EVIDENCE_SOURCE_ID
+    scope_route_ids:
+      - REPLACE_WITH_SCOPE_ROUTE_ID
     confirmation: pending
 
 relationships:

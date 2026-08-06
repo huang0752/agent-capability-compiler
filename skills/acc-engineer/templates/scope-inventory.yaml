@@ -1,0 +1,34 @@
+# Planning artifact: discovered source routes and their explicit scope dispositions.
+schema_version: "1"
+scope:
+  mode: system_readonly_complete
+  user_confirmation: null
+  selected_domains: []
+discovery:
+  source_commit: "git:0123456789abcdef"
+  methods: [GET, HEAD]
+  include_paths: [backend/app/api]
+  evidence_sources: [api-router]
+domains:
+  - id: customer
+    status: selected
+routes:
+  - id: customer.search
+    domain: customer
+    method: GET
+    path: /api/customers/search
+    evidence_sources: [customer-routes]
+    eligibility: eligible
+    disposition: planned
+    operation_id: customer.search
+    capability_ids: [search_customers]
+    reason: null
+summary:
+  discovered_routes: 1
+  eligible_read_routes: 1
+  planned: 1
+  composed: 0
+  excluded: 0
+  blocked_on_evidence: 0
+  out_of_scope: 0
+  unresolved: 0

@@ -2,6 +2,14 @@
   "artifact_kind": "phase_3_planning_baseline",
   "status": "blocked_on_evidence",
   "note": "This planning artifact is not acc coverage --json output.",
+  "scope_mode": "system_readonly_complete",
+  "source_scope": {
+    "eligible_read_routes": 0,
+    "planned_or_composed": 0,
+    "excluded": 0,
+    "blocked_on_evidence": 0,
+    "unresolved": 0
+  },
   "candidate_operations": {
     "total": 0,
     "planned": [],
