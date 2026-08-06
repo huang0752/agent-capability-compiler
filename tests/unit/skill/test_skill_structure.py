@@ -56,9 +56,7 @@ def test_skill_has_required_platform_neutral_structure_without_placeholders() ->
 def test_skill_requires_explicit_scope_audit_and_validation_level() -> None:
     skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
     harness = (SKILL / "HARNESS.md").read_text(encoding="utf-8")
-    guides = "\n".join(
-        path.read_text(encoding="utf-8") for path in (SKILL / "guides").glob("*.md")
-    )
+    guides = "\n".join(path.read_text(encoding="utf-8") for path in (SKILL / "guides").glob("*.md"))
 
     assert "system_readonly_complete" in skill
     assert "只有用户明确" in skill
@@ -73,9 +71,7 @@ def test_skill_requires_explicit_scope_audit_and_validation_level() -> None:
 
 
 def test_guides_reserve_mvp_language_for_explicit_pilot_scope() -> None:
-    guides = "\n".join(
-        path.read_text(encoding="utf-8") for path in (SKILL / "guides").glob("*.md")
-    )
+    guides = "\n".join(path.read_text(encoding="utf-8") for path in (SKILL / "guides").glob("*.md"))
     for stale in (
         "新需求超出只读 MVP",
         "候选仍符合只读 MVP",
@@ -114,6 +110,7 @@ def test_openai_metadata_and_platform_wrappers_delegate_to_the_single_harness() 
 def test_templates_track_current_strict_public_models() -> None:
     digest = f"sha256:{hashlib.sha256(b'captured evidence').hexdigest()}"
     operation = _yaml(SKILL / "templates" / "operation.yaml")
+    assert "credential_ref" not in operation["http"]
     operation["evidence"][0]["digest"] = digest
     Operation.model_validate(operation)
     Capability.model_validate(_yaml(SKILL / "templates" / "capability.yaml"))
@@ -121,7 +118,12 @@ def test_templates_track_current_strict_public_models() -> None:
     Eval.model_validate(_yaml(SKILL / "templates" / "eval.yaml"))
     Eval.model_validate(_yaml(SKILL / "references" / "examples" / "permission-negative-eval.yaml"))
     assert isinstance(_yaml(SKILL / "templates" / "system-map.yaml"), dict)
-    assert isinstance(_yaml(SKILL / "templates" / "capability-plan.yaml"), dict)
+    plan = _yaml(SKILL / "templates" / "capability-plan.yaml")
+    assert isinstance(plan, dict)
+    assert plan["capabilities"][0]["runtime_only_inputs"] == [
+        "base_url_ref",
+        "provider_auth",
+    ]
     scope = _yaml(SKILL / "templates" / "scope-inventory.yaml")
     assert scope["scope"] == {
         "mode": "system_readonly_complete",
@@ -155,6 +157,32 @@ def test_templates_track_current_strict_public_models() -> None:
     for name in ("preflight-report.json", "coverage-baseline.json"):
         value = json.loads((SKILL / "templates" / name).read_text(encoding="utf-8"))
         assert isinstance(value, dict)
+
+
+def test_public_docs_explain_generic_auth_context_and_validation_boundaries() -> None:
+    root_readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    example_readme = (ROOT / "examples" / "fastapi-crm" / "README.md").read_text(encoding="utf-8")
+    adr = (ROOT / "docs" / "architecture" / "adr" / "003-generic-runtime.md").read_text(
+        encoding="utf-8"
+    )
+    progress = (ROOT / "docs" / "progress.md").read_text(encoding="utf-8")
+    combined = "\n".join((root_readme, example_readme, adr, progress))
+
+    for contract in (
+        "none",
+        "bearer_secret",
+        "password_bearer",
+        "PrincipalContext",
+        "context_bindings",
+        "streamable_http",
+        "offline_candidate",
+        "source_connected_verified",
+    ):
+        assert contract in combined
+
+    assert "Provider" in root_readme
+    assert "credential_ref: CRM_USER_TOKEN" not in root_readme
+    assert "baogao-jin 源码或在线源已验证" not in combined
 
 
 def test_installers_copy_thin_integrations_and_refuse_overwrite(tmp_path: Path) -> None:

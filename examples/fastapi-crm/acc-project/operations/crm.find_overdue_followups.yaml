@@ -50,7 +50,6 @@ http:
   query_parameters:
     as_of: as_of
     tenant_id: tenant_id
-  credential_ref: CRM_DEMO_TOKEN
   scopes:
   - followup.read
   timeout_seconds: 5

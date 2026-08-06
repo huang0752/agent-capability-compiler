@@ -16,11 +16,13 @@ from typing import Any, cast
 import httpx
 import pytest
 import uvicorn
+import yaml
 from mcp.client.stdio import StdioServerParameters
 
 from acc_core.compiler import compile_project
 from acc_core.packaging import build_pack
 from acc_runtime import GenericRuntime
+from acc_runtime.auth import BearerSecretAuthStrategy
 from acc_runtime.errors import RuntimeError as AccRuntimeError
 from acc_runtime.providers import (
     HttpForbiddenError,
@@ -96,12 +98,45 @@ def _environment(base_url: str, token: str = FULL_TOKEN) -> dict[str, str]:
     return {"CRM_BASE_URL": base_url, "CRM_DEMO_TOKEN": token}
 
 
+def _provider(
+    base_url: str,
+    token: str = FULL_TOKEN,
+    *,
+    client: httpx.AsyncClient | None = None,
+) -> HttpProvider:
+    environment = _environment(base_url, token)
+    return HttpProvider(
+        base_url_ref="CRM_BASE_URL",
+        environment=environment,
+        client=client,
+        auth_strategy=BearerSecretAuthStrategy(
+            "CRM_DEMO_TOKEN",
+            environment=environment,
+        ),
+    )
+
+
 def _contains_key(value: object, key: str) -> bool:
     if isinstance(value, dict):
         return key in value or any(_contains_key(item, key) for item in value.values())
     if isinstance(value, list):
         return any(_contains_key(item, key) for item in value)
     return False
+
+
+def test_example_uses_provider_bearer_auth_without_operation_credentials() -> None:
+    project = yaml.safe_load((PROJECT / "project.yaml").read_text(encoding="utf-8"))
+
+    assert project["provider"]["auth"] == {
+        "kind": "bearer_secret",
+        "token_ref": "CRM_DEMO_TOKEN",
+    }
+    for path in sorted((PROJECT / "operations").glob("*.yaml")):
+        operation = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert "credential_ref" not in operation["http"], path
+    for path in sorted(PROJECT.rglob("*")):
+        if path.is_file() and path.suffix in {".diff", ".json", ".md", ".yaml"}:
+            assert "credential_ref" not in path.read_text(encoding="utf-8"), path
 
 
 def test_pack_is_deterministic_and_contains_no_demo_token(
@@ -124,10 +159,7 @@ async def test_runtime_uses_real_crm_and_enforces_disclosure(
 ) -> None:
     runtime = GenericRuntime(
         compiled_ir,
-        provider=HttpProvider(
-            base_url_ref="CRM_BASE_URL",
-            environment=_environment(crm_base_url),
-        ),
+        provider=_provider(crm_base_url),
         granted_scopes=FULL_SCOPES,
         tenant_id="tenant-a",
     )
@@ -149,19 +181,13 @@ async def test_runtime_maps_real_crm_404_and_403(
 ) -> None:
     full_runtime = GenericRuntime(
         compiled_ir,
-        provider=HttpProvider(
-            base_url_ref="CRM_BASE_URL",
-            environment=_environment(crm_base_url),
-        ),
+        provider=_provider(crm_base_url),
         granted_scopes=FULL_SCOPES,
         tenant_id="tenant-a",
     )
     limited_upstream = GenericRuntime(
         compiled_ir,
-        provider=HttpProvider(
-            base_url_ref="CRM_BASE_URL",
-            environment=_environment(crm_base_url, CUSTOMER_ONLY_TOKEN),
-        ),
+        provider=_provider(crm_base_url, CUSTOMER_ONLY_TOKEN),
         granted_scopes=FULL_SCOPES,
         tenant_id="tenant-a",
     )
@@ -199,11 +225,7 @@ async def test_runtime_maps_timeout_and_oversize_stably(
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         runtime = GenericRuntime(
             compiled_ir,
-            provider=HttpProvider(
-                base_url_ref="CRM_BASE_URL",
-                environment=_environment("http://crm.example.test"),
-                client=client,
-            ),
+            provider=_provider("http://crm.example.test", client=client),
             granted_scopes={"customer.read"},
             tenant_id="tenant-a",
         )

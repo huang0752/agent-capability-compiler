@@ -10,6 +10,11 @@ This example demonstrates ACC against an independent, synthetic, read-only CRM:
 All records and demo Bearer values are synthetic. Nothing here is a production credential or
 deployment configuration.
 
+The ACC project declares the demo token once as Provider-level `bearer_secret` authentication.
+`CRM_DEMO_TOKEN` is an environment-variable reference in `project.yaml`; its value never enters the
+Pack, an Operation, or an MCP tool argument. The six Operations intentionally contain no legacy
+`credential_ref`.
+
 ## Run the source-system checks
 
 From `system/`:
@@ -52,3 +57,15 @@ uv run acc run build/fastapi-crm.accpkg
 
 The MCP tools expose only capability inputs. Base URL, credential, scopes, and tenant context remain
 runtime configuration; they are not tool arguments or Pack secrets.
+
+This command uses MCP `stdio`, so one fixed `PrincipalContext` is created when the process starts.
+The example does not expose `streamable_http`; that transport requires the separate multi-user
+Gateway and request-level identities. Fake contract/runtime/E2E results are `offline_candidate`.
+The repository E2E test may be called `source_connected_verified` only after it actually connects
+to this local synthetic CRM and succeeds. Neither level proves production behavior or validates an
+unrelated source checkout or online system.
+
+For new integrations, Provider authentication is one of `none`, `bearer_secret`, or
+`password_bearer`. Trusted request values are carried by `PrincipalContext` and may be injected only
+through compiler-checked `context_bindings`; account credentials, JWTs, and tenant identifiers must
+not become Agent inputs.

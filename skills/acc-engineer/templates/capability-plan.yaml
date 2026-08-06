@@ -13,7 +13,7 @@ capabilities:
       - resource_id
     runtime_only_inputs:
       - base_url_ref
-      - credential_ref
+      - provider_auth
     policy: REPLACE_WITH_POLICY_ID
     evals:
       positive: replace_capability_positive

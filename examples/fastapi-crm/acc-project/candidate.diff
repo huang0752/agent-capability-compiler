@@ -315,7 +315,7 @@ index 0000000..a49ce1f
 +    operation_dependencies: [crm.search_customers]
 +    composition_reason: The source route already represents one business discovery operation.
 +    agent_inputs: [query]
-+    runtime_only_inputs: [base_url_ref, credential_ref, tenant_id]
++    runtime_only_inputs: [base_url_ref, provider_auth, tenant_id]
 +    policy: crm-search-read
 +    evals:
 +      positive: search-customers-positive
@@ -332,7 +332,7 @@ index 0000000..a49ce1f
 +      - crm.list_customer_todos
 +    composition_reason: Four lower-level interfaces are composed into one review-ready business context.
 +    agent_inputs: [customer_id]
-+    runtime_only_inputs: [base_url_ref, credential_ref, tenant_id]
++    runtime_only_inputs: [base_url_ref, provider_auth, tenant_id]
 +    policy: crm-context-read
 +    evals:
 +      positive: customer-context-positive
@@ -346,7 +346,7 @@ index 0000000..a49ce1f
 +    operation_dependencies: [crm.find_overdue_followups]
 +    composition_reason: The source route already implements the deterministic business filter.
 +    agent_inputs: [as_of]
-+    runtime_only_inputs: [base_url_ref, credential_ref, tenant_id]
++    runtime_only_inputs: [base_url_ref, provider_auth, tenant_id]
 +    policy: crm-followup-read
 +    evals:
 +      positive: overdue-followups-positive
@@ -703,7 +703,7 @@ new file mode 100644
 index 0000000..f733668
 --- /dev/null
 +++ b/examples/fastapi-crm/acc-project/operations/crm.find_overdue_followups.yaml
-@@ -0,0 +1,84 @@
+@@ -0,0 +1,83 @@
 +schema_version: '1'
 +id: crm.find_overdue_followups
 +title: Find overdue followups
@@ -756,7 +756,6 @@ index 0000000..f733668
 +  query_parameters:
 +    as_of: as_of
 +    tenant_id: tenant_id
-+  credential_ref: CRM_DEMO_TOKEN
 +  scopes:
 +  - followup.read
 +  timeout_seconds: 5
@@ -793,7 +792,7 @@ new file mode 100644
 index 0000000..09e9039
 --- /dev/null
 +++ b/examples/fastapi-crm/acc-project/operations/crm.get_customer.yaml
-@@ -0,0 +1,75 @@
+@@ -0,0 +1,74 @@
 +schema_version: '1'
 +id: crm.get_customer
 +title: Get customer
@@ -837,7 +836,6 @@ index 0000000..09e9039
 +    customer_id: customer_id
 +  query_parameters:
 +    tenant_id: tenant_id
-+  credential_ref: CRM_DEMO_TOKEN
 +  scopes:
 +  - customer.read
 +  timeout_seconds: 5
@@ -874,7 +872,7 @@ new file mode 100644
 index 0000000..02ccf6b
 --- /dev/null
 +++ b/examples/fastapi-crm/acc-project/operations/crm.list_customer_contacts.yaml
-@@ -0,0 +1,81 @@
+@@ -0,0 +1,80 @@
 +schema_version: '1'
 +id: crm.list_customer_contacts
 +title: List customer contacts
@@ -924,7 +922,6 @@ index 0000000..02ccf6b
 +    customer_id: customer_id
 +  query_parameters:
 +    tenant_id: tenant_id
-+  credential_ref: CRM_DEMO_TOKEN
 +  scopes:
 +  - contact.read
 +  timeout_seconds: 5
@@ -961,7 +958,7 @@ new file mode 100644
 index 0000000..95f6060
 --- /dev/null
 +++ b/examples/fastapi-crm/acc-project/operations/crm.list_customer_followups.yaml
-@@ -0,0 +1,84 @@
+@@ -0,0 +1,83 @@
 +schema_version: '1'
 +id: crm.list_customer_followups
 +title: List customer followups
@@ -1014,7 +1011,6 @@ index 0000000..95f6060
 +    customer_id: customer_id
 +  query_parameters:
 +    tenant_id: tenant_id
-+  credential_ref: CRM_DEMO_TOKEN
 +  scopes:
 +  - followup.read
 +  timeout_seconds: 5
@@ -1051,7 +1047,7 @@ new file mode 100644
 index 0000000..a8d2924
 --- /dev/null
 +++ b/examples/fastapi-crm/acc-project/operations/crm.list_customer_todos.yaml
-@@ -0,0 +1,82 @@
+@@ -0,0 +1,81 @@
 +schema_version: '1'
 +id: crm.list_customer_todos
 +title: List customer todos
@@ -1102,7 +1098,6 @@ index 0000000..a8d2924
 +    customer_id: customer_id
 +  query_parameters:
 +    tenant_id: tenant_id
-+  credential_ref: CRM_DEMO_TOKEN
 +  scopes:
 +  - todo.read
 +  timeout_seconds: 5
@@ -1139,7 +1134,7 @@ new file mode 100644
 index 0000000..8bb45fc
 --- /dev/null
 +++ b/examples/fastapi-crm/acc-project/operations/crm.search_customers.yaml
-@@ -0,0 +1,78 @@
+@@ -0,0 +1,77 @@
 +schema_version: '1'
 +id: crm.search_customers
 +title: Search customers
@@ -1186,7 +1181,6 @@ index 0000000..8bb45fc
 +  query_parameters:
 +    q: query
 +    tenant_id: tenant_id
-+  credential_ref: CRM_DEMO_TOKEN
 +  scopes:
 +  - customer.read
 +  timeout_seconds: 5
@@ -1321,7 +1315,7 @@ new file mode 100644
 index 0000000..bec7170
 --- /dev/null
 +++ b/examples/fastapi-crm/acc-project/project.yaml
-@@ -0,0 +1,13 @@
+@@ -0,0 +1,16 @@
 +schema_version: '1'
 +project:
 +  id: fastapi-crm
@@ -1335,6 +1329,9 @@ index 0000000..bec7170
 +provider:
 +  kind: http
 +  base_url_ref: CRM_BASE_URL
++  auth:
++    kind: bearer_secret
++    token_ref: CRM_DEMO_TOKEN
 diff --git a/examples/fastapi-crm/acc-project/risk-report.json b/examples/fastapi-crm/acc-project/risk-report.json
 new file mode 100644
 index 0000000..3285166

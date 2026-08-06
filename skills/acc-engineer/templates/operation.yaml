@@ -31,8 +31,7 @@ http:
   path_parameters:
     resource_id: resource_id
   query_parameters: {}
-  # This is an environment-variable reference, never a credential value.
-  credential_ref: SOURCE_SYSTEM_READ_TOKEN
+  # Authentication is declared once under project.provider.auth, never per Operation.
   scopes:
     - REPLACE_WITH_EVIDENCED_READ_SCOPE
   timeout_seconds: 15

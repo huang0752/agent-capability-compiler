@@ -44,7 +44,6 @@ http:
   query_parameters:
     q: query
     tenant_id: tenant_id
-  credential_ref: CRM_DEMO_TOKEN
   scopes:
   - customer.read
   timeout_seconds: 5

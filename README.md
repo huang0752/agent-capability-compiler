@@ -5,7 +5,7 @@ ACC 是一个**零代码侵入式 Agent 能力接入工具链**。它帮助 Codi
 ACC 不修改已有业务系统，不要求业务系统嵌入 Agent SDK 或接入 MCP。运行时只访问已有 REST API，或访问独立部署的旁路 Adapter。
 
 > [!IMPORTANT]
-> 首个 MVP 已完成本地端到端验收，但尚不代表生产发布或生产安全认证。请结合[开发状态](#开发状态)、示例交接报告和后续发布说明判断使用范围。
+> 已完成的本地端到端验收只证明对应的本地合同，不代表生产发布、生产安全认证，也不代表任何未连接业务系统的源码或在线数据已经验证。请结合[开发状态](#开发状态)、示例交接报告和后续发布说明判断使用范围。
 
 ## 为什么需要 ACC
 
@@ -33,9 +33,11 @@ ACC 不修改已有业务系统，不要求业务系统嵌入 Agent SDK 或接�
                          │
                          ▼
               ACC Generic Runtime（无 LLM）
-                         │ MCP stdio
-                         ▼
-                       Agent
+                         │
+             ┌───────────┴───────────┐
+             │ MCP stdio             │ streamable_http
+             ▼                       ▼
+       本地单身份 Agent       多用户 Gateway（后续阶段）
                          │
                          ▼
              原系统 REST API / 独立 Adapter
@@ -48,7 +50,7 @@ ACC 负责：
 - 稳定的 `acc` CLI、Schema 和结构化诊断；
 - Evidence 绑定、引用检查、Policy 校验和 Workflow 编译；
 - Eval、Coverage 和可重复构建的 Capability Pack；
-- 固定通用 Runtime、MCP stdio、REST Provider 和 SecretRef；
+- 固定通用 Runtime、MCP stdio、REST Provider、Provider 级认证和 SecretRef；
 - Adapter SDK 基础契约、测试工具和 Fake Adapter；
 - 面向 Coding Agent 的 ACC Engineer Skill。
 
@@ -60,7 +62,7 @@ ACC **不**负责：
 - 在 Runtime 中动态生成代码、HTTP 请求或工作流；
 - 第一版中的生产写入、Web 管理后台、SaaS 控制面、插件市场、Kubernetes、Helm、OCI、SOAP、gRPC、数据库 Adapter、消息队列、RPA 或浏览器录制。
 
-MVP 仅支持 **REST API、GET/HEAD 只读操作、MCP stdio、Capability Pack 和通用 Runtime**。
+当前可执行入口支持 **REST API、GET/HEAD 只读操作、MCP stdio、Capability Pack 和通用 Runtime**。`streamable_http` 已有严格配置合同，但 `acc run` 会稳定拒绝它，直到多用户 Gateway 阶段交付；配置可验证不等于 HTTP Gateway 已上线。
 
 ## 架构
 
@@ -69,7 +71,7 @@ MVP 仅支持 **REST API、GET/HEAD 只读操作、MCP stdio、Capability Pack �
 | 组件 | 职责 |
 | --- | --- |
 | `acc-core` | 数据模型、JSON Schema、CLI、Evidence、校验器、编译器、Coverage、Eval、Pack |
-| `acc-runtime` | Pack Loader、MCP stdio、Workflow 执行、REST Provider、SecretRef、Policy、结构化错误 |
+| `acc-runtime` | Pack Loader、MCP stdio、Workflow 执行、REST Provider、Provider 级认证、`PrincipalContext`、Policy、结构化错误 |
 | `acc-adapter-sdk` | Adapter Contract、Server 基础骨架、测试工具和 Fake Adapter 示例 |
 | `acc-testkit` | Fake REST System、MCP 测试客户端、E2E 断言、故障模拟和示例数据 |
 | `skills/acc-engineer` | `preflight → analyze → model → plan → implement → validate → test → refine → handoff` |
@@ -228,7 +230,18 @@ runtime:
 provider:
   kind: http
   base_url_ref: CRM_BASE_URL
+  auth:
+    kind: bearer_secret
+    token_ref: CRM_USER_TOKEN
 ```
+
+认证是 Provider 合同，不是 Operation 参数。新项目按目标系统选择以下互斥配置：
+
+- `none`：源系统不要求认证，不携带 credential source。
+- `bearer_secret`：从 `token_ref` 指向的部署环境变量读取既有 Bearer Secret；适合本地 `stdio` 的服务账号或测试账号。
+- `password_bearer`：调用配置的登录端点换取 JWT。`stdio` 只能使用环境中的账号/密码引用；`streamable_http` 只能使用 Gateway 会话提交的一次性登录材料，Pack 不保存用户账密或 JWT。
+
+旧项目的 Operation 级 `credential_ref` 仅保留为 `stdio` 迁移兼容合同。新项目必须使用 `provider.auth`，同一项目不得混用两种凭据位置。
 
 ### Operation 与 Evidence
 
@@ -257,7 +270,6 @@ http:
   path: /customers/{customer_id}
   path_parameters:
     customer_id: customer_id
-  credential_ref: CRM_USER_TOKEN
   scopes: [customer.read]
   timeout_seconds: 15
   max_response_bytes: 1048576
@@ -270,6 +282,8 @@ evidence:
 ```
 
 Evidence 可以定位到文件和行号、JSON Pointer 或 OpenAPI Operation，并携带内容摘要。ACC 不允许用常识或模型猜测补全路径、字段、Scope 或租户规则。
+
+如果源接口需要可信身份或租户值，Operation 用 `context_bindings` 声明注入位置，例如把 `tenant_id` 绑定到 `tenant_context.tenant_id`。绑定值只能由 Runtime 的不可变 `PrincipalContext` 提供，Agent 输入和 Workflow 参数都不能覆盖；Provider 还必须通过 `context_binding_allowlist` 显式允许租户路径。`PrincipalContext` 保存 principal、目标系统、有效 Scope 和受限租户上下文，但不公开 JWT、密码、Authorization Header 或内部认证状态。
 
 ### Capability、Policy 与 Eval
 
@@ -308,19 +322,27 @@ pack.lock
 - **只读源工作区**：Engineer Skill 在 Preflight 检查写入风险，只能修改独立 ACC 项目。
 - **只读网络操作**：MVP Operation 仅允许 `GET`/`HEAD`，且 `safety.effect` 必须为 `read`。
 - **固定目标**：禁止绝对 URL、动态 Host、任意外部域名、路径穿越和工具参数覆盖 Header。
-- **凭据隔离**：工具输入不能携带 Token；Pack 只引用 SecretRef；Runtime 注入凭据且不得记录 Secret。
+- **凭据隔离**：工具输入不能携带 Token；Pack 的 Provider auth 只保存环境引用或 Gateway source 类型；Runtime 注入凭据且不得记录 Secret。
 - **严格 Schema**：公开模型禁止未知字段，Operation 输入输出和 Capability 输出均通过 JSON Schema Draft 2020-12 校验。
 - **证据门禁**：无 Evidence 的正式 Operation 无法通过校验；推测必须保持为未确认事项。
-- **权限与租户**：Runtime 检查 Scope、tenant mode、字段许可和脱敏规则；Agent 不能绕过原系统权限。
+- **权限与租户**：Runtime 从 `PrincipalContext.effective_scopes` 检查 Scope、tenant mode、字段许可和脱敏规则；Agent 不能绕过原系统权限或 `context_bindings`。
 - **资源限制**：文件读取、循环、并发、请求超时和响应大小均有上限。
 - **确定执行**：Runtime 不调用 LLM、不改 Pack、不生成代码，也不获得原系统源码写权限。
 - **安全日志**：不记录完整上游响应或凭据，错误使用稳定结构映射。
 
 访问真实生产数据仍需遵守原系统授权、租户边界和 ACC Policy。MVP 不允许访问生产写接口，也不允许 Engineer Skill 获取生产 Secret、访问生产环境或自动部署。
 
+### 请求身份与传输边界
+
+`stdio` 是单进程、固定身份入口：启动时构造一个 `PrincipalContext`，默认 principal 为 `stdio-local`，部署方可用 `ACC_PRINCIPAL_ID` 覆盖；它绝不从工具参数推断用户。源权限不可获得时，`source_scopes` 保持 unavailable，`effective_scopes` 只取部署 ceiling；若登录响应提供源权限，则有效 Scope 为映射后的源权限与 ceiling 的交集。
+
+`streamable_http` 面向多用户会话，必须由 Gateway 在已认证请求上构造请求级 `PrincipalContext`，并把认证状态按 principal、目标系统和 Gateway session 隔离。Core 当前只接受 `password_bearer + gateway_session` 这一安全组合；本阶段没有把它作为可运行服务暴露。
+
+测试结果使用两个明确等级：Fake Runtime/Fake E2E 只能标为 `offline_candidate`；只有获得明确授权并成功连接本地或测试源系统，才能标为 `source_connected_verified`。两者都不证明生产行为，也不能外推到未实际连接的系统。
+
 ## FastAPI CRM 示例
 
-`examples/fastapi-crm/` 是 MVP 的端到端验收场景：
+`examples/fastapi-crm/` 是端到端验收场景，并使用 `provider.auth.kind: bearer_secret`；六个 Operation 都不保存 `credential_ref`：
 
 ```text
 examples/fastapi-crm/
@@ -336,7 +358,7 @@ Fake CRM 覆盖客户、联系人、跟进记录、待办、Bearer 认证、Scop
 | `get_customer_context` | 组合客户、联系人、跟进与待办等多个底层 Operation |
 | `find_overdue_followups` | 查找当前租户内逾期且允许读取的跟进事项 |
 
-完整本地验收覆盖正常、空数据、404、403、跨租户拒绝、字段脱敏、超时、响应过大、错误映射，以及 MCP `tools/list` 和 `tools/call`。验证证据与限制见 `examples/fastapi-crm/acc-project/HANDOFF.md`；该结果不代表生产部署已完成。
+完整本地验收覆盖正常、空数据、404、403、跨租户拒绝、字段脱敏、超时、响应过大、错误映射，以及 MCP `tools/list` 和 `tools/call`。验证证据与限制见 `examples/fastapi-crm/acc-project/HANDOFF.md`；这只对应仓库内 synthetic CRM，不代表生产部署或其他系统已验证。
 
 ## 开发
 
@@ -388,6 +410,7 @@ uv run ruff format packages tests skills
 | M4 | Eval、Testkit、Fake System、Coverage、E2E | 已完成 |
 | M5 | 完整 ACC Engineer Skill | 已完成 |
 | M6 | FastAPI CRM 端到端验收 | 已完成 |
+| M7 | Provider 级认证、固定 stdio 身份与示例迁移 | 验证中 |
 
 更细的检出版本进度记录在 `docs/progress.md`。生产可用性必须以发布说明、对应 Pack/Runtime 测试证据和安全评审为准。
 

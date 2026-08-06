@@ -8,7 +8,7 @@ capabilities:
     operation_dependencies: [crm.search_customers]
     composition_reason: The source route already represents one business discovery operation.
     agent_inputs: [query]
-    runtime_only_inputs: [base_url_ref, credential_ref, tenant_id]
+    runtime_only_inputs: [base_url_ref, provider_auth, tenant_id]
     policy: crm-search-read
     evals:
       positive: search-customers-positive
@@ -25,7 +25,7 @@ capabilities:
       - crm.list_customer_todos
     composition_reason: Four lower-level interfaces are composed into one review-ready business context.
     agent_inputs: [customer_id]
-    runtime_only_inputs: [base_url_ref, credential_ref, tenant_id]
+    runtime_only_inputs: [base_url_ref, provider_auth, tenant_id]
     policy: crm-context-read
     evals:
       positive: customer-context-positive
@@ -39,7 +39,7 @@ capabilities:
     operation_dependencies: [crm.find_overdue_followups]
     composition_reason: The source route already implements the deterministic business filter.
     agent_inputs: [as_of]
-    runtime_only_inputs: [base_url_ref, credential_ref, tenant_id]
+    runtime_only_inputs: [base_url_ref, provider_auth, tenant_id]
     policy: crm-followup-read
     evals:
       positive: overdue-followups-positive

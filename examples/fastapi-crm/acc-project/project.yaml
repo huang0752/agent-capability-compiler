@@ -11,3 +11,6 @@ runtime:
 provider:
   kind: http
   base_url_ref: CRM_BASE_URL
+  auth:
+    kind: bearer_secret
+    token_ref: CRM_DEMO_TOKEN
