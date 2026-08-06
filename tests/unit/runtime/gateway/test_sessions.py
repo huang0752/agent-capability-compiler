@@ -246,14 +246,14 @@ async def test_revoke_invalidates_both_indexes_and_is_idempotent() -> None:
         principal_context=_context("a", "session-a"),
     )
 
-    await store.revoke("session-a")
-    await store.revoke("session-a")
+    assert await store.revoke("session-a") == record
+    assert await store.revoke("session-a") is None
 
     with pytest.raises(GatewaySessionInvalidError):
         await store.resolve_token(token)
     with pytest.raises(GatewaySessionInvalidError):
         await store.resolve_session_id("session-a")
-    assert await store.pop_expired_records() == (record,)
+    assert await store.pop_expired_records() == ()
 
 
 @pytest.mark.anyio
@@ -301,8 +301,8 @@ async def test_expired_session_is_removed_and_capacity_can_be_reused() -> None:
 
     with pytest.raises(GatewaySessionExpiredError):
         await store.resolve_token(token_a)
-    assert await store.purge_expired() == 1
-    assert await store.pop_expired_records() == (record_a,)
+    assert await store.purge_expired() == (record_a,)
+    assert await store.pop_expired_records() == ()
 
     await store.create(
         session_id="session-b",
@@ -629,7 +629,7 @@ async def test_source_boundary_wins_when_gateway_ttl_expires_at_same_instant() -
     )
     clock.value = 105.0
 
-    assert await store.purge_expired() == 0
+    assert await store.purge_expired() == ()
     with pytest.raises(GatewayReauthRequiredError):
         await store.resolve_token(token)
 
@@ -837,7 +837,7 @@ async def test_expired_session_id_resolve_retains_record_for_lifecycle_revoke() 
 
 
 @pytest.mark.anyio
-async def test_purge_and_create_capacity_return_every_removed_record_to_collector() -> None:
+async def test_purge_and_create_capacity_return_every_removed_record_directly() -> None:
     clock = Clock()
     generator = _tokens("a" * 43, "b" * 43, "c" * 43)
     store = InMemoryGatewaySessionStore(
@@ -851,8 +851,7 @@ async def test_purge_and_create_capacity_return_every_removed_record_to_collecto
         principal_context=_context("a", "session-a"),
     )
     clock.value = 106.0
-    assert await store.purge_expired() == 1
-    assert await store.pop_expired_records() == (record_a,)
+    assert await store.purge_expired() == (record_a,)
     assert await store.pop_expired_records() == ()
 
     _, record_b = await store.create(
@@ -860,17 +859,18 @@ async def test_purge_and_create_capacity_return_every_removed_record_to_collecto
         principal_context=_context("b", "session-b"),
     )
     clock.value = 112.0
-    _, record_c = await store.create(
+    creation_c = await store.create(
         session_id="session-c",
         principal_context=_context("c", "session-c"),
     )
 
-    assert await store.pop_expired_records() == (record_b,)
-    assert (await store.resolve_session_id("session-c")) == record_c
+    assert creation_c.removed_records == (record_b,)
+    assert await store.pop_expired_records() == ()
+    assert (await store.resolve_session_id("session-c")) == creation_c.record
 
 
 @pytest.mark.anyio
-async def test_close_returns_all_removed_records_once_through_collector() -> None:
+async def test_close_returns_all_removed_records_once_directly() -> None:
     generator = _tokens("a" * 43, "b" * 43)
     store = InMemoryGatewaySessionStore(
         max_sessions=2,
@@ -887,13 +887,11 @@ async def test_close_returns_all_removed_records_once_through_collector() -> Non
         principal_context=_context("b", "session-b"),
     )
 
-    await store.close()
-    await store.close()
-
-    collected = await store.pop_expired_records()
+    collected = await store.close()
     assert {record.session_id for record in collected} == {"session-a", "session-b"}
     assert record_a in collected
     assert record_b in collected
+    assert await store.close() == ()
     assert await store.pop_expired_records() == ()
 
 
@@ -943,3 +941,85 @@ async def test_nonfinite_clock_does_not_collect_or_lose_expired_record() -> None
 
     clock.value = 106.0
     assert await store.pop_expired_records() == (record,)
+
+
+@pytest.mark.anyio
+async def test_create_atomically_returns_each_expired_same_id_generation() -> None:
+    clock = Clock()
+    generator = _tokens("a" * 43, "b" * 43, "c" * 43)
+    store = InMemoryGatewaySessionStore(
+        max_sessions=1,
+        ttl_seconds=5,
+        clock=clock,
+        token_generator=lambda: next(generator),
+    )
+    first = await store.create(
+        session_id="session-a",
+        principal_context=_context("a", "session-a"),
+    )
+    clock.value = 106.0
+    second = await store.create(
+        session_id="session-a",
+        principal_context=_context("a2", "session-a"),
+    )
+    clock.value = 112.0
+    third = await store.create(
+        session_id="session-a",
+        principal_context=_context("a3", "session-a"),
+    )
+
+    assert first.removed_records == ()
+    assert second.removed_records == (first.record,)
+    assert third.removed_records == (second.record,)
+    assert not hasattr(store, "_removed_records")
+    assert len(store._by_digest) == 1
+    assert await store.pop_expired_records() == ()
+
+
+@pytest.mark.anyio
+async def test_failed_create_does_not_remove_expired_record_without_handoff() -> None:
+    clock = Clock()
+    generator = TokenGenerator("a" * 43, "invalid-next-generation-token")
+    store = InMemoryGatewaySessionStore(
+        max_sessions=1,
+        ttl_seconds=5,
+        clock=clock,
+        token_generator=generator,
+    )
+    first = await store.create(
+        session_id="session-a",
+        principal_context=_context("a", "session-a"),
+    )
+    clock.value = 106.0
+
+    with pytest.raises(GatewaySessionInvalidError):
+        await store.create(
+            session_id="session-b",
+            principal_context=_context("b", "session-b"),
+        )
+
+    assert await store.pop_expired_records() == (first.record,)
+
+
+@pytest.mark.anyio
+async def test_close_and_revoke_return_removed_records_directly() -> None:
+    generator = _tokens("a" * 43, "b" * 43)
+    store = InMemoryGatewaySessionStore(
+        max_sessions=2,
+        ttl_seconds=60,
+        clock=Clock(),
+        token_generator=lambda: next(generator),
+    )
+    first = await store.create(
+        session_id="session-a",
+        principal_context=_context("a", "session-a"),
+    )
+    second = await store.create(
+        session_id="session-b",
+        principal_context=_context("b", "session-b"),
+    )
+
+    assert await store.revoke("session-a") == first.record
+    assert await store.revoke("session-a") is None
+    assert await store.close() == (second.record,)
+    assert await store.close() == ()

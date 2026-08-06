@@ -4,7 +4,9 @@ import pytest
 from pydantic import ValidationError
 
 from acc_runtime.context import PrincipalContext
+from acc_runtime.credentials import SecretValue
 from acc_runtime.gateway.models import (
+    GatewaySessionCreation,
     GatewaySessionRecord,
     GatewaySessionStatus,
     GatewaySettings,
@@ -244,6 +246,28 @@ def test_gateway_session_record_defensively_keeps_immutable_context() -> None:
         "tenant_id": "tenant-a",
         "nested": {"region": "east"},
     }
+
+
+def test_gateway_session_creation_is_redacted_and_keeps_removed_generations() -> None:
+    record_a = GatewaySessionRecord(
+        session_id="session-a",
+        token_digest="a" * 64,
+        principal_context=_context(),
+        created_at=10.0,
+        expires_at=20.0,
+    )
+    record_b = record_a.model_copy(update={"token_digest": "b" * 64})
+    creation = GatewaySessionCreation(
+        token=SecretValue("gateway-token-secret"),
+        record=record_b,
+        removed_records=(record_a,),
+    )
+
+    token, record = creation
+    assert token.get_secret_value() == "gateway-token-secret"
+    assert record == record_b
+    assert creation.removed_records == (record_a,)
+    assert "gateway-token-secret" not in repr(creation)
 
 
 @pytest.mark.parametrize(

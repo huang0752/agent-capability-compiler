@@ -6,7 +6,10 @@ import ipaddress
 import math
 import re
 import unicodedata
+from collections.abc import Iterator
+from dataclasses import dataclass
 from enum import StrEnum
+from typing import Any
 from urllib.parse import urlsplit
 
 from pydantic import (
@@ -19,6 +22,7 @@ from pydantic import (
 )
 
 from acc_runtime.context import PrincipalContext
+from acc_runtime.credentials import SecretValue
 
 
 def _exact_text(value: str, *, field_name: str) -> str:
@@ -274,7 +278,33 @@ class GatewaySessionRecord(_StrictModel):
         return self
 
 
+@dataclass(frozen=True, slots=True, repr=False)
+class GatewaySessionCreation:
+    """Atomic session creation plus every old record removed for capacity."""
+
+    token: SecretValue
+    record: GatewaySessionRecord
+    removed_records: tuple[GatewaySessionRecord, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.token, SecretValue):
+            raise TypeError("Gateway session creation token must be a SecretValue")
+        if not isinstance(self.record, GatewaySessionRecord):
+            raise TypeError("Gateway session creation record is invalid")
+        if not isinstance(self.removed_records, tuple) or any(
+            not isinstance(record, GatewaySessionRecord) for record in self.removed_records
+        ):
+            raise TypeError("removed Gateway session records must be a tuple of records")
+
+    def __iter__(self) -> Iterator[Any]:
+        """Keep the original two-value token/record unpacking contract."""
+
+        yield self.token
+        yield self.record
+
+
 __all__ = [
+    "GatewaySessionCreation",
     "GatewaySessionRecord",
     "GatewaySessionStatus",
     "GatewaySettings",
