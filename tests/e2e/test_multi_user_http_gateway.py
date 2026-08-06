@@ -541,7 +541,15 @@ async def test_baogao_jin_auth_shape_offline_candidate_isolates_a_b_c(
             }
             _secret_scan(public_surfaces, tokens)
             _secret_scan(pack.path.read_bytes(), tokens)
-            for absent_delivery in ("HANDOFF.md", "risk-report.json", "test-report.json"):
+            for absent_delivery in (
+                "HANDOFF.md",
+                "artifact-manifest.json",
+                "candidate.diff",
+                "coverage-report.json",
+                "risk-report.json",
+                "scope-audit-report.json",
+                "test-report.json",
+            ):
                 assert not (project / absent_delivery).exists()
 
         async with _gateway_harness(project, source_url, ttl_seconds=1) as restarted:
