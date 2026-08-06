@@ -12,6 +12,7 @@ from acc_runtime.auth import PasswordBearerAuthStrategy
 from acc_runtime.auth.errors import AuthLoginRejectedError
 from acc_runtime.context import AuthStateKey
 from acc_runtime.credentials import SecretValue
+from acc_runtime.gateway.models import GatewaySessionRecord
 from acc_runtime.gateway.service import GatewaySessionService
 from acc_runtime.gateway.sessions import (
     GatewayReauthRequiredError,
@@ -26,6 +27,16 @@ class Clock:
 
     def __call__(self) -> float:
         return self.value
+
+
+class SequenceClock:
+    def __init__(self, *values: float) -> None:
+        self.values = iter(values)
+        self.last = values[-1]
+
+    def __call__(self) -> float:
+        self.last = next(self.values, self.last)
+        return self.last
 
 
 def _config(*, principal_pointer: str | None = "/user/id") -> PasswordBearerAuthConfig:
@@ -321,6 +332,30 @@ class _BindFailsAfterBinding(PasswordBearerAuthStrategy):
         raise GatewaySessionInvalidError("synthetic bind failure")
 
 
+class _InvalidateFailsOnce(PasswordBearerAuthStrategy):
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(**kwargs)  # type: ignore[arg-type]
+        self.invalidate_failures = 1
+
+    async def invalidate(self, auth_state_key: AuthStateKey) -> None:
+        if self.invalidate_failures:
+            self.invalidate_failures -= 1
+            raise GatewaySessionInvalidError("synthetic invalidate failure")
+        await super().invalidate(auth_state_key)
+
+
+class _RevokeFailsOnceStore(_StoreFailsAfterCreate):
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(**kwargs)  # type: ignore[arg-type]
+        self.revoke_failures = 1
+
+    async def revoke_session(self, session_id: str) -> GatewaySessionRecord | None:
+        if self.revoke_failures:
+            self.revoke_failures -= 1
+            raise GatewaySessionInvalidError("synthetic revoke failure")
+        return await super().revoke_session(session_id)
+
+
 @pytest.mark.anyio
 async def test_store_failure_rolls_back_ghost_record_and_auth_state() -> None:
     clock = Clock()
@@ -355,6 +390,56 @@ async def test_store_failure_rolls_back_ghost_record_and_auth_state() -> None:
         await store.resolve_session_id("session-a")
     key = AuthStateKey("principal-a", "system-a", "session-a", "auth-a")
     assert key not in strategy._states
+
+
+@pytest.mark.anyio
+async def test_post_create_response_failure_rolls_back_record_and_auth_state() -> None:
+    clock = SequenceClock(100.0, 100.0, 500.0)
+    config = _config()
+
+    def login(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "access_token": "private-token",
+                "expires_in": 300,
+                "user": {"id": "principal-a"},
+                "permissions": ["source.read"],
+                "tenant": {},
+            },
+            request=request,
+        )
+
+    store = InMemoryGatewaySessionStore(
+        max_sessions=2,
+        ttl_seconds=3600,
+        clock=clock,
+        token_generator=lambda: "a" * 43,
+    )
+    strategy = PasswordBearerAuthStrategy(
+        config=config,
+        base_url="https://source.example",
+        credential_source=None,
+        client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(login)),
+        clock=clock,
+    )
+    service = GatewaySessionService(
+        auth_strategy=strategy,
+        auth_config=config,
+        store=store,
+        target_system_id="system-a",
+        deployment_scope_ceiling={"documents.read"},
+        clock=clock,
+        session_id_generator=lambda: "session-a",
+        auth_state_handle_generator=lambda: "auth-a",
+    )
+
+    with pytest.raises(GatewaySessionInvalidError):
+        await service.create_session(identity="account-a", password="password-a")
+
+    with pytest.raises(GatewaySessionInvalidError):
+        await store.resolve_session_id("session-a")
+    assert not strategy._states
 
 
 @pytest.mark.anyio
@@ -442,6 +527,64 @@ async def test_login_failure_does_not_expose_credentials_or_another_users_state(
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("revoke_fails", "invalidate_fails"),
+    [(True, False), (False, True), (True, True)],
+)
+async def test_rollback_failure_closes_all_state_fail_closed(
+    revoke_fails: bool,
+    invalidate_fails: bool,
+) -> None:
+    clock = Clock()
+    config = _config()
+
+    def login(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "access_token": "rollback-private-token",
+                "expires_in": 300,
+                "user": {"id": "principal-a"},
+                "permissions": ["source.read"],
+                "tenant": {},
+            },
+            request=request,
+        )
+
+    store_type = _RevokeFailsOnceStore if revoke_fails else _StoreFailsAfterCreate
+    store = store_type(
+        max_sessions=2,
+        ttl_seconds=3600,
+        clock=clock,
+        token_generator=lambda: "a" * 43,
+    )
+    strategy_type = _InvalidateFailsOnce if invalidate_fails else PasswordBearerAuthStrategy
+    strategy = strategy_type(
+        config=config,
+        base_url="https://source.example",
+        credential_source=None,
+        client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(login)),
+        clock=clock,
+    )
+    service = _service(config=config, strategy=strategy, store=store, clock=clock)
+
+    with pytest.raises(GatewaySessionInvalidError) as caught:
+        await service.create_session(identity="account-secret", password="password-secret")
+
+    with pytest.raises(GatewaySessionInvalidError):
+        await store.resolve_session_id("session-a")
+    assert not strategy._states
+    with pytest.raises(GatewaySessionInvalidError):
+        await service.create_session(identity="new-account", password="new-password")
+    _assert_traceback_cannot_reach_secret(
+        caught.value,
+        "account-secret",
+        "password-secret",
+        "rollback-private-token",
+    )
+
+
+@pytest.mark.anyio
 async def test_delete_and_reauth_only_invalidate_selected_session() -> None:
     clock = Clock()
     config = _config()
@@ -493,6 +636,116 @@ async def test_delete_and_reauth_only_invalidate_selected_session() -> None:
 
 
 @pytest.mark.anyio
+async def test_refresh_boundary_can_mark_then_delete_without_leaving_source_state() -> None:
+    clock = Clock()
+    config = _config()
+
+    def login(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "access_token": "private-token",
+                "expires_in": 300,
+                "user": {"id": "principal-a"},
+                "permissions": ["source.read"],
+                "tenant": {},
+            },
+            request=request,
+        )
+
+    store = _store(clock)
+    strategy = _strategy(config, httpx.MockTransport(login), clock)
+    service = _service(config=config, strategy=strategy, store=store, clock=clock)
+    response = await service.create_session(identity="a", password="b")
+    record = await store.resolve_token(_gateway_token(response))
+    clock.value = 370.0
+
+    await service.mark_reauth_required(record.session_id)
+    await service.delete_current(record.session_id)
+
+    with pytest.raises(GatewaySessionInvalidError):
+        await store.resolve_token(_gateway_token(response))
+    assert record.principal_context.auth_state_key not in strategy._states
+
+
+@pytest.mark.anyio
+async def test_gateway_expired_session_can_be_deleted_with_auth_state_cleanup() -> None:
+    clock = Clock()
+    config = _config()
+
+    def login(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "access_token": "private-token",
+                "expires_in": 300,
+                "user": {"id": "principal-a"},
+                "permissions": ["source.read"],
+                "tenant": {},
+            },
+            request=request,
+        )
+
+    store = InMemoryGatewaySessionStore(
+        max_sessions=2,
+        ttl_seconds=10,
+        clock=clock,
+        token_generator=lambda: "a" * 43,
+    )
+    strategy = _strategy(config, httpx.MockTransport(login), clock)
+    service = _service(config=config, strategy=strategy, store=store, clock=clock)
+    response = await service.create_session(identity="a", password="b")
+    record = await store.resolve_token(_gateway_token(response))
+    clock.value = 110.0
+
+    await service.delete_current(record.session_id)
+
+    with pytest.raises(GatewaySessionInvalidError):
+        await store.resolve_token(_gateway_token(response))
+    assert record.principal_context.auth_state_key not in strategy._states
+
+
+@pytest.mark.anyio
+async def test_same_principal_sessions_keep_distinct_auth_state() -> None:
+    clock = Clock()
+    config = _config()
+
+    def login(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "access_token": "private-token",
+                "expires_in": 300,
+                "user": {"id": "same-principal"},
+                "permissions": ["source.read"],
+                "tenant": {},
+            },
+            request=request,
+        )
+
+    store = _store(clock, "a" * 43, "b" * 43)
+    strategy = _strategy(config, httpx.MockTransport(login), clock)
+    service = _service(
+        config=config,
+        strategy=strategy,
+        store=store,
+        clock=clock,
+        ids=["session-a", "session-b"],
+        handles=["auth-a", "auth-b"],
+    )
+    first = await service.create_session(identity="same", password="same")
+    second = await service.create_session(identity="same", password="same")
+    first_record = await store.resolve_token(_gateway_token(first))
+    second_record = await store.resolve_token(_gateway_token(second))
+
+    await service.mark_reauth_required(first_record.session_id)
+
+    assert first_record.principal_context.auth_state_key not in strategy._states
+    assert second_record.principal_context.auth_state_key in strategy._states
+    assert await store.resolve_token(_gateway_token(second)) == second_record
+
+
+@pytest.mark.anyio
 async def test_close_is_idempotent_and_closes_store_and_strategy() -> None:
     clock = Clock()
     config = _config()
@@ -522,6 +775,123 @@ async def test_close_is_idempotent_and_closes_store_and_strategy() -> None:
         await store.resolve_token(_gateway_token(response))
     with pytest.raises(GatewaySessionInvalidError):
         await service.create_session(identity="a", password="b")
+
+
+@pytest.mark.anyio
+async def test_cancelled_close_finishes_both_cleanups_before_propagating_cancel() -> None:
+    clock = Clock()
+    config = _config()
+    store_started = asyncio.Event()
+    store_release = asyncio.Event()
+    strategy_started = asyncio.Event()
+    strategy_release = asyncio.Event()
+
+    class PausingCloseStore(InMemoryGatewaySessionStore):
+        async def close(self) -> None:
+            store_started.set()
+            await store_release.wait()
+            await super().close()
+
+    class PausingCloseStrategy(PasswordBearerAuthStrategy):
+        async def aclose(self) -> None:
+            strategy_started.set()
+            await strategy_release.wait()
+            await super().aclose()
+
+    def login(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "access_token": "close-private-token",
+                "expires_in": 300,
+                "user": {"id": "principal-a"},
+                "permissions": ["source.read"],
+                "tenant": {},
+            },
+            request=request,
+        )
+
+    store = PausingCloseStore(
+        max_sessions=2,
+        ttl_seconds=3600,
+        clock=clock,
+        token_generator=lambda: "a" * 43,
+    )
+    strategy = PausingCloseStrategy(
+        config=config,
+        base_url="https://source.example",
+        credential_source=None,
+        client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(login)),
+        clock=clock,
+    )
+    service = _service(config=config, strategy=strategy, store=store, clock=clock)
+    response = await service.create_session(identity="a", password="b")
+    task = asyncio.create_task(service.aclose())
+    await store_started.wait()
+
+    task.cancel()
+    store_release.set()
+    await strategy_started.wait()
+    strategy_release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    with pytest.raises(GatewaySessionInvalidError):
+        await store.resolve_token(_gateway_token(response))
+    assert not strategy._states
+
+
+@pytest.mark.anyio
+async def test_double_close_failure_is_stable_after_both_resources_clear() -> None:
+    clock = Clock()
+    config = _config()
+
+    class FailingCloseStore(InMemoryGatewaySessionStore):
+        async def close(self) -> None:
+            await super().close()
+            raise GatewaySessionInvalidError("synthetic store close failure")
+
+    class FailingCloseStrategy(PasswordBearerAuthStrategy):
+        async def aclose(self) -> None:
+            await super().aclose()
+            raise GatewaySessionInvalidError("synthetic strategy close failure")
+
+    def login(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "access_token": "close-private-token",
+                "expires_in": 300,
+                "user": {"id": "principal-a"},
+                "permissions": ["source.read"],
+                "tenant": {},
+            },
+            request=request,
+        )
+
+    store = FailingCloseStore(
+        max_sessions=2,
+        ttl_seconds=3600,
+        clock=clock,
+        token_generator=lambda: "a" * 43,
+    )
+    strategy = FailingCloseStrategy(
+        config=config,
+        base_url="https://source.example",
+        credential_source=None,
+        client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(login)),
+        clock=clock,
+    )
+    service = _service(config=config, strategy=strategy, store=store, clock=clock)
+    response = await service.create_session(identity="a", password="b")
+
+    with pytest.raises(GatewaySessionInvalidError) as caught:
+        await service.aclose()
+
+    assert caught.value.code == "ACC_GATEWAY_SESSION_INVALID"
+    with pytest.raises(GatewaySessionInvalidError):
+        await store.resolve_token(_gateway_token(response))
+    assert not strategy._states
 
 
 @pytest.mark.anyio
@@ -570,6 +940,53 @@ async def test_cancelled_store_create_rolls_back_inserted_record() -> None:
         await store.resolve_session_id("session-a")
     key = AuthStateKey("principal-a", "system-a", "session-a", "auth-a")
     assert key not in strategy._states
+
+
+@pytest.mark.anyio
+async def test_cancellation_during_rollback_waits_for_record_and_state_cleanup() -> None:
+    clock = Clock()
+    config = _config()
+    revoke_started = asyncio.Event()
+    revoke_release = asyncio.Event()
+
+    class PausingRollbackStore(_StoreFailsAfterCreate):
+        async def revoke_session(self, session_id: str) -> GatewaySessionRecord | None:
+            revoke_started.set()
+            await revoke_release.wait()
+            return await super().revoke_session(session_id)
+
+    def login(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "access_token": "private-token",
+                "expires_in": 300,
+                "user": {"id": "principal-a"},
+                "permissions": ["source.read"],
+                "tenant": {},
+            },
+            request=request,
+        )
+
+    store = PausingRollbackStore(
+        max_sessions=2,
+        ttl_seconds=3600,
+        clock=clock,
+        token_generator=lambda: "a" * 43,
+    )
+    strategy = _strategy(config, httpx.MockTransport(login), clock)
+    service = _service(config=config, strategy=strategy, store=store, clock=clock)
+    task = asyncio.create_task(service.create_session(identity="a", password="b"))
+    await revoke_started.wait()
+
+    task.cancel()
+    revoke_release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    with pytest.raises(GatewaySessionInvalidError):
+        await store.resolve_session_id("session-a")
+    assert not strategy._states
 
 
 @pytest.mark.anyio

@@ -6,8 +6,7 @@ import asyncio
 import math
 import secrets
 import time
-from collections.abc import Callable, Collection
-from contextlib import suppress
+from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass
 from typing import Never
 
@@ -221,7 +220,10 @@ class GatewaySessionService:
             anonymous_principal = None
 
         if session_id is not None and (published or bound or failure is not None or cancelled):
-            await self._rollback(session_id, state_key)
+            cleanup_failed, cleanup_cancelled = await self._rollback(session_id, state_key)
+            cancelled = cancelled or cleanup_cancelled
+            if cleanup_failed:
+                failure = _invalid_failure("session_cleanup_failed")
         state_key = None
         session_id = None
         auth_state_handle = None
@@ -233,21 +235,26 @@ class GatewaySessionService:
         self,
         session_id: str,
         state_key: AuthStateKey | None,
-    ) -> None:
+    ) -> tuple[bool, bool]:
         """Finish cleanup in its own task so caller cancellation cannot leave ghost state."""
 
-        async def cleanup() -> None:
-            with suppress(BaseException):
-                await self._store.revoke(session_id)
-            if state_key is not None:
-                with suppress(BaseException):
-                    await self._auth_strategy.invalidate(state_key)
-
-        task = asyncio.create_task(cleanup())
-        try:
-            await asyncio.shield(task)
-        except asyncio.CancelledError:
-            await asyncio.gather(task, return_exceptions=True)
+        _, revoke_failed, revoke_cancelled = await _complete_value_action(
+            lambda: self._store.revoke_session(session_id)
+        )
+        invalidate_failed = False
+        invalidate_cancelled = False
+        if state_key is not None:
+            invalidate_failed, invalidate_cancelled = await _complete_action(
+                lambda: self._auth_strategy.invalidate(state_key)
+            )
+        cleanup_failed = revoke_failed or invalidate_failed
+        cleanup_cancelled = revoke_cancelled or invalidate_cancelled
+        if cleanup_failed:
+            async with self._lifecycle_lock:
+                self._closed = True
+            _, close_cancelled = await self._close_resources()
+            cleanup_cancelled = cleanup_cancelled or close_cancelled
+        return cleanup_failed, cleanup_cancelled
 
     async def delete_current(self, session_id: str) -> None:
         """Revoke one current session and erase only its authentication state."""
@@ -262,33 +269,31 @@ class GatewaySessionService:
         _raise_failure(failure)
 
     async def _delete_outcome(self, session_id: str) -> _ServiceFailure | _Cancelled | None:
-        try:
-            record = await self._store.resolve_session_id(session_id)
-        except GatewaySessionInvalidError:
-            return None
-        except asyncio.CancelledError:
-            return _CANCELLED
-        except RuntimeError as error:
-            failure = _runtime_failure(error)
-            return failure
-        except Exception:
+        record, revoke_failed, cancelled = await _complete_value_action(
+            lambda: self._store.revoke_session(session_id)
+        )
+        if revoke_failed:
+            async with self._lifecycle_lock:
+                self._closed = True
+            _, close_cancelled = await self._close_resources()
+            if cancelled or close_cancelled:
+                return _CANCELLED
             return _invalid_failure("session_delete_failed")
+        if record is None:
+            return _CANCELLED if cancelled else None
         key = record.principal_context.auth_state_key
         del record
-        try:
-            await self._store.revoke(session_id)
-            await self._auth_strategy.invalidate(key)
-        except asyncio.CancelledError:
-            await self._rollback(session_id, key)
-            return _CANCELLED
-        except RuntimeError as error:
-            await self._rollback(session_id, key)
-            failure = _runtime_failure(error)
-            return failure
-        except Exception:
-            await self._rollback(session_id, key)
+        invalidate_failed, invalidate_cancelled = await _complete_action(
+            lambda: self._auth_strategy.invalidate(key)
+        )
+        if invalidate_failed:
+            async with self._lifecycle_lock:
+                self._closed = True
+            _, close_cancelled = await self._close_resources()
+            if cancelled or invalidate_cancelled or close_cancelled:
+                return _CANCELLED
             return _invalid_failure("session_delete_failed")
-        return None
+        return _CANCELLED if cancelled or invalidate_cancelled else None
 
     async def mark_reauth_required(self, session_id: str) -> None:
         """Fail closed for one source 401 without disturbing any other user."""
@@ -303,27 +308,29 @@ class GatewaySessionService:
         _raise_failure(failure)
 
     async def _reauth_outcome(self, session_id: str) -> _ServiceFailure | _Cancelled | None:
-        key: AuthStateKey | None = None
-        try:
-            record = await self._store.resolve_session_id(session_id)
-            key = record.principal_context.auth_state_key
-            del record
-            await self._store.mark_reauth_required(session_id)
-            await self._auth_strategy.invalidate(key)
-        except asyncio.CancelledError:
-            if key is not None:
-                await self._rollback(session_id, key)
-            return _CANCELLED
-        except RuntimeError as error:
-            if key is not None:
-                await self._rollback(session_id, key)
-            failure = _runtime_failure(error)
-            return failure
-        except Exception:
-            if key is not None:
-                await self._rollback(session_id, key)
+        record, mark_failed, cancelled = await _complete_value_action(
+            lambda: self._store.mark_reauth_required(session_id)
+        )
+        if mark_failed or record is None:
+            async with self._lifecycle_lock:
+                self._closed = True
+            _, close_cancelled = await self._close_resources()
+            if cancelled or close_cancelled:
+                return _CANCELLED
             return _invalid_failure("session_reauth_failed")
-        return None
+        key = record.principal_context.auth_state_key
+        del record
+        invalidate_failed, invalidate_cancelled = await _complete_action(
+            lambda: self._auth_strategy.invalidate(key)
+        )
+        if invalidate_failed:
+            async with self._lifecycle_lock:
+                self._closed = True
+            _, close_cancelled = await self._close_resources()
+            if cancelled or invalidate_cancelled or close_cancelled:
+                return _CANCELLED
+            return _invalid_failure("session_reauth_failed")
+        return _CANCELLED if cancelled or invalidate_cancelled else None
 
     async def aclose(self) -> None:
         """Idempotently erase all sessions and all source authentication state."""
@@ -339,24 +346,34 @@ class GatewaySessionService:
     async def _close_outcome(self) -> _ServiceFailure | _Cancelled | None:
         async with self._lifecycle_lock:
             self._closed = True
-        store_failure: _ServiceFailure | None = None
-        try:
-            await self._store.close()
-        except asyncio.CancelledError:
-            store_failure = _invalid_failure("service_close_cancelled")
-        except RuntimeError as error:
-            store_failure = _runtime_failure(error)
-        except Exception:
-            store_failure = _invalid_failure("service_close_failed")
-        try:
-            await self._auth_strategy.aclose()
-        except asyncio.CancelledError:
+        failed, cancelled = await self._close_resources()
+        if cancelled:
             return _CANCELLED
-        except RuntimeError as error:
-            return store_failure or _runtime_failure(error)
-        except Exception:
-            return store_failure or _invalid_failure("service_close_failed")
-        return store_failure
+        if failed:
+            return _invalid_failure("service_close_failed")
+        return None
+
+    async def _close_resources(self) -> tuple[bool, bool]:
+        store_failed = False
+        store_cancelled = False
+        strategy_failed = False
+        strategy_cancelled = False
+        try:
+            store_failed, store_cancelled = await _complete_action(self._store.close)
+            if store_failed:
+                store_failed, retry_cancelled = await _complete_action(self._store.close)
+                store_cancelled = store_cancelled or retry_cancelled
+        finally:
+            strategy_failed, strategy_cancelled = await _complete_action(self._auth_strategy.aclose)
+            if strategy_failed:
+                strategy_failed, retry_cancelled = await _complete_action(
+                    self._auth_strategy.aclose
+                )
+                strategy_cancelled = strategy_cancelled or retry_cancelled
+        return (
+            store_failed or strategy_failed,
+            store_cancelled or strategy_cancelled,
+        )
 
     async def _is_closed(self) -> bool:
         async with self._lifecycle_lock:
@@ -385,6 +402,44 @@ def _runtime_failure(error: RuntimeError) -> _ServiceFailure:
 
 def _invalid_failure(reason: str) -> _ServiceFailure:
     return _ServiceFailure(GatewaySessionInvalidError, {"reason": reason})
+
+
+async def _complete_action(action: Callable[[], Awaitable[None]]) -> tuple[bool, bool]:
+    """Run one cleanup to completion despite caller cancellation.
+
+    Ordinary failures are reduced to a boolean. Process-control exceptions are
+    deliberately not caught and therefore keep their native semantics.
+    """
+
+    _, failed, caller_cancelled = await _complete_value_action(action)
+    return failed, caller_cancelled
+
+
+async def _complete_value_action[T](
+    action: Callable[[], Awaitable[T]],
+) -> tuple[T | None, bool, bool]:
+    """Return a cleanup result without retaining an ordinary exception object."""
+
+    task: asyncio.Future[T] = asyncio.ensure_future(action())
+    caller_cancelled = False
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            current_task = asyncio.current_task()
+            if current_task is not None and current_task.cancelling():
+                caller_cancelled = True
+            if task.done():
+                break
+        except Exception:
+            return None, True, caller_cancelled
+    try:
+        result = task.result()
+    except asyncio.CancelledError:
+        return None, True, caller_cancelled
+    except Exception:
+        return None, True, caller_cancelled
+    return result, False, caller_cancelled
 
 
 def _raise_failure(failure: _ServiceFailure | _Cancelled) -> Never:
