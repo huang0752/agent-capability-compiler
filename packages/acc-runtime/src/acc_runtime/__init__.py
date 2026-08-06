@@ -6,11 +6,18 @@ from acc_runtime.context import (
     map_effective_scopes,
     resolve_context_binding,
 )
-from acc_runtime.runtime import GenericRuntime, RuntimeConfigurationError
+from acc_runtime.runtime import (
+    ContextOperationProvider,
+    GenericRuntime,
+    OperationProvider,
+    RuntimeConfigurationError,
+)
 
 __all__ = [
     "AuthStateKey",
+    "ContextOperationProvider",
     "GenericRuntime",
+    "OperationProvider",
     "PrincipalContext",
     "RuntimeConfigurationError",
     "map_effective_scopes",

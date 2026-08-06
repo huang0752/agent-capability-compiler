@@ -89,9 +89,11 @@ class WorkflowExecutor:
         operation_caller: AsyncOperationCaller,
         *,
         validate_output: bool = True,
+        validate_operation_input: bool = True,
     ) -> None:
         self._operation_caller = operation_caller
         self._validate_output = validate_output
+        self._validate_operation_input = validate_operation_input
 
     async def execute(
         self,
@@ -303,15 +305,16 @@ class WorkflowExecutor:
         )
         if not isinstance(safe_arguments, dict):  # pragma: no cover - mapping copied above
             raise AssertionError("operation arguments must remain a JSON object")
-        _validate_schema(
-            operation_definition.get("input_schema"),
-            safe_arguments,
-            code="ACC_RUNTIME_OPERATION_INPUT_INVALID",
-            capability_id=capability_id,
-            operation_id=operation_id,
-            step_id=step_id,
-            schema_role="operation_input",
-        )
+        if self._validate_operation_input:
+            _validate_schema(
+                operation_definition.get("input_schema"),
+                safe_arguments,
+                code="ACC_RUNTIME_OPERATION_INPUT_INVALID",
+                capability_id=capability_id,
+                operation_id=operation_id,
+                step_id=step_id,
+                schema_role="operation_input",
+            )
         try:
             raw_result = await self._operation_caller.call(
                 copy.deepcopy(dict(operation_definition)),
