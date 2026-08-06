@@ -479,6 +479,17 @@ class GenericRuntime:
     ) -> None:
         runtime = self
         outcome = await runtime._close_outcome()
+        if exc_value is not None:
+            # The body exception is already the caller's chosen propagation
+            # boundary. Cleanup has run, but a secondary close failure or
+            # cancellation must not replace it or acquire it as __context__.
+            del outcome
+            del traceback
+            del exc_value
+            del exc_type
+            del runtime
+            del self
+            return
         if outcome is None:
             return
         failure = outcome

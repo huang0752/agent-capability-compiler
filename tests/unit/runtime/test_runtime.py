@@ -844,3 +844,107 @@ async def test_runtime_does_not_close_an_external_provider_or_http_client(
 
     assert client.is_closed is False
     await client.aclose()
+
+
+class BodyFailure(Exception):
+    def __init__(self, secret: str) -> None:
+        super().__init__("async context body failed")
+        self.secret = secret
+
+
+class CloseFailureStrategy(SensitiveStrategy):
+    def __init__(self, close_secret: str, *, cancel: bool = False) -> None:
+        super().__init__(close_secret)
+        self.cancel = cancel
+
+    async def aclose(self) -> None:
+        self.close_calls += 1
+        if self.cancel:
+            raise asyncio.CancelledError
+        raise RuntimeConfigurationError(
+            "owned authentication cleanup failed",
+            details={"reason": "owned_auth_cleanup_failed"},
+        )
+
+
+def _mock_packed_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    strategy: SensitiveStrategy,
+) -> GenericRuntime:
+    ir = _authenticated_ir()
+    monkeypatch.setattr(
+        "acc_runtime.runtime.load_pack",
+        lambda path: type("Pack", (), {"ir": ir, "path": Path(path)})(),
+    )
+    monkeypatch.setattr(
+        "acc_runtime.runtime._auth_strategy_from_project",
+        lambda project, environment: strategy,
+    )
+    return GenericRuntime.from_pack(
+        "runtime.accpkg",
+        environment={"CRM_URL": "https://crm.example.test"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_context_preserves_body_error_when_owned_cleanup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    body_secret = "async-body-secret-must-not-enter-cleanup-error"
+    close_secret = "async-close-secret-must-not-enter-body-error"
+    body_error = BodyFailure(body_secret)
+    strategy = CloseFailureStrategy(close_secret)
+    runtime = _mock_packed_runtime(monkeypatch, strategy)
+
+    with pytest.raises(BodyFailure) as caught:
+        async with runtime:
+            raise body_error
+
+    assert caught.value is body_error
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert strategy.close_calls == 1
+    assert body_secret not in caplog.text
+    assert close_secret not in caplog.text
+    _assert_runtime_exception_cannot_reach_secret(caught.value, close_secret)
+
+
+@pytest.mark.asyncio
+async def test_async_context_preserves_body_error_when_owned_cleanup_is_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    close_secret = "cancelled-close-secret-must-not-enter-body-error"
+    body_error = BodyFailure("cancelled-cleanup-body-secret")
+    strategy = CloseFailureStrategy(close_secret, cancel=True)
+    runtime = _mock_packed_runtime(monkeypatch, strategy)
+
+    with pytest.raises(BodyFailure) as caught:
+        async with runtime:
+            raise body_error
+
+    assert caught.value is body_error
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert strategy.close_calls == 1
+    _assert_runtime_exception_cannot_reach_secret(caught.value, close_secret)
+
+
+@pytest.mark.asyncio
+async def test_async_context_without_body_error_raises_safe_owned_cleanup_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    close_secret = "standalone-close-secret-must-not-leak"
+    strategy = CloseFailureStrategy(close_secret)
+    runtime = _mock_packed_runtime(monkeypatch, strategy)
+
+    with pytest.raises(RuntimeConfigurationError) as caught:
+        async with runtime:
+            pass
+
+    assert caught.value.code == "ACC_RUNTIME_CONFIGURATION_INVALID"
+    assert caught.value.details == {"reason": "owned_auth_cleanup_failed"}
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert strategy.close_calls == 1
+    _assert_runtime_exception_cannot_reach_secret(caught.value, close_secret)
