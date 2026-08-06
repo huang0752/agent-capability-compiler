@@ -9,6 +9,7 @@ from urllib.parse import unquote, urlsplit
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 from pydantic import (
+    AfterValidator,
     BaseModel,
     ConfigDict,
     Field,
@@ -30,9 +31,62 @@ _TENANT_CONTEXT_BINDING_PATTERN = (
     r"^tenant_context\.[A-Za-z][A-Za-z0-9_-]*"
     r"(?:\.[A-Za-z][A-Za-z0-9_-]*)*$"
 )
+_DIRECT_SENSITIVE_CONTEXT_NAMES = frozenset(
+    {
+        "authorization",
+        "bearer",
+        "cookie",
+        "cookies",
+        "credential",
+        "credentials",
+        "csrf",
+        "header",
+        "headers",
+        "jwt",
+        "password",
+        "secret",
+        "token",
+    }
+)
+_COMPOSITE_SENSITIVE_CONTEXT_NAMES = frozenset(
+    {
+        "access_token",
+        "api_key",
+        "auth_token",
+        "client_secret",
+        "private_key",
+        "refresh_token",
+        "session_token",
+        "set_cookie",
+    }
+)
+
+
+def _normalize_context_segment(segment: str) -> str:
+    words: list[str] = []
+    for chunk in re.split(r"[_-]+", segment):
+        words.extend(
+            match.group(0).lower()
+            for match in re.finditer(
+                r"[A-Z]+(?=[A-Z][a-z]|[0-9]|$)|[A-Z]?[a-z]+|[0-9]+",
+                chunk,
+            )
+        )
+    return "_".join(words)
+
+
+def _validate_tenant_context_binding_reference(value: str) -> str:
+    for segment in value.removeprefix("tenant_context.").split("."):
+        normalized = _normalize_context_segment(segment)
+        if normalized in (_DIRECT_SENSITIVE_CONTEXT_NAMES | _COMPOSITE_SENSITIVE_CONTEXT_NAMES):
+            raise ValueError("tenant context binding path contains a sensitive segment")
+    return value
+
+
 TenantContextBindingReference = Annotated[
     str,
     Field(pattern=_TENANT_CONTEXT_BINDING_PATTERN),
+    AfterValidator(_validate_tenant_context_binding_reference),
 ]
 ContextBindingReference = Annotated[
     str,
@@ -40,6 +94,11 @@ ContextBindingReference = Annotated[
         pattern=(
             r"^(?:principal_id|tenant_context\.[A-Za-z][A-Za-z0-9_-]*"
             r"(?:\.[A-Za-z][A-Za-z0-9_-]*)*)$"
+        )
+    ),
+    AfterValidator(
+        lambda value: (
+            value if value == "principal_id" else _validate_tenant_context_binding_reference(value)
         )
     ),
 ]

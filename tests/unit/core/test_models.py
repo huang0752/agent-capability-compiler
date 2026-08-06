@@ -125,6 +125,43 @@ def test_provider_rejects_duplicate_invalid_or_unsorted_context_binding_allowlis
 
 
 @pytest.mark.parametrize(
+    "source",
+    [
+        "tenant_context.token",
+        "tenant_context.secret",
+        "tenant_context.password",
+        "tenant_context.header",
+        "tenant_context.headers",
+        "tenant_context.authorization",
+        "tenant_context.credential",
+        "tenant_context.credentials",
+        "tenant_context.cookie",
+        "tenant_context.cookies",
+        "tenant_context.jwt",
+        "tenant_context.bearer",
+        "tenant_context.csrf",
+        "tenant_context.profile.accessToken",
+        "tenant_context.profile.refresh-token",
+        "tenant_context.auth_token",
+        "tenant_context.clientSecret",
+        "tenant_context.session-token",
+        "tenant_context.setCookie",
+        "tenant_context.api-key",
+        "tenant_context.privateKey",
+    ],
+)
+def test_provider_rejects_sensitive_context_binding_allowlist_paths(source: str) -> None:
+    document = project_document()
+    provider = deepcopy(document["provider"])
+    assert isinstance(provider, dict)
+    provider["context_binding_allowlist"] = [source]
+    document["provider"] = provider
+
+    with pytest.raises(ValidationError, match="sensitive"):
+        models.Project.model_validate(document)
+
+
+@pytest.mark.parametrize(
     ("auth", "auth_type"),
     [
         ({"kind": "none"}, "NoAuthConfig"),
@@ -433,6 +470,47 @@ def test_operation_accepts_only_safe_context_binding_sources(source: str) -> Non
     operation = models.Operation.model_validate(document)
 
     assert operation.context_bindings["customer_id"] == source
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "tenant_context.secretary_id",
+        "tenant_context.header_image",
+        "tenant_context.tokenized_region",
+    ],
+)
+def test_operation_does_not_substring_block_safe_context_binding_sources(
+    source: str,
+) -> None:
+    document = operation_document()
+    document["context_bindings"] = {"customer_id": source}
+
+    operation = models.Operation.model_validate(document)
+
+    assert operation.context_bindings["customer_id"] == source
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "tenant_context.token",
+        "tenant_context.profile.accessToken",
+        "tenant_context.profile.refresh-token",
+        "tenant_context.auth_token",
+        "tenant_context.clientSecret",
+        "tenant_context.session-token",
+        "tenant_context.setCookie",
+        "tenant_context.api-key",
+        "tenant_context.privateKey",
+    ],
+)
+def test_operation_rejects_sensitive_context_binding_paths(source: str) -> None:
+    document = operation_document()
+    document["context_bindings"] = {"customer_id": source}
+
+    with pytest.raises(ValidationError, match="sensitive"):
+        models.Operation.model_validate(document)
 
 
 @pytest.mark.parametrize(

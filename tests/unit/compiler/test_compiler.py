@@ -227,6 +227,7 @@ def test_compile_project_rejects_tenant_context_source_not_in_provider_allowlist
         "tenant_context.customer_region",
         "tenant_context.secretary_id",
         "tenant_context.header_image",
+        "tenant_context.tokenized_region",
     ],
 )
 def test_compile_project_accepts_explicit_provider_context_binding_allowlist(
@@ -247,6 +248,32 @@ def test_compile_project_accepts_explicit_provider_context_binding_allowlist(
     assert not any(
         item.code == "ACC_COMPILE_CONTEXT_BINDING_SOURCE_NOT_ALLOWED" for item in report.diagnostics
     )
+
+
+@pytest.mark.parametrize(
+    ("configured_on", "expected_pointer"),
+    [
+        ("provider", "/provider/context_binding_allowlist/0"),
+        ("operation", "/context_bindings/customer_id"),
+    ],
+)
+def test_compile_project_rejects_sensitive_context_binding_before_ir(
+    tmp_path: Path,
+    configured_on: str,
+    expected_pointer: str,
+) -> None:
+    project = _make_project(tmp_path)
+    source = "tenant_context.profile.accessToken"
+    if configured_on == "provider":
+        _set_context_binding_allowlist(project, source)
+    else:
+        _set_operation_context_binding(project, "customer_id", source)
+
+    report = compile_project(project)
+
+    assert report.ok is False
+    diagnostic = next(item for item in report.diagnostics if item.code == "ACC_SCHEMA_INVALID")
+    assert diagnostic.pointer == expected_pointer
 
 
 def test_compile_project_rejects_context_binding_target_not_mapped_to_http(
