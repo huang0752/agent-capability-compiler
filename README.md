@@ -37,7 +37,7 @@ ACC 不修改已有业务系统，不要求业务系统嵌入 Agent SDK 或接�
              ┌───────────┴───────────┐
              │ MCP stdio             │ streamable_http
              ▼                       ▼
-       本地单身份 Agent       多用户 Gateway（后续阶段）
+       本地单身份 Agent       可选多用户 Gateway
                          │
                          ▼
              原系统 REST API / 独立 Adapter
@@ -62,7 +62,7 @@ ACC **不**负责：
 - 在 Runtime 中动态生成代码、HTTP 请求或工作流；
 - 第一版中的生产写入、Web 管理后台、SaaS 控制面、插件市场、Kubernetes、Helm、OCI、SOAP、gRPC、数据库 Adapter、消息队列、RPA 或浏览器录制。
 
-当前可执行入口支持 **REST API、GET/HEAD 只读操作、MCP stdio、Capability Pack 和通用 Runtime**。`streamable_http` 已有严格配置合同，但 `acc run` 会稳定拒绝它，直到多用户 Gateway 阶段交付；配置可验证不等于 HTTP Gateway 已上线。
+当前可执行入口支持 **REST API、GET/HEAD 只读操作、Capability Pack、MCP stdio 和多用户 `streamable_http` Gateway**。Gateway 是 Generic Runtime 的可选运行时适配层：它负责 HTTP 身份、会话隔离和请求级 `PrincipalContext`，不是用户/租户管理平台、权限源或 SaaS 控制面。
 
 ## 架构
 
@@ -130,6 +130,39 @@ acc run example-crm-0.1.0.accpkg
 ```
 
 以上命令均已在当前检出版本实现；开发仓库中可以统一写成 `uv run acc ...`。
+
+### 运行多用户 Gateway
+
+仅当 Pack 声明 `runtime.transport: [streamable_http]`，且 Provider 使用 `password_bearer + gateway_session` 时，`acc run` 才会启动 Gateway。最小的本机明文示例是：
+
+```bash
+uv run acc run build/my-system.accpkg \
+  --host 127.0.0.1 \
+  --port 8000 \
+  --allowed-host 127.0.0.1:8000 \
+  --allowed-origin http://127.0.0.1:3000 \
+  --scope customer.read \
+  --session-ttl 3600 \
+  --max-sessions 1000 \
+  --mcp-idle-timeout 60 \
+  --body-limit 4194304 \
+  --workers 1
+```
+
+`--allowed-host` 至少给出一个精确值；`--allowed-origin` 也是精确清单，不支持通配符。端口、TTL、容量、MCP idle timeout 和请求体上限均由部署方显式限定。Gateway v1 只支持单进程 `--workers 1`，因为 Gateway Session 与 MCP Session 均是进程内状态。明文 HTTP 只允许绑定 loopback；绑定非 loopback IP 必须同时提供 `--tls-certfile` 和 `--tls-keyfile`，或在受信反向代理后仅监听 loopback。
+
+Gateway 的 `acc run` 不加 `--json` 时启动并持续服务；加 `--json` 时只加载 Pack、验证 Gateway 组合并返回脱敏配置，不启动监听器。
+
+客户端先向 `POST /runtime/sessions` 一次性提交当前用户的账号和密码，然后用响应中的 opaque Gateway token 作为 `Authorization: Bearer ...` 调用 `/mcp`。密码在登录边界使用后即丢弃；源 JWT 只存在当前进程的认证状态中；客户端持有的是另一枚短期、不透明 Gateway token，服务端会话索引只保存其摘要。用户 A/B/C 各自登录，得到独立 Gateway Session 和独立 MCP Session；Agent 无需再把用户标识放入工具参数。
+
+```json
+{
+  "identity": "user@example.test",
+  "password": "<one-shot secret>"
+}
+```
+
+`DELETE /runtime/sessions/current` 会使当前 Gateway token 立即无效。MCP SDK 1.29 没有按单个 Gateway Session 立即 terminate 底层 Streamable HTTP 传输的公开管理 API，因此已建立的 SSE/传输实例会在有限 `--mcp-idle-timeout` 内回收；它在此期间也无法通过失效 token 成功执行新请求。源系统返回 401 时，只把对应 Gateway Session 标记为需重新认证，其他用户会话不受影响。
 
 ## CLI 契约
 
@@ -336,7 +369,9 @@ pack.lock
 
 `stdio` 是单进程、固定身份入口：启动时构造一个 `PrincipalContext`，默认 principal 为 `stdio-local`，部署方可用 `ACC_PRINCIPAL_ID` 覆盖；它绝不从工具参数推断用户。源权限不可获得时，`source_scopes` 保持 unavailable，`effective_scopes` 只取部署 ceiling；若登录响应提供源权限，则有效 Scope 为映射后的源权限与 ceiling 的交集。
 
-`streamable_http` 面向多用户会话，必须由 Gateway 在已认证请求上构造请求级 `PrincipalContext`，并把认证状态按 principal、目标系统和 Gateway session 隔离。Core 当前只接受 `password_bearer + gateway_session` 这一安全组合；本阶段没有把它作为可运行服务暴露。
+`streamable_http` 面向多用户会话。Gateway 会对每个已认证请求重新解析 Gateway Session，构造请求级 `PrincipalContext`，并把认证状态按 principal、目标系统和 Gateway session 隔离。MCP Session ID 也会由 SDK 绑定到创建它的 Gateway 身份；A 的 token 不能恢复 B 的 MCP Session。Core 仅接受 `password_bearer + gateway_session` 这一安全组合。
+
+有效权限不是 Gateway 自行生成的“公开查询 key”。登录响应提供的源 Scope 经显式 mapping 后，再与部署方的 `--scope` ceiling 取交集；后续每次源 API 请求仍携带该用户的源 JWT，由原系统继续执行账号、角色、租户和数据权限。部署 ceiling 只能收紧，不能扩大原系统权限。账号、密码、JWT、Cookie、Authorization 和 principal/tenant 覆盖值都不是 MCP tool 参数。
 
 测试结果使用两个明确等级：Fake Runtime/Fake E2E 只能标为 `offline_candidate`；只有获得明确授权并成功连接本地或测试源系统，才能标为 `source_connected_verified`。两者都不证明生产行为，也不能外推到未实际连接的系统。
 
@@ -359,6 +394,12 @@ Fake CRM 覆盖客户、联系人、跟进记录、待办、Bearer 认证、Scop
 | `find_overdue_followups` | 查找当前租户内逾期且允许读取的跟进事项 |
 
 完整本地验收覆盖正常、空数据、404、403、跨租户拒绝、字段脱敏、超时、响应过大、错误映射，以及 MCP `tools/list` 和 `tools/call`。验证证据与限制见 `examples/fastapi-crm/acc-project/HANDOFF.md`；这只对应仓库内 synthetic CRM，不代表生产部署或其他系统已验证。
+
+## `baogao-jin` 验证边界
+
+`/Users/chou/code/baogao-jin` 始终是只读源系统，ACC 的分析、Pack 和测试产物不写入该目录。当前 Gateway 回归包含通用 Fake 源的 A/B/C 隔离 E2E，以及一个标记为 `baogao-jin-fake-email-password` 的代表性认证配置夹具；二者等级都只是 `offline_candidate`，没有使用真实账号、JWT、服务状态或生产数据。
+
+目前记录的源码证据只支持三个只读 GET 边界：`/api/me`、`/api/customers/search` 和 `/api/customers/{id}/overview`。`overview` 返回摘要统计，不是文档列表；不能由此宣称已提供报告/证书文档查询。只有在用户明确授权后连接已启动的本地或隔离测试服务，并成功验证真实认证、Schema、Scope/租户和数据可见性，才能将对应范围标记为 `source_connected_verified`。
 
 ## 开发
 
@@ -410,7 +451,8 @@ uv run ruff format packages tests skills
 | M4 | Eval、Testkit、Fake System、Coverage、E2E | 已完成 |
 | M5 | 完整 ACC Engineer Skill | 已完成 |
 | M6 | FastAPI CRM 端到端验收 | 已完成 |
-| M7 | Provider 级认证、固定 stdio 身份与示例迁移 | 验证中 |
+| M7 | Provider 级认证、PrincipalContext 与结构化范围治理 | 已完成 |
+| M8 | 可选多用户 Streamable HTTP Gateway | 验证中 |
 
 更细的检出版本进度记录在 `docs/progress.md`。生产可用性必须以发布说明、对应 Pack/Runtime 测试证据和安全评审为准。
 
