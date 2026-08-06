@@ -39,8 +39,6 @@ from acc_runtime.auth.errors import (
 )
 from acc_runtime.context import AuthStateKey, PrincipalContext
 from acc_runtime.credentials import (
-    SecretNotFoundError,
-    SecretReferenceError,
     SecretValue,
     resolve_secret,
 )
@@ -193,28 +191,53 @@ class NoAuthStrategy:
     _RESULT = AuthenticationResult(token=None)
 
     async def authorize(self, context: PrincipalContext) -> AuthAttempt:
-        _require_context(context)
-        return AuthAttempt(
-            headers={},
-            state_key=context.auth_state_key,
-            generation=0,
-            authentication=self._RESULT,
-        )
+        strategy = self
+        outcome = strategy._authorize_outcome(context)
+        if isinstance(outcome, AuthAttempt):
+            return outcome
+        failure = outcome
+        del outcome
+        del context
+        del strategy
+        del self
+        _raise_public_failure(failure)
 
-    async def headers(self, context: PrincipalContext) -> AuthAttempt:
-        return await self.authorize(context)
+    def _authorize_outcome(self, context: object) -> AuthAttempt | _FailureDescriptor:
+        if not isinstance(context, PrincipalContext):
+            return _FailureDescriptor(kind="invalid_context")
+        try:
+            return AuthAttempt(
+                headers={},
+                state_key=context.auth_state_key,
+                generation=0,
+                authentication=self._RESULT,
+            )
+        except Exception:
+            return _FailureDescriptor(kind="configuration")
+
+    headers = authorize
 
     async def on_unauthorized(
         self,
         context: PrincipalContext,
         failed_attempt: AuthAttempt,
     ) -> bool:
-        _require_context(context)
-        _require_attempt(failed_attempt, context.auth_state_key)
-        return False
+        outcome = _no_retry_feedback_outcome(context, failed_attempt)
+        if isinstance(outcome, bool):
+            return outcome
+        failure = outcome
+        del context
+        del failed_attempt
+        del self
+        _raise_public_failure(failure)
 
     async def invalidate(self, auth_state_key: AuthStateKey) -> None:
-        _require_auth_state_key(auth_state_key)
+        failure = _state_key_failure(auth_state_key)
+        if failure is None:
+            return
+        del auth_state_key
+        del self
+        _raise_public_failure(failure)
 
     async def aclose(self) -> None:
         return None
@@ -235,39 +258,62 @@ class BearerSecretAuthStrategy:
         self._environment = environment
 
     async def authorize(self, context: PrincipalContext) -> AuthAttempt:
-        _require_context(context)
-        missing_secret = False
+        strategy = self
+        outcome = strategy._authorize_outcome(context)
+        if isinstance(outcome, AuthAttempt):
+            return outcome
+        failure = outcome
+        del outcome
+        del context
+        del strategy
+        del self
+        _raise_public_failure(failure)
+
+    def _authorize_outcome(self, context: object) -> AuthAttempt | _FailureDescriptor:
+        if not isinstance(context, PrincipalContext):
+            return _FailureDescriptor(kind="invalid_context")
+        token: SecretValue | None = None
+        raw_token: str | None = None
         try:
             token = resolve_secret(self._token_ref, self._environment)
-        except (SecretNotFoundError, SecretReferenceError):
-            missing_secret = True
+            raw_token = _secret_text(token, field="token")
+            result = AuthenticationResult(token=SecretValue(raw_token), token_type="Bearer")
+            assert result.authorization is not None
+            return AuthAttempt(
+                headers={"Authorization": result.authorization},
+                state_key=context.auth_state_key,
+                generation=0,
+                authentication=result,
+            )
+        except Exception:
+            return _FailureDescriptor(kind="secret_missing")
+        finally:
             token = None
-        if missing_secret or token is None:
-            raise AuthCredentialError("provider authentication credential is unavailable")
-        raw_token = _secret_text(token, field="token")
-        result = AuthenticationResult(token=SecretValue(raw_token), token_type="Bearer")
-        assert result.authorization is not None
-        return AuthAttempt(
-            headers={"Authorization": result.authorization},
-            state_key=context.auth_state_key,
-            generation=0,
-            authentication=result,
-        )
+            raw_token = None
 
-    async def headers(self, context: PrincipalContext) -> AuthAttempt:
-        return await self.authorize(context)
+    headers = authorize
 
     async def on_unauthorized(
         self,
         context: PrincipalContext,
         failed_attempt: AuthAttempt,
     ) -> bool:
-        _require_context(context)
-        _require_attempt(failed_attempt, context.auth_state_key)
-        return False
+        outcome = _no_retry_feedback_outcome(context, failed_attempt)
+        if isinstance(outcome, bool):
+            return outcome
+        failure = outcome
+        del context
+        del failed_attempt
+        del self
+        _raise_public_failure(failure)
 
     async def invalidate(self, auth_state_key: AuthStateKey) -> None:
-        _require_auth_state_key(auth_state_key)
+        failure = _state_key_failure(auth_state_key)
+        if failure is None:
+            return
+        del auth_state_key
+        del self
+        _raise_public_failure(failure)
 
     async def aclose(self) -> None:
         return None
@@ -1034,26 +1080,28 @@ def _is_safe_nonempty_text(value: object) -> bool:
     )
 
 
-def _require_context(context: PrincipalContext) -> None:
+def _no_retry_feedback_outcome(
+    context: object,
+    failed_attempt: object,
+) -> bool | _FailureDescriptor:
     if not isinstance(context, PrincipalContext):
-        raise TypeError("authentication requires a PrincipalContext")
+        return _FailureDescriptor(kind="invalid_context")
+    if not isinstance(failed_attempt, AuthAttempt):
+        return _FailureDescriptor(kind="invalid_attempt")
+    if failed_attempt.state_key != context.auth_state_key:
+        return _FailureDescriptor(kind="attempt_mismatch")
+    return False
 
 
-def _require_auth_state_key(auth_state_key: AuthStateKey) -> None:
+def _state_key_failure(auth_state_key: object) -> _FailureDescriptor | None:
     if not isinstance(auth_state_key, AuthStateKey):
-        raise TypeError("authentication state operation requires an AuthStateKey")
+        return _FailureDescriptor(kind="invalid_state_key")
+    return None
 
 
 def _require_result(result: AuthenticationResult) -> None:
     if not isinstance(result, AuthenticationResult):
         raise TypeError("authentication invalidation requires an AuthenticationResult")
-
-
-def _require_attempt(attempt: AuthAttempt, expected_key: AuthStateKey) -> None:
-    if not isinstance(attempt, AuthAttempt):
-        raise TypeError("401 feedback requires an AuthAttempt")
-    if attempt.state_key != expected_key:
-        raise ValueError("authentication attempt does not belong to this PrincipalContext")
 
 
 def _result_is_fresh(result: AuthenticationResult, now: float) -> bool:

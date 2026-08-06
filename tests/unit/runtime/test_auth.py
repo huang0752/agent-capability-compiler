@@ -322,6 +322,89 @@ async def test_bearer_secret_strategy_resolves_environment_each_time() -> None:
 
 
 @pytest.mark.asyncio
+async def test_bearer_public_errors_cannot_reach_environment_secret() -> None:
+    secret = "bearer-environment-secret-must-not-reach-traceback"
+    strategy = BearerSecretAuthStrategy("TOKEN", environment={"TOKEN": secret})
+    context_a = _context("user-a", auth_state_handle="state-a")
+    context_b = _context("user-b", auth_state_handle="state-b")
+    secret_result = AuthenticationResult(token=SecretValue(secret), token_type="Bearer")
+    mismatched_attempt = AuthAttempt(
+        headers={"Authorization": SecretValue(f"Bearer {secret}")},
+        state_key=context_b.auth_state_key,
+        generation=1,
+        authentication=secret_result,
+    )
+
+    with pytest.raises(TypeError) as authorize_caught:
+        await strategy.authorize("invalid-context")  # type: ignore[arg-type]
+    with pytest.raises(TypeError) as headers_caught:
+        await strategy.headers("invalid-context")  # type: ignore[arg-type]
+    with pytest.raises(ValueError) as ownership_caught:
+        await strategy.on_unauthorized(context_a, mismatched_attempt)
+    with pytest.raises(TypeError) as invalidate_caught:
+        await strategy.invalidate("invalid-state-key")  # type: ignore[arg-type]
+
+    for error in (
+        authorize_caught.value,
+        headers_caught.value,
+        ownership_caught.value,
+        invalidate_caught.value,
+    ):
+        _assert_runtime_traceback_locals_have_no_secret(error, secret)
+
+
+@pytest.mark.asyncio
+async def test_bearer_credential_error_cannot_reach_invalid_environment_secret() -> None:
+    secret = "bearer-invalid-environment-secret"
+    strategy = BearerSecretAuthStrategy(
+        "TOKEN",
+        environment={"TOKEN": f"{secret}\n"},
+    )
+
+    with pytest.raises(AuthCredentialError) as caught:
+        await strategy.authorize(_context())
+
+    _assert_runtime_traceback_locals_have_no_secret(caught.value, secret)
+
+
+@pytest.mark.asyncio
+async def test_no_auth_public_errors_clear_strategy_and_arguments() -> None:
+    secret = "no-auth-strategy-sensitive-marker"
+
+    class SensitiveNoAuthStrategy(NoAuthStrategy):
+        def __init__(self) -> None:
+            self.sensitive_marker = secret
+
+    strategy = SensitiveNoAuthStrategy()
+    context_a = _context("user-a", auth_state_handle="state-a")
+    context_b = _context("user-b", auth_state_handle="state-b")
+    secret_result = AuthenticationResult(token=SecretValue(secret), token_type="Bearer")
+    mismatched_attempt = AuthAttempt(
+        headers={"Authorization": SecretValue(f"Bearer {secret}")},
+        state_key=context_b.auth_state_key,
+        generation=1,
+        authentication=secret_result,
+    )
+
+    with pytest.raises(TypeError) as authorize_caught:
+        await strategy.authorize("invalid-context")  # type: ignore[arg-type]
+    with pytest.raises(TypeError) as headers_caught:
+        await strategy.headers("invalid-context")  # type: ignore[arg-type]
+    with pytest.raises(ValueError) as ownership_caught:
+        await strategy.on_unauthorized(context_a, mismatched_attempt)
+    with pytest.raises(TypeError) as invalidate_caught:
+        await strategy.invalidate("invalid-state-key")  # type: ignore[arg-type]
+
+    for error in (
+        authorize_caught.value,
+        headers_caught.value,
+        ownership_caught.value,
+        invalidate_caught.value,
+    ):
+        _assert_runtime_traceback_locals_have_no_secret(error, secret)
+
+
+@pytest.mark.asyncio
 async def test_auth_strategies_wrap_missing_environment_secrets_in_auth_error_family() -> None:
     bearer = BearerSecretAuthStrategy("CRM_TOKEN", environment={})
     password = PasswordBearerAuthStrategy(
