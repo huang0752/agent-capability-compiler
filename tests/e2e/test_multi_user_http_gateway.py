@@ -3,12 +3,15 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import sys
 import threading
 from collections.abc import AsyncIterator, Iterator, Mapping
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from tempfile import TemporaryFile
 from typing import Literal, cast
 from urllib.parse import parse_qs, urlsplit
 
@@ -16,11 +19,13 @@ import httpx
 import pytest
 import yaml
 from mcp import types
+from mcp.client.stdio import StdioServerParameters
 from pydantic import JsonValue
 
 from acc_core.compiler import compile_project
-from acc_core.packaging import build_pack
-from acc_runtime.context import PrincipalContext
+from acc_core.coverage import analyze_coverage
+from acc_core.packaging import build_pack, load_pack_manifest
+from acc_core.validation import validate_project
 from acc_runtime.credentials import SecretValue
 from acc_runtime.gateway import (
     GatewayRuntimeComposition,
@@ -29,11 +34,13 @@ from acc_runtime.gateway import (
     create_gateway_runtime,
 )
 from acc_runtime.runtime import GenericRuntime
-from acc_testkit import McpStreamableHttpTestClient
+from acc_testkit import McpStdioTestClient, McpStreamableHttpTestClient
 
 pytestmark = pytest.mark.e2e
 
 PROJECT_ID = "offline-multi-user"
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+ACC_CORE_SRC = REPOSITORY_ROOT / "packages" / "acc-core" / "src"
 PASSWORDS = {
     "a@example.test": "A-password-private",
     "b@example.test": "B-password-private",
@@ -54,6 +61,23 @@ PRINCIPALS = {
     "b@example.test": "principal-b",
     "c@example.test": "principal-c",
 }
+SOURCE_SCOPES = {
+    "a@example.test": "source:a:records:read",
+    "b@example.test": "source:b:records:read",
+    "c@example.test": "source:c:records:read",
+}
+
+
+@dataclass(frozen=True)
+class _SourceFixtureMetadata:
+    name: Literal["baogao-jin-auth-shape"] = "baogao-jin-auth-shape"
+    verification_level: Literal["offline_candidate"] = "offline_candidate"
+    generic_fake_auth_shape_only: Literal[True] = True
+    source_connected: Literal[False] = False
+    real_source_or_account_accessed: Literal[False] = False
+
+
+BAOGAO_JIN_FAKE = _SourceFixtureMetadata()
 
 
 @dataclass
@@ -90,7 +114,7 @@ def _fake_source(state: _SourceState) -> Iterator[str]:
                         "id": PRINCIPALS[identity],
                         "tenant": {"tenant_id": TENANTS[identity]},
                     },
-                    "permissions": ["source:records:read"],
+                    "permissions": [SOURCE_SCOPES[identity]],
                 }
             ).encode()
             self.send_response(200)
@@ -172,7 +196,7 @@ def _write_yaml(path: Path, value: object) -> None:
 
 def _make_gateway_project(root: Path) -> Path:
     source = root / "source"
-    source.mkdir()
+    source.mkdir(parents=True)
     (source / "routes.py").write_text("def current_record(): ...\n", encoding="utf-8")
     project = root / "project"
     _write_yaml(
@@ -197,7 +221,9 @@ def _make_gateway_project(root: Path) -> Path:
                     "principal_pointer": "/user/id",
                     "scopes_pointer": "/permissions",
                     "tenant_pointer": "/user/tenant",
-                    "scope_mapping": {"source:records:read": ["records.read"]},
+                    "scope_mapping": {
+                        source_scope: ["records.read"] for source_scope in SOURCE_SCOPES.values()
+                    },
                 },
                 "context_binding_allowlist": ["tenant_context.tenant_id"],
             },
@@ -322,6 +348,7 @@ async def _gateway_harness(
     source_url: str,
     *,
     ttl_seconds: int = 30,
+    deployment_scope_ceiling: frozenset[str] = frozenset({"records.read"}),
 ) -> AsyncIterator[_Harness]:
     report = compile_project(project)
     assert report.ok, report.diagnostics
@@ -337,7 +364,7 @@ async def _gateway_harness(
             max_sessions=8,
         ),
         environment={"OFFLINE_SOURCE_BASE_URL": source_url},
-        deployment_scope_ceiling={"records.read"},
+        deployment_scope_ceiling=deployment_scope_ceiling,
         mcp_session_idle_timeout_seconds=min(0.5, float(ttl_seconds)),
         audit_sink=audit,
         audit_deployment_salt=b"offline-audit-salt-private",
@@ -373,9 +400,14 @@ def _tool_payload(result: types.CallToolResult) -> dict[str, JsonValue]:
     return cast(dict[str, JsonValue], payload)
 
 
-def _secret_scan(value: object, gateway_tokens: list[SecretValue]) -> None:
+def _secret_scan(
+    value: object,
+    gateway_tokens: list[SecretValue],
+    *,
+    extra_secrets: tuple[str, ...] = (),
+) -> None:
     text = value if isinstance(value, bytes) else repr(value).encode()
-    for secret in [*PASSWORDS.values(), *SOURCE_TOKENS.values()]:
+    for secret in [*PASSWORDS.values(), *SOURCE_TOKENS.values(), *extra_secrets]:
         assert secret.encode() not in text
     for token in gateway_tokens:
         assert token.get_secret_value().encode() not in text
@@ -385,9 +417,13 @@ def _secret_scan(value: object, gateway_tokens: list[SecretValue]) -> None:
 
 
 @pytest.mark.anyio
-async def test_a_b_c_are_isolated_across_gateway_mcp_source_and_context(
+async def test_baogao_jin_auth_shape_offline_candidate_isolates_a_b_c(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
+    assert BAOGAO_JIN_FAKE.verification_level == "offline_candidate"
+    assert BAOGAO_JIN_FAKE.generic_fake_auth_shape_only is True
+    assert BAOGAO_JIN_FAKE.source_connected is False
+    assert BAOGAO_JIN_FAKE.real_source_or_account_accessed is False
     project = _make_gateway_project(tmp_path)
     state = _SourceState()
     caplog.set_level(logging.INFO)
@@ -489,20 +525,24 @@ async def test_a_b_c_are_isolated_across_gateway_mcp_source_and_context(
             report = compile_project(project)
             assert report.ir is not None
             pack = build_pack(project, project / "offline.accpkg", compiled_ir=report.ir)
+            coverage = analyze_coverage(validate_project(project))
+            manifest = load_pack_manifest(pack.path).to_dict()
             public_surfaces = {
+                "fixture_metadata": BAOGAO_JIN_FAKE,
+                "compiled_ir": report.ir,
+                "pack_manifest": manifest,
+                "coverage": coverage,
                 "tools": [tool.model_dump() for tool in listed_tools.tools],
                 "business_results": [result.model_dump() for result in results],
                 "errors": [denied.model_dump(), override.model_dump()],
                 "audit": [event.to_dict() for event in harness.audit.events],
                 "logs": [record.getMessage() for record in caplog.records],
                 "repr": [repr(harness.composition), repr(harness.audit.events)],
-                "coverage_fixture": {"offline_candidate": True, "covered_users": 3},
-                "test_fixture": {"result": "isolated"},
-                "handoff_fixture": {"status": "offline"},
-                "artifact_manifest_fixture": {"pack": pack.path.name},
             }
             _secret_scan(public_surfaces, tokens)
             _secret_scan(pack.path.read_bytes(), tokens)
+            for absent_delivery in ("HANDOFF.md", "risk-report.json", "test-report.json"):
+                assert not (project / absent_delivery).exists()
 
         async with _gateway_harness(project, source_url, ttl_seconds=1) as restarted:
             for token in tokens:
@@ -523,58 +563,124 @@ async def test_a_b_c_are_isolated_across_gateway_mcp_source_and_context(
             _secret_scan(expired.text, [*tokens, expiring])
 
 
-class _EchoProvider:
-    async def call(
-        self,
-        operation: Mapping[str, object],
-        arguments: Mapping[str, JsonValue],
-        principal_context: PrincipalContext,
-    ) -> JsonValue:
-        del operation, principal_context
-        return {
-            "owner": arguments["actor_id"],
-            "tenant_id": arguments["tenant_id"],
-            "record": f"visible-only-to-{arguments['actor_id']}",
+def _make_stdio_project(root: Path) -> Path:
+    project = _make_gateway_project(root)
+    project_document = yaml.safe_load((project / "project.yaml").read_text(encoding="utf-8"))
+    project_document["runtime"] = {"transport": ["stdio"]}
+    project_document["provider"]["auth"]["credentials"] = {
+        "kind": "environment_secret",
+        "identity_ref": "OFFLINE_SOURCE_IDENTITY",
+        "password_ref": "OFFLINE_SOURCE_PASSWORD",
+    }
+    _write_yaml(project / "project.yaml", project_document)
+    return project
+
+
+async def _exercise_stdio(
+    project: Path,
+    source_url: str,
+    *,
+    scopes: str,
+) -> tuple[types.ListToolsResult, types.CallToolResult, str, bytes, object, object]:
+    report = compile_project(project)
+    assert report.ok, report.diagnostics
+    assert report.ir is not None
+    pack = build_pack(project, project / "offline-stdio.accpkg", compiled_ir=report.ir)
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "PYTHONPATH": os.pathsep.join([str(ACC_CORE_SRC), environment.get("PYTHONPATH", "")]),
+            "OFFLINE_SOURCE_BASE_URL": source_url,
+            "OFFLINE_SOURCE_IDENTITY": "a@example.test",
+            "OFFLINE_SOURCE_PASSWORD": PASSWORDS["a@example.test"],
+            "ACC_GRANTED_SCOPES": scopes,
+            "ACC_PRINCIPAL_ID": "principal-a",
+            "ACC_TENANT_ID": "tenant-a",
         }
+    )
+    parameters = StdioServerParameters(
+        command=sys.executable,
+        args=["-m", "acc_core.cli.main", "run", str(pack.path)],
+        env=environment,
+        cwd=project,
+    )
+    with TemporaryFile(mode="w+", encoding="utf-8") as error_log:
+        async with McpStdioTestClient(parameters, error_log=error_log) as client:
+            listed = await client.list_tools()
+            called = await client.call_tool("records_current", {})
+        error_log.seek(0)
+        stderr = error_log.read()
+    return (
+        listed,
+        called,
+        stderr,
+        pack.path.read_bytes(),
+        report.ir,
+        load_pack_manifest(pack.path).to_dict(),
+    )
 
 
 @pytest.mark.anyio
 async def test_stdio_and_http_context_have_identical_business_and_policy_output(
     tmp_path: Path,
 ) -> None:
-    report = compile_project(_make_gateway_project(tmp_path))
-    assert report.ok and report.ir is not None
-    http_context = PrincipalContext(
-        principal_id="principal-a",
-        gateway_session_id="gateway-a",
-        target_system_id=PROJECT_ID,
-        source_scopes={"source:records:read"},
-        deployment_scope_ceiling={"records.read"},
-        scope_mapping={"source:records:read": ["records.read"]},
-        tenant_context={"tenant_id": "tenant-a"},
-        auth_state_handle="auth-a",
+    stdio_project = _make_stdio_project(tmp_path / "stdio")
+    http_project = _make_gateway_project(tmp_path / "http")
+    state = _SourceState()
+    with _fake_source(state) as source_url:
+        listed_stdio, stdio_success, stderr, pack_bytes, ir, manifest = await _exercise_stdio(
+            stdio_project, source_url, scopes="records.read"
+        )
+        _, stdio_denied, denied_stderr, _, _, _ = await _exercise_stdio(
+            stdio_project, source_url, scopes=""
+        )
+
+        async with _gateway_harness(http_project, source_url) as harness:
+            token = await _login(harness.http, "a@example.test")
+            async with McpStreamableHttpTestClient(
+                "http://gateway.test/mcp", token, transport=harness.transport
+            ) as client:
+                listed_http = await client.list_tools()
+                http_success = await client.call_tool("records_current", {})
+
+        async with _gateway_harness(
+            http_project,
+            source_url,
+            deployment_scope_ceiling=frozenset(),
+        ) as denied_harness:
+            denied_token = await _login(denied_harness.http, "a@example.test")
+            async with McpStreamableHttpTestClient(
+                "http://gateway.test/mcp",
+                denied_token,
+                transport=denied_harness.transport,
+            ) as denied_client:
+                http_denied = await denied_client.call_tool("records_current", {})
+
+    assert [tool.name for tool in listed_stdio.tools] == [tool.name for tool in listed_http.tools]
+    assert _tool_payload(stdio_success) == _tool_payload(http_success)
+    assert stdio_denied.isError is True and http_denied.isError is True
+    assert stdio_denied.structuredContent == http_denied.structuredContent
+    _secret_scan(
+        {
+            "stdio_tools": listed_stdio.model_dump(),
+            "stdio_success": stdio_success.model_dump(),
+            "stdio_denied": stdio_denied.model_dump(),
+            "stderr": stderr,
+            "denied_stderr": denied_stderr,
+            "ir": ir,
+            "manifest": manifest,
+        },
+        [token, denied_token],
     )
-    stdio_context = PrincipalContext(
-        principal_id="principal-a",
-        gateway_session_id=None,
-        target_system_id=PROJECT_ID,
-        source_scopes={"source:records:read"},
-        deployment_scope_ceiling={"records.read"},
-        scope_mapping={"source:records:read": ["records.read"]},
-        tenant_context={"tenant_id": "tenant-a"},
-        auth_state_handle="stdio:offline-multi-user",
-    )
-    runtime = GenericRuntime(report.ir, provider=_EchoProvider())
-    assert await runtime.call_with_context("records_current", {}, http_context) == (
-        await runtime.call_with_context("records_current", {}, stdio_context)
-    )
+    _secret_scan(pack_bytes, [token, denied_token])
 
 
 @dataclass(frozen=True)
 class _OfflineCandidate:
     name: str
-    auth: Mapping[str, object]
-    transport: Literal["stdio", "streamable_http"]
+    mode: Literal["legacy", "provider"]
+    auth: Mapping[str, object] | None
+    expected_authorization: str | None
     offline_candidate: Literal[True] = True
 
 
@@ -582,47 +688,117 @@ class _OfflineCandidate:
     "candidate",
     [
         _OfflineCandidate(
-            "crm-legacy-provider-bearer",
-            {"kind": "bearer_secret", "token_ref": "CRM_LEGACY_TOKEN"},
-            "stdio",
+            "crm-legacy-operation-credential-ref",
+            "legacy",
+            None,
+            "Bearer crm-legacy-private",
         ),
         _OfflineCandidate(
             "crm-new-provider-bearer",
+            "provider",
             {"kind": "bearer_secret", "token_ref": "CRM_NEW_TOKEN"},
-            "stdio",
+            "Bearer crm-new-private",
         ),
-        _OfflineCandidate("warehouse-none", {"kind": "none"}, "stdio"),
+        _OfflineCandidate(
+            "warehouse-none",
+            "provider",
+            {"kind": "none"},
+            None,
+        ),
         _OfflineCandidate(
             "warehouse-bearer",
+            "provider",
             {"kind": "bearer_secret", "token_ref": "WAREHOUSE_TOKEN"},
-            "stdio",
-        ),
-        _OfflineCandidate(
-            "baogao-jin-fake-email-password",
-            {
-                "kind": "password_bearer",
-                "credentials": {"kind": "gateway_session"},
-                "login_path": "/api/login",
-                "identity_field": "email",
-                "password_field": "password",
-                "token_pointer": "/access_token",
-                "scopes_pointer": "/permissions",
-                "scope_mapping": {"source:records:read": ["records.read"]},
-            },
-            "streamable_http",
+            "Bearer warehouse-private",
         ),
     ],
     ids=lambda candidate: candidate.name,
 )
-def test_representative_provider_fixtures_are_explicitly_offline_candidates(
+@pytest.mark.anyio
+async def test_representative_provider_fixtures_compile_pack_and_execute_offline(
+    tmp_path: Path,
     candidate: _OfflineCandidate,
 ) -> None:
-    assert candidate.offline_candidate is True
-    assert candidate.name.startswith(("crm-", "warehouse-", "baogao-jin-fake-"))
-    if candidate.name.startswith("baogao-jin"):
-        assert candidate.transport == "streamable_http"
-        assert candidate.auth["credentials"] == {"kind": "gateway_session"}
-        assert "baogao-jin" not in repr(PASSWORDS).casefold()
+    project = _make_gateway_project(tmp_path / candidate.name)
+    project_path = project / "project.yaml"
+    project_document = yaml.safe_load(project_path.read_text(encoding="utf-8"))
+    project_document["runtime"] = {"transport": ["stdio"]}
+    operation_path = project / "operations" / "records.current.yaml"
+    operation_document = yaml.safe_load(operation_path.read_text(encoding="utf-8"))
+    if candidate.mode == "legacy":
+        project_document["provider"].pop("auth")
+        operation_document["http"]["credential_ref"] = "CRM_LEGACY_TOKEN"
     else:
-        assert candidate.transport == "stdio"
-        assert candidate.auth["kind"] in {"none", "bearer_secret"}
+        project_document["provider"]["auth"] = candidate.auth
+    _write_yaml(project_path, project_document)
+    _write_yaml(operation_path, operation_document)
+
+    validation = validate_project(project)
+    assert validation.ok, validation.diagnostics
+    report = compile_project(project)
+    assert report.ok, report.diagnostics
+    assert report.ir is not None
+    pack = build_pack(project, project / f"{candidate.name}.accpkg", compiled_ir=report.ir)
+
+    observed_authorization: list[str | None] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        observed_authorization.append(request.headers.get("authorization"))
+        return httpx.Response(
+            200,
+            json={
+                "owner": "offline-principal",
+                "tenant_id": "offline-tenant",
+                "record": f"visible-only-to-{candidate.name}",
+            },
+            request=request,
+        )
+
+    environment = {
+        "OFFLINE_SOURCE_BASE_URL": "https://offline-source.test",
+        "CRM_LEGACY_TOKEN": "crm-legacy-private",
+        "CRM_NEW_TOKEN": "crm-new-private",
+        "WAREHOUSE_TOKEN": "warehouse-private",
+        "ACC_PRINCIPAL_ID": "offline-principal",
+    }
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+        runtime = GenericRuntime.from_pack(
+            pack.path,
+            environment=environment,
+            granted_scopes={"records.read"},
+            tenant_id="offline-tenant",
+            client=client,
+        )
+        result = await runtime.call("records_current", {})
+        await runtime.aclose()
+
+    assert result == {
+        "owner": "offline-principal",
+        "tenant_id": "offline-tenant",
+        "record": f"visible-only-to-{candidate.name}",
+    }
+    assert observed_authorization == [candidate.expected_authorization]
+    assert candidate.offline_candidate is True
+    assert candidate.name.startswith(("crm-", "warehouse-"))
+    _secret_scan(
+        {
+            "ir": report.ir,
+            "manifest": load_pack_manifest(pack.path).to_dict(),
+            "result": result,
+        },
+        [],
+        extra_secrets=(
+            "crm-legacy-private",
+            "crm-new-private",
+            "warehouse-private",
+        ),
+    )
+    _secret_scan(
+        pack.path.read_bytes(),
+        [],
+        extra_secrets=(
+            "crm-legacy-private",
+            "crm-new-private",
+            "warehouse-private",
+        ),
+    )
