@@ -55,10 +55,11 @@ def diagnostic(
     *,
     path: str | None = None,
     pointer: str | None = None,
+    severity: str = "error",
 ) -> dict[str, object]:
     value: dict[str, object] = {
         "code": code,
-        "severity": "error",
+        "severity": severity,
         "message": message,
     }
     if path is not None:

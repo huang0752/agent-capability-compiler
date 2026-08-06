@@ -46,6 +46,22 @@ def test_diagnostic_optionally_includes_a_json_pointer() -> None:
     )
 
 
+def test_diagnostic_supports_warning_and_defaults_to_error() -> None:
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("verify_read_only_workspace", SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert module.diagnostic("ACC_DEFAULT", "default")["severity"] == "error"
+    assert module.diagnostic("ACC_WARNING", "warning", severity="warning") == {
+        "code": "ACC_WARNING",
+        "severity": "warning",
+        "message": "warning",
+    }
+
+
 def test_verify_snapshots_regular_files_without_following_symlinks(tmp_path: Path) -> None:
     workspace = tmp_path / "source"
     workspace.mkdir()

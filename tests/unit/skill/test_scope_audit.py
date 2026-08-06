@@ -23,6 +23,10 @@ def _route(
     evidence_sources: list[str] | None = None,
     reason: str | None = None,
     operation_id: str | None = "customer.search",
+    eligibility: str = "eligible",
+    usage_evidence_sources: list[str] | None = None,
+    exclusion_rule_id: str | None = None,
+    exclusion_decision: dict[str, object] | None = None,
 ) -> dict[str, object]:
     return {
         "id": route_id,
@@ -30,11 +34,50 @@ def _route(
         "method": method,
         "path": f"/api/{route_id.replace('.', '/')}",
         "evidence_sources": (["customer-routes"] if evidence_sources is None else evidence_sources),
-        "eligibility": "eligible",
+        "eligibility": eligibility,
         "disposition": disposition,
         "operation_id": operation_id,
         "capability_ids": ["search_customers"],
         "reason": reason,
+        **(
+            {"usage_evidence_sources": usage_evidence_sources}
+            if usage_evidence_sources is not None
+            else {}
+        ),
+        **({"exclusion_rule_id": exclusion_rule_id} if exclusion_rule_id is not None else {}),
+        **({"exclusion_decision": exclusion_decision} if exclusion_decision is not None else {}),
+    }
+
+
+def _decision(
+    rationale: str,
+    *,
+    evidence_sources: list[str] | None = None,
+    capability_ids: list[str] | None = None,
+    replacement_route_ids: list[str] | None = None,
+) -> dict[str, object]:
+    return {
+        "rationale": rationale,
+        "evidence_sources": ["route-decision"] if evidence_sources is None else evidence_sources,
+        "capability_ids": [] if capability_ids is None else capability_ids,
+        "replacement_route_ids": ([] if replacement_route_ids is None else replacement_route_ids),
+    }
+
+
+def _rule(
+    rule_id: str,
+    route_ids: list[str],
+    *,
+    category: str = "binary_or_download",
+    rationale: str = "Shared technical exclusion",
+    evidence_sources: list[str] | None = None,
+) -> dict[str, object]:
+    return {
+        "id": rule_id,
+        "category": category,
+        "route_ids": route_ids,
+        "rationale": rationale,
+        "evidence_sources": ["rule-evidence"] if evidence_sources is None else evidence_sources,
     }
 
 
@@ -92,6 +135,11 @@ def _write_project(
     system_operations: list[str] | None = None,
     plan_dependencies: list[str] | None = None,
     baseline_source_scope: dict[str, int] | None = None,
+    exclusion_rules: list[dict[str, object]] | None = None,
+    approved_route_ids: list[str] | None = None,
+    approval_text: str | None = None,
+    system_operation_records: list[dict[str, object]] | None = None,
+    plan_capabilities: list[dict[str, object]] | None = None,
 ) -> Path:
     project = tmp_path / "acc-project"
     project.mkdir()
@@ -102,6 +150,11 @@ def _write_project(
     }
     if mode is not None:
         scope["mode"] = mode
+    if approved_route_ids is not None or approval_text is not None:
+        scope["exclusion_approval"] = {
+            "approved_route_ids": approved_route_ids or [],
+            "approval_text": approval_text,
+        }
     summary = _summary(actual_routes)
     summary.update(summary_overrides or {})
     inventory = {
@@ -124,6 +177,7 @@ def _write_project(
             )
         ],
         "routes": actual_routes,
+        "exclusion_rules": exclusion_rules or [],
         "summary": summary,
     }
     (project / "scope-inventory.yaml").write_text(
@@ -140,25 +194,38 @@ def _write_project(
         }
     )
     actual_system_operations = operation_ids if system_operations is None else system_operations
+    route_ids_by_operation: dict[str, list[str]] = {}
+    for route in actual_routes:
+        if not isinstance(route, dict):
+            continue
+        operation_id = route.get("operation_id")
+        route_id = route.get("id")
+        if (
+            route.get("disposition") in {"planned", "composed"}
+            and isinstance(operation_id, str)
+            and isinstance(route_id, str)
+        ):
+            route_ids_by_operation.setdefault(operation_id, []).append(route_id)
+    actual_operation_records = (
+        system_operation_records
+        if system_operation_records is not None
+        else [
+            {"id": operation_id, "scope_route_ids": route_ids_by_operation.get(operation_id, [])}
+            for operation_id in actual_system_operations
+        ]
+    )
     (project / "system-map.yaml").write_text(
-        yaml.safe_dump(
-            {
-                "candidate_operations": [
-                    {"id": operation_id} for operation_id in actual_system_operations
-                ]
-            }
-        ),
+        yaml.safe_dump({"candidate_operations": actual_operation_records}),
         encoding="utf-8",
     )
     actual_plan_dependencies = operation_ids if plan_dependencies is None else plan_dependencies
+    actual_capabilities = (
+        plan_capabilities
+        if plan_capabilities is not None
+        else [{"id": "scope-capability", "operation_dependencies": actual_plan_dependencies}]
+    )
     (project / "capability-plan.yaml").write_text(
-        yaml.safe_dump(
-            {
-                "capabilities": [
-                    {"id": "scope-capability", "operation_dependencies": actual_plan_dependencies}
-                ]
-            }
-        ),
+        yaml.safe_dump({"capabilities": actual_capabilities}),
         encoding="utf-8",
     )
     (project / "coverage-baseline.json").write_text(
@@ -596,3 +663,720 @@ def test_all_three_scope_modes_accept_consistent_artifacts(
     assert completed.returncode == 0
     assert payload["ok"] is True
     assert payload["result"]["scope_mode"] == mode
+
+
+def _excluded_route(
+    route_id: str,
+    *,
+    rule_id: str = "binary-rule",
+    domain: str = "customer",
+    rationale: str | None = None,
+    category: str = "binary_or_download",
+    usage: bool = False,
+) -> tuple[dict[str, object], dict[str, object]]:
+    decision_rationale = rationale or f"Exclude {route_id} based on route-specific evidence"
+    route = _route(
+        route_id,
+        domain=domain,
+        disposition="excluded",
+        operation_id=None,
+        reason="legacy-compatible exclusion reason",
+        usage_evidence_sources=["frontend-client"] if usage else None,
+        exclusion_rule_id=rule_id,
+        exclusion_decision=_decision(decision_rationale),
+    )
+    rule = _rule(
+        rule_id,
+        [route_id],
+        category=category,
+        rationale=f"Shared rationale for {rule_id}",
+    )
+    return route, rule
+
+
+def test_warning_diagnostic_is_non_blocking_and_preserves_result(tmp_path: Path) -> None:
+    routes: list[object] = []
+    rules: list[dict[str, object]] = []
+    for index in range(7):
+        route, rule = _excluded_route(f"customer.excluded{index}", rule_id=f"rule-{index}")
+        routes.append(route)
+        rules.append(rule)
+    routes.extend(
+        _route(f"customer.planned{index}", operation_id=f"customer.planned{index}")
+        for index in range(3)
+    )
+    project = _write_project(tmp_path, routes=routes, exclusion_rules=rules)
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 0
+    assert payload["ok"] is True
+    assert payload["result"]["scope_mode"] == "system_readonly_complete"
+    assert payload["diagnostics"] == [
+        {
+            "code": "ACC_SCOPE_HIGH_EXCLUSION_RATIO",
+            "message": "eligible route exclusion ratio is unusually high",
+            "path": "scope-inventory.yaml",
+            "pointer": "/summary/excluded",
+            "severity": "warning",
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("eligible_count", "excluded_count", "expects_warning"),
+    [(9, 9, False), (10, 6, False), (10, 7, True), (20, 14, True)],
+)
+def test_high_exclusion_ratio_uses_locked_eligible_route_thresholds(
+    tmp_path: Path,
+    eligible_count: int,
+    excluded_count: int,
+    expects_warning: bool,
+) -> None:
+    routes: list[object] = [
+        _route(
+            f"customer.route{index}",
+            disposition="excluded" if index < excluded_count else "planned",
+            operation_id=None if index < excluded_count else f"customer.route{index}",
+            reason="pilot omission" if index < excluded_count else None,
+        )
+        for index in range(eligible_count)
+    ]
+    routes.append(
+        _route(
+            "internal.write",
+            disposition="excluded",
+            operation_id=None,
+            eligibility="ineligible",
+            reason="write route",
+        )
+    )
+    project = _write_project(
+        tmp_path,
+        mode="pilot",
+        user_confirmation="Approved pilot.",
+        routes=routes,
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 0
+    codes = [item["code"] for item in payload["diagnostics"]]
+    assert ("ACC_SCOPE_HIGH_EXCLUSION_RATIO" in codes) is expects_warning
+
+
+def test_error_still_fails_while_preserving_warning_diagnostics(tmp_path: Path) -> None:
+    routes: list[object] = []
+    rules: list[dict[str, object]] = []
+    for index in range(7):
+        route, rule = _excluded_route(f"customer.excluded{index}", rule_id=f"rule-{index}")
+        routes.append(route)
+        rules.append(rule)
+    routes.extend(
+        _route(f"customer.planned{index}", operation_id=f"customer.planned{index}")
+        for index in range(3)
+    )
+    project = _write_project(
+        tmp_path,
+        routes=routes,
+        exclusion_rules=rules,
+        summary_overrides={"planned": 99},
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert payload["ok"] is False
+    assert {item["severity"] for item in payload["diagnostics"]} == {"error", "warning"}
+    assert {item["code"] for item in payload["diagnostics"]} >= {
+        "ACC_SCOPE_SUMMARY_MISMATCH",
+        "ACC_SCOPE_HIGH_EXCLUSION_RATIO",
+    }
+
+
+def test_system_complete_requires_structured_exclusion_rule_and_decision(
+    tmp_path: Path,
+) -> None:
+    route = _route(
+        "customer.download",
+        disposition="excluded",
+        operation_id=None,
+        reason="legacy reason is insufficient",
+    )
+    project = _write_project(tmp_path, routes=[route])
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert {item["code"] for item in payload["diagnostics"]} == {
+        "ACC_SCOPE_EXCLUSION_RULE_REQUIRED",
+        "ACC_SCOPE_ROUTE_EXCLUSION_DECISION_REQUIRED",
+        "ACC_SCOPE_DOMAIN_ZERO_CAPABILITY",
+    }
+
+
+def test_exclusion_rule_must_exist_match_route_and_have_evidence(tmp_path: Path) -> None:
+    route, _ = _excluded_route("customer.download", rule_id="missing")
+    project = _write_project(
+        tmp_path,
+        routes=[route],
+        exclusion_rules=[_rule("other", ["unknown.route"], evidence_sources=[])],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert {item["code"] for item in payload["diagnostics"]} >= {
+        "ACC_SCOPE_EXCLUSION_RULE_UNKNOWN",
+        "ACC_SCOPE_EXCLUSION_RULE_ROUTE_MISMATCH",
+        "ACC_SCOPE_EXCLUSION_EVIDENCE_REQUIRED",
+    }
+
+
+def test_exclusion_rule_cannot_assign_the_same_route_twice(tmp_path: Path) -> None:
+    route, first = _excluded_route("customer.download", rule_id="first")
+    second = _rule("second", ["customer.download"])
+    project = _write_project(tmp_path, routes=[route], exclusion_rules=[first, second])
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert "ACC_SCOPE_EXCLUSION_RULE_ROUTE_MISMATCH" in {
+        item["code"] for item in payload["diagnostics"]
+    }
+
+
+@pytest.mark.parametrize(
+    "mutator",
+    [
+        lambda route, rule: rule.update(route_ids=[]),
+        lambda route, rule: rule.update(route_ids=["customer.download", "customer.download"]),
+        lambda route, rule: rule.update(category="not-a-category"),
+        lambda route, rule: rule.update(rationale="   "),
+        lambda route, rule: rule.update(route_ids=["customer.other"]),
+        lambda route, rule: route.update(disposition="planned", operation_id="customer.download"),
+    ],
+)
+def test_exclusion_rule_fields_and_bidirectional_relation_are_strict(
+    tmp_path: Path, mutator: Any
+) -> None:
+    route, rule = _excluded_route("customer.download")
+    mutator(route, rule)
+    project = _write_project(tmp_path, routes=[route], exclusion_rules=[rule])
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert "ACC_SCOPE_EXCLUSION_RULE_ROUTE_MISMATCH" in {
+        item["code"] for item in payload["diagnostics"]
+    }
+
+
+def test_exclusion_rule_ids_must_be_unique(tmp_path: Path) -> None:
+    route, rule = _excluded_route("customer.download")
+    project = _write_project(
+        tmp_path,
+        routes=[route],
+        exclusion_rules=[rule, {**rule, "route_ids": ["customer.download"]}],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert "ACC_SCOPE_EXCLUSION_RULE_ROUTE_MISMATCH" in {
+        item["code"] for item in payload["diagnostics"]
+    }
+
+
+def test_route_exclusion_decision_requires_unique_rationale_and_evidence(
+    tmp_path: Path,
+) -> None:
+    first, first_rule = _excluded_route(
+        "customer.download", rule_id="first", rationale=" Reused   Decision "
+    )
+    second, second_rule = _excluded_route(
+        "report.download", rule_id="second", rationale="reused decision"
+    )
+    assert isinstance(second["exclusion_decision"], dict)
+    second["exclusion_decision"]["evidence_sources"] = []
+    project = _write_project(
+        tmp_path,
+        routes=[first, second, _route("customer.search")],
+        exclusion_rules=[first_rule, second_rule],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert {item["code"] for item in payload["diagnostics"]} >= {
+        "ACC_SCOPE_EXCLUSION_DECISION_REUSED",
+        "ACC_SCOPE_EXCLUSION_EVIDENCE_REQUIRED",
+    }
+
+
+def test_ineligible_still_requires_reason_and_route_evidence(tmp_path: Path) -> None:
+    route = _route(
+        "internal.write",
+        disposition="excluded",
+        operation_id=None,
+        eligibility="ineligible",
+        evidence_sources=[],
+    )
+    project = _write_project(tmp_path, routes=[route])
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert {item["code"] for item in payload["diagnostics"]} == {
+        "ACC_SCOPE_EVIDENCE_REQUIRED",
+        "ACC_SCOPE_REASON_REQUIRED",
+    }
+
+
+def test_system_complete_still_rejects_blocked_on_evidence(tmp_path: Path) -> None:
+    route = _route(
+        "customer.blocked",
+        disposition="blocked_on_evidence",
+        operation_id=None,
+        reason="permission evidence missing",
+    )
+    project = _write_project(tmp_path, routes=[route])
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert "ACC_SCOPE_EVIDENCE_BLOCKED" in {item["code"] for item in payload["diagnostics"]}
+
+
+@pytest.mark.parametrize(
+    ("operation_record", "expected_code"),
+    [
+        ({"id": "customer.search"}, "ACC_SCOPE_OPERATION_ROUTE_TRACE_REQUIRED"),
+        (
+            {"id": "customer.search", "scope_route_ids": ["unknown.route"]},
+            "ACC_SCOPE_OPERATION_ROUTE_TRACE_ROUTE_UNKNOWN",
+        ),
+    ],
+)
+def test_operation_route_trace_is_required_and_must_exist(
+    tmp_path: Path,
+    operation_record: dict[str, object],
+    expected_code: str,
+) -> None:
+    project = _write_project(tmp_path, system_operation_records=[operation_record])
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert expected_code in {item["code"] for item in payload["diagnostics"]}
+
+
+@pytest.mark.parametrize("trace", [[], "customer.search", [""]])
+def test_operation_route_trace_rejects_empty_non_list_or_empty_ids(
+    tmp_path: Path, trace: object
+) -> None:
+    project = _write_project(
+        tmp_path,
+        system_operation_records=[{"id": "customer.search", "scope_route_ids": trace}],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert "ACC_SCOPE_OPERATION_ROUTE_TRACE_REQUIRED" in {
+        item["code"] for item in payload["diagnostics"]
+    }
+
+
+@pytest.mark.parametrize("disposition", ["excluded", "blocked_on_evidence"])
+def test_operation_trace_rejects_non_planned_routes(tmp_path: Path, disposition: str) -> None:
+    traced = _route(
+        "customer.traced",
+        disposition=disposition,
+        operation_id=None,
+        reason="not available as an operation",
+    )
+    if disposition == "excluded":
+        traced["eligibility"] = "ineligible"
+    project = _write_project(
+        tmp_path,
+        mode="pilot",
+        user_confirmation="Approved pilot.",
+        routes=[traced, _route("customer.search")],
+        system_operation_records=[
+            {"id": "customer.search", "scope_route_ids": ["customer.traced"]}
+        ],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert "ACC_SCOPE_OPERATION_ROUTE_TRACE_INVALID" in {
+        item["code"] for item in payload["diagnostics"]
+    }
+
+
+def test_operation_trace_requires_matching_route_operation_id(tmp_path: Path) -> None:
+    project = _write_project(
+        tmp_path,
+        system_operation_records=[
+            {"id": "different.operation", "scope_route_ids": ["customer.search"]}
+        ],
+        plan_capabilities=[
+            {"id": "scope-capability", "operation_dependencies": ["different.operation"]}
+        ],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert "ACC_SCOPE_OPERATION_ROUTE_TRACE_OPERATION_MISMATCH" in {
+        item["code"] for item in payload["diagnostics"]
+    }
+
+
+def test_capability_dependency_must_exist_in_system_map(tmp_path: Path) -> None:
+    project = _write_project(
+        tmp_path,
+        plan_capabilities=[
+            {
+                "id": "scope-capability",
+                "operation_dependencies": ["customer.search", "unknown.operation"],
+            }
+        ],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert "ACC_SCOPE_CAPABILITY_DEPENDENCY_UNKNOWN" in {
+        item["code"] for item in payload["diagnostics"]
+    }
+
+
+def test_duplicate_or_subsumed_requires_capability_and_replacement_closure(
+    tmp_path: Path,
+) -> None:
+    excluded, rule = _excluded_route(
+        "customer.duplicate", rule_id="duplicate", category="duplicate_or_subsumed"
+    )
+    excluded["exclusion_decision"] = _decision(
+        "Customer duplicate is represented by the search capability"
+    )
+    project = _write_project(
+        tmp_path,
+        routes=[excluded, _route("customer.search")],
+        exclusion_rules=[rule],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert {item["code"] for item in payload["diagnostics"]} >= {
+        "ACC_SCOPE_SUBSUMED_CAPABILITY_REQUIRED",
+        "ACC_SCOPE_SUBSUMED_REPLACEMENT_REQUIRED",
+    }
+
+
+def test_duplicate_or_subsumed_accepts_a_complete_replacement_closure(tmp_path: Path) -> None:
+    excluded, rule = _excluded_route(
+        "legacy.lookup", rule_id="duplicate", category="duplicate_or_subsumed", domain="legacy"
+    )
+    excluded["exclusion_decision"] = _decision(
+        "Legacy lookup is represented by customer search",
+        capability_ids=["search_customers"],
+        replacement_route_ids=["customer.search"],
+    )
+    project = _write_project(
+        tmp_path,
+        routes=[excluded, _route("customer.search")],
+        exclusion_rules=[rule],
+        plan_capabilities=[
+            {
+                "id": "search_customers",
+                "operation_dependencies": ["customer.search"],
+            }
+        ],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 0
+    assert payload["ok"] is True
+
+
+def test_duplicate_or_subsumed_rejects_invalid_replacement_closure(tmp_path: Path) -> None:
+    excluded, rule = _excluded_route(
+        "customer.duplicate", rule_id="duplicate", category="duplicate_or_subsumed"
+    )
+    excluded["exclusion_decision"] = _decision(
+        "Duplicate route is replaced",
+        capability_ids=["missing-capability"],
+        replacement_route_ids=["customer.duplicate"],
+    )
+    project = _write_project(
+        tmp_path,
+        routes=[excluded, _route("customer.search")],
+        exclusion_rules=[rule],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert "ACC_SCOPE_SUBSUMED_CLOSURE_INVALID" in {item["code"] for item in payload["diagnostics"]}
+
+
+@pytest.mark.parametrize("replacement_disposition", ["excluded", "blocked_on_evidence"])
+def test_subsumed_replacement_must_be_planned_or_composed(
+    tmp_path: Path, replacement_disposition: str
+) -> None:
+    excluded, rule = _excluded_route(
+        "legacy.lookup", rule_id="duplicate", category="duplicate_or_subsumed", domain="legacy"
+    )
+    excluded["exclusion_decision"] = _decision(
+        "Legacy lookup is replaced",
+        capability_ids=["search_customers"],
+        replacement_route_ids=["customer.search"],
+    )
+    replacement = _route(
+        "customer.search",
+        disposition=replacement_disposition,
+        operation_id=None,
+        reason="not an operation",
+    )
+    if replacement_disposition == "excluded":
+        replacement["eligibility"] = "ineligible"
+    project = _write_project(
+        tmp_path,
+        mode="pilot",
+        user_confirmation="Approved pilot.",
+        routes=[excluded, replacement],
+        exclusion_rules=[rule],
+        plan_capabilities=[{"id": "search_customers", "operation_dependencies": []}],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert "ACC_SCOPE_SUBSUMED_CLOSURE_INVALID" in {item["code"] for item in payload["diagnostics"]}
+
+
+def test_subsumed_capability_dependency_must_cover_replacement_operation(
+    tmp_path: Path,
+) -> None:
+    excluded, rule = _excluded_route(
+        "legacy.lookup", rule_id="duplicate", category="duplicate_or_subsumed", domain="legacy"
+    )
+    excluded["exclusion_decision"] = _decision(
+        "Legacy lookup is replaced",
+        capability_ids=["search_customers"],
+        replacement_route_ids=["customer.search"],
+    )
+    project = _write_project(
+        tmp_path,
+        routes=[excluded, _route("customer.search")],
+        exclusion_rules=[rule],
+        plan_capabilities=[{"id": "search_customers", "operation_dependencies": []}],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert "ACC_SCOPE_SUBSUMED_CLOSURE_INVALID" in {item["code"] for item in payload["diagnostics"]}
+
+
+def test_excluded_route_cannot_appear_in_an_ordinary_operation_trace(tmp_path: Path) -> None:
+    excluded, rule = _excluded_route("customer.duplicate")
+    project = _write_project(
+        tmp_path,
+        routes=[excluded, _route("customer.search")],
+        exclusion_rules=[rule],
+        system_operation_records=[
+            {
+                "id": "customer.search",
+                "scope_route_ids": ["customer.search", "customer.duplicate"],
+            }
+        ],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert "ACC_SCOPE_OPERATION_ROUTE_TRACE_INVALID" in {
+        item["code"] for item in payload["diagnostics"]
+    }
+
+
+@pytest.mark.parametrize("category", ["operational_polling", "low_business_value"])
+def test_subjective_exclusion_requires_exact_non_empty_approval(
+    tmp_path: Path, category: str
+) -> None:
+    route, rule = _excluded_route("platform.health", rule_id="subjective", category=category)
+    project = _write_project(
+        tmp_path,
+        routes=[route, _route("platform.status")],
+        exclusion_rules=[rule],
+        approved_route_ids=["different.route"],
+        approval_text="",
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert "ACC_SCOPE_EXCLUSION_APPROVAL_REQUIRED" in {
+        item["code"] for item in payload["diagnostics"]
+    }
+
+
+def test_frontend_used_exclusion_requires_approval_in_system_complete(tmp_path: Path) -> None:
+    route, rule = _excluded_route("customer.visible", usage=True)
+    project = _write_project(
+        tmp_path,
+        routes=[route, _route("customer.search")],
+        exclusion_rules=[rule],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    frontend_diagnostics = [
+        item
+        for item in payload["diagnostics"]
+        if item["code"] == "ACC_SCOPE_FRONTEND_USED_ROUTE_EXCLUDED"
+    ]
+    assert {item["severity"] for item in frontend_diagnostics} == {"error", "warning"}
+
+
+def test_approved_frontend_used_exclusion_remains_a_warning(tmp_path: Path) -> None:
+    route, rule = _excluded_route("customer.visible", usage=True)
+    project = _write_project(
+        tmp_path,
+        routes=[route, _route("customer.search")],
+        exclusion_rules=[rule],
+        approved_route_ids=["customer.visible"],
+        approval_text="User approved excluding this exact frontend-used route.",
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 0
+    frontend_diagnostics = [
+        item
+        for item in payload["diagnostics"]
+        if item["code"] == "ACC_SCOPE_FRONTEND_USED_ROUTE_EXCLUDED"
+    ]
+    assert [item["severity"] for item in frontend_diagnostics] == ["warning"]
+
+
+def test_frontend_used_exclusion_is_warning_in_pilot(tmp_path: Path) -> None:
+    route = _route(
+        "customer.visible",
+        disposition="excluded",
+        operation_id=None,
+        reason="approved pilot omission",
+        usage_evidence_sources=["frontend-client"],
+    )
+    project = _write_project(
+        tmp_path,
+        mode="pilot",
+        user_confirmation="Approved pilot.",
+        routes=[route, _route("customer.search")],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 0
+    assert payload["diagnostics"][0]["code"] == "ACC_SCOPE_FRONTEND_USED_ROUTE_EXCLUDED"
+    assert payload["diagnostics"][0]["severity"] == "warning"
+
+
+def test_domain_with_eligible_routes_requires_a_capability(tmp_path: Path) -> None:
+    route, rule = _excluded_route("report.download", domain="report")
+    project = _write_project(
+        tmp_path,
+        routes=[route, _route("customer.search")],
+        exclusion_rules=[rule],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert "ACC_SCOPE_DOMAIN_ZERO_CAPABILITY" in {item["code"] for item in payload["diagnostics"]}
+
+
+def test_zero_capability_exception_requires_every_route_to_be_validly_subsumed(
+    tmp_path: Path,
+) -> None:
+    valid, valid_rule = _excluded_route(
+        "legacy.lookup", rule_id="valid", category="duplicate_or_subsumed", domain="legacy"
+    )
+    valid["exclusion_decision"] = _decision(
+        "Legacy lookup is replaced cross-domain",
+        capability_ids=["search_customers"],
+        replacement_route_ids=["customer.search"],
+    )
+    invalid, invalid_rule = _excluded_route("legacy.export", rule_id="invalid", domain="legacy")
+    project = _write_project(
+        tmp_path,
+        routes=[valid, invalid, _route("customer.search")],
+        exclusion_rules=[valid_rule, invalid_rule],
+        plan_capabilities=[
+            {"id": "search_customers", "operation_dependencies": ["customer.search"]}
+        ],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert "ACC_SCOPE_DOMAIN_ZERO_CAPABILITY" in {item["code"] for item in payload["diagnostics"]}
+
+
+def test_scope_diagnostics_do_not_echo_malicious_structured_values(tmp_path: Path) -> None:
+    secret = "structured-secret-never-output"
+    route, rule = _excluded_route(secret, rule_id=secret)
+    rule.update(
+        category=secret,
+        rationale=secret,
+        evidence_sources=[secret],
+        route_ids=[secret],
+    )
+    assert isinstance(route["exclusion_decision"], dict)
+    route["exclusion_decision"].update(
+        rationale=secret,
+        evidence_sources=[secret],
+        capability_ids=[secret],
+        replacement_route_ids=[secret],
+    )
+    project = _write_project(tmp_path, routes=[route], exclusion_rules=[rule])
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert payload["diagnostics"]
+    assert secret not in completed.stdout
+
+
+def test_cross_domain_rule_rationale_reuse_is_a_warning(tmp_path: Path) -> None:
+    first, first_rule = _excluded_route("customer.download", rule_id="customer-rule")
+    second, second_rule = _excluded_route("report.download", rule_id="report-rule", domain="report")
+    second_rule["rationale"] = first_rule["rationale"]
+    project = _write_project(
+        tmp_path,
+        routes=[
+            first,
+            second,
+            _route("customer.search"),
+            _route("report.list", domain="report", operation_id="report.list"),
+        ],
+        exclusion_rules=[first_rule, second_rule],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 0
+    warning = next(
+        item
+        for item in payload["diagnostics"]
+        if item["code"] == "ACC_SCOPE_EXCLUSION_TEMPLATE_REUSED"
+    )
+    assert warning["severity"] == "warning"
