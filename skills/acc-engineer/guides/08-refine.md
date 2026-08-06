@@ -9,16 +9,16 @@
 
 ## 动作
 
-1. 对比 System Map、Operations、Capabilities 和 Evals，识别未覆盖的高价值只读能力。
+1. 独立对比三层覆盖：`source_scope` 路由 disposition、Operation 对 `scope_route_ids` 的追溯、Capability/Eval 场景。
 2. 查找一接口一工具、孤立 Operation、重复 Capability、无正常/负例、权限 Evidence 不足和过宽 Schema。
 3. 查找 Agent 不应获得的参数、未脱敏字段和可以进一步收紧的权限/租户边界。
 4. 仅依据现有 Evidence 改进 ACC 项目；需要新事实时返回 Analyze，而不是推测。
-5. 每轮改进后完整重跑 Validate 和 Test，并比较 Coverage 与风险变化。
+5. 每轮改进后重跑 scope audit、Validate 和 Test，并分别比较三层 Coverage 与风险变化。
 
 ## 门禁
 
 - 改进未引入写接口、生产依赖、Secret、业务特例或原系统修改。
-- Coverage 不倒退，所有 Validate/Test 门禁仍通过，失败没有被删除或弱化。
+- 源路由、Operation 追溯和 Eval 三层 Coverage 都不倒退，所有 Validate/Test 门禁仍通过。
 - 高风险、Evidence 缺口和未确认事项已修复或明确保留为风险。
 - 候选保持业务级组合，避免为了指标增加低价值工具。
 

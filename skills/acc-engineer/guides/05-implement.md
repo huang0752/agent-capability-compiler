@@ -9,7 +9,7 @@
 
 ## 动作
 
-1. 创建 Evidence 引用、Operations、Capabilities、Policies、Evals 和 Fake fixtures。
+1. 仅为 disposition 是 `planned` 或 `composed` 的路由创建 Evidence 引用、Operations、Capabilities、Policies、Evals 和 Fake fixtures。
 2. 为 Operation 定义严格输入/输出 Schema、`GET`/`HEAD` 请求、SecretRef、Scope、超时和响应大小限制。
 3. 使用受限工作流步骤 `call/pick/map/filter/assert/redact/branch/parallel/foreach/emit`；引用、循环和并发保持静态有界。
 4. 将敏感字段限制落实到 Policy、redact 和 Eval 的 `forbidden_fields`。
@@ -21,6 +21,7 @@
 - 不包含写方法、动态代码、Shell、`eval`、任意导入或运行时生成请求。
 - 定义中只有 SecretRef 名称，没有生产 Secret；fixtures 不复制生产数据。
 - 原系统文件、数据库、认证和部署修改数量为零。
+- 每个实现的 Operation 都可经 `scope_route_ids` 回溯到 `planned`/`composed` 路由。
 
 ## 输出
 

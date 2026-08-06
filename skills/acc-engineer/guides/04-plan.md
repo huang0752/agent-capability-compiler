@@ -9,11 +9,11 @@
 
 ## 动作
 
-1. 选择高价值只读场景，并判断哪些接口需要组合成一个业务能力。
-2. 区分应由 Agent 推理的信息与 Runtime 必须确定性执行的工作流。
-3. 规划输入/输出 Schema、隐藏参数、字段脱敏、Policy、权限和租户约束。
-4. 为每个 Capability 设计正常、缺失/空数据和错误场景；单资源读取若以 404 表达缺失，可将 `empty` 明确记为 `not_applicable` 并由 not-found Eval 覆盖。权限相关能力必须包含 401/403 或跨租户负例，未受保护能力应移除/置空该计划项。
-5. 识别低价值、重复、高风险或近似“一接口一工具”的候选并移除或合并。
+1. 为每条 eligible 路由分配 `planned`、`composed`、`excluded` 或 `blocked_on_evidence`；只有声明范围允许时才使用 `out_of_scope`。
+2. 根据 `scope-inventory.yaml` 重算并对账 `coverage-baseline.json` 的 `source_scope`，再选择高价值场景与组合能力。
+3. 区分 Agent 推理与 Runtime 确定性工作流，规划窄 Schema、Policy、权限和租户约束。
+4. 为每个 Capability 设计正常、缺失/空数据和错误场景；权限相关能力必须包含权限或跨租户负例。
+5. 移除或合并低价值、重复、高风险或“一接口一工具”候选。
 
 ## 门禁
 
@@ -21,6 +21,7 @@
 - 每个 Capability 至少有一个正常 Eval；权限相关能力有明确权限负例。
 - Schema 尽量窄，Secret、认证 Header、动态 URL 和不应由 Agent 控制的参数均不暴露。
 - 计划不依赖生产环境、生产数据写入或原系统代码修改。
+- `source_scope` 与路由 disposition 统计一致，无未分类 eligible 路由。
 
 ## 输出
 

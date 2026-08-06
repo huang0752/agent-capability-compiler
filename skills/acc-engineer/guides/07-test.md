@@ -9,11 +9,12 @@
 
 ## 动作
 
-1. 运行 `acc test contract --json`、`acc test runtime --json` 和 `acc test e2e --json`。
+1. 运行 `acc test contract --json`、`acc test runtime --json` 和 `acc test e2e --json`；Fake Runtime/E2E 结果标记为 `offline_candidate`。
 2. 覆盖正常、空数据、404、403、跨租户、字段脱敏、超时、响应过大和稳定错误映射。
 3. 验证 expected calls 的操作、参数和顺序，以及输入/输出 JSON Schema。
 4. 验证 MCP `tools/list` 与 `tools/call`，并检查协议输出、日志和报告不包含 Secret 或完整上游响应。
 5. 检查实际结果和 diagnostics；不得隐藏失败、跳过项或仅报告通过数量。
+6. 仅当用户明确授权连接本地/测试原系统，且源连接套件真实通过时，才标记 `source_connected_verified`。
 
 ## 门禁
 
@@ -21,10 +22,11 @@
 - `forbidden_fields` 不出现在结果中，Token 不出现在工具参数、日志或报告中。
 - 测试只使用 Fake/隔离环境和非生产 fixtures，不调用生产环境或写接口。
 - 原系统只读基线无变化；所有失败和未覆盖项均如实记录。
+- `offline_candidate` 与 `source_connected_verified` 严格分开，两者都不得表述为生产验证。
 
 ## 输出
 
-- 可复查的测试证据、失败诊断和覆盖明细，供 Refine 与最终 `test-report.json` 使用。
+- 含 validation level（`offline_candidate` 或 `source_connected_verified`）的测试证据、失败诊断和覆盖明细。
 
 ## 停止条件
 

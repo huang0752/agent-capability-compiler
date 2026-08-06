@@ -16,6 +16,13 @@ Build business-level, read-only agent capabilities from checkout evidence. Treat
 
 If the request is only to audit or refine an existing ACC project, still run Preflight, then enter the relevant phase and preserve the same handoff gates.
 
+## Scope and validation truth
+
+- When an existing-system request does not specify range, default to `system_readonly_complete`.
+- `pilot` is allowed 只有用户明确提出 MVP/试点范围并记录其确认时；不得为加快交付自行缩小范围。
+- First perform 浅层全局发现 to establish the route denominator, then use bounded `--include` paths for deep Evidence capture. An include list is never the discovery denominator.
+- Label Fake Runtime/E2E results `offline_candidate`. Use `source_connected_verified` only after an explicitly authorized local/test source connection succeeds; neither label proves production behavior.
+
 ## Non-negotiable boundaries
 
 - Never modify, format, generate into, restart, migrate, seed, deploy, or commit the source system.
@@ -30,12 +37,12 @@ If the request is only to audit or refine an existing ACC project, still run Pre
 
 | Phase | Read | Required output or gate |
 | --- | --- | --- |
-| 0 Preflight | [01-preflight.md](guides/01-preflight.md) | Safe paths, tool availability, stop/go decision |
-| 1 Analyze | [02-analyze.md](guides/02-analyze.md) | `system-map.yaml`, `analysis-report.md`, captured evidence |
+| 0 Preflight | [01-preflight.md](guides/01-preflight.md) | Safe paths, declared scope mode, stop/go decision |
+| 1 Analyze | [02-analyze.md](guides/02-analyze.md) | Global route inventory, `system-map.yaml`, captured evidence |
 | 2 Model | [03-model.md](guides/03-model.md) | Domain, entities, permissions, tenant boundary, unknowns |
 | 3 Plan | [04-plan.md](guides/04-plan.md) | `capability-plan.yaml`, `coverage-baseline.json` |
 | 4 Implement | [05-implement.md](guides/05-implement.md) | Operations, Capabilities, Policies, Evals, fixtures |
-| 5 Validate | [06-validate.md](guides/06-validate.md) | JSON diagnostics inspected and resolved |
+| 5 Validate | [06-validate.md](guides/06-validate.md) | Scope audit passes before ACC diagnostics |
 | 6 Test | [07-test.md](guides/07-test.md) | Contract, runtime, and E2E results inspected |
 | 7 Refine | [08-refine.md](guides/08-refine.md) | Coverage and design risks reduced; tests rerun |
 | 8 Handoff | [09-handoff.md](guides/09-handoff.md) | Review bundle and explicit validation limits |
@@ -48,6 +55,8 @@ Use the bundled scripts instead of recreating fragile checks:
 - `scripts/verify_read_only_workspace.py` — prove source/ACC separation and detect source changes.
 - `scripts/inventory.py` — bounded, non-symlink source inventory.
 - `scripts/evidence_capture.py` — atomically capture bounded evidence into the ACC project.
+- `scripts/scope_audit.py` — audit scope mode, route dispositions, counts, and cross-artifact references.
+- `scripts/artifact_manifest.py` — create a deterministic content-free manifest for a non-Git ACC project.
 - `scripts/summarize_diagnostics.py` — summarize ACC JSON diagnostics without hiding failures.
 
 For large existing repositories, pass repeatable workspace-relative `--include` values to
@@ -67,6 +76,7 @@ Copy and replace the placeholders in `templates/`; never submit a placeholder as
 From the ACC project directory, inspect every JSON result:
 
 ```bash
+python3 <skill>/scripts/scope_audit.py --project . > scope-audit-report.json
 acc validate --json
 acc compile --check --json
 acc coverage --json
@@ -75,8 +85,8 @@ acc test runtime --json
 acc test e2e --json
 ```
 
-Then build the pack twice and compare SHA-256 values. A zero exit code is not sufficient evidence if the result contains findings or skipped coverage.
+The scope audit is a required gate and must pass before `acc validate`. Then build the pack twice and compare SHA-256 values. A zero exit code is not sufficient evidence if the result contains findings or skipped coverage.
 
 ## Completion
 
-Finish only after Phase 8 produces `HANDOFF.md`, `coverage-report.json`, `test-report.json`, `risk-report.json`, and `candidate.diff`. State what was not exercised, stop, and wait for human Git review.
+Finish only after Phase 8 produces `HANDOFF.md`, `scope-audit-report.json`, `coverage-report.json`, `test-report.json`, and `risk-report.json`, plus `candidate.diff` for a Git ACC project or `artifact-manifest.json` for a non-Git ACC project. State the scope mode, validation level, and what was not exercised; then stop for human review.

@@ -9,9 +9,9 @@
 
 ## 动作
 
-1. 生成 `HANDOFF.md`、`coverage-report.json`、`test-report.json`、`risk-report.json` 和 `candidate.diff`。
-2. 说明能力范围、Evidence 来源、安全边界、实际执行的命令、通过/失败/未运行项和已知限制。
-3. 使用 Preflight 时完全相同的 `--include` 列表复核源快照；同时复核源仓库 Git commit 与工作区状态，验证 `candidate.diff` 仅包含 ACC 项目内容，原系统修改数量为零。
+1. 生成 `HANDOFF.md`、`scope-audit-report.json`、`coverage-report.json`、`test-report.json` 和 `risk-report.json`。
+2. 说明 scope mode、validation level（`offline_candidate` 或经授权的 `source_connected_verified`）、Evidence 来源、实际命令、失败/未运行项和已知限制。
+3. 使用 Preflight 时相同的深层 `--include` 列表复核源快照，并复核浅层全局发现分母。Git ACC 项目生成 `candidate.diff`；非 Git 项目运行 `artifact_manifest.py --project <acc_project> --output artifact-manifest.json`。
 4. 扫描交付物中的 Secret、生产地址、Token、完整上游响应和生产数据；发现即停止并清理。
 5. 给出人工复核顺序，但不自动提交、push、部署或访问生产环境。
 
@@ -21,6 +21,7 @@
 - 不隐藏失败，不把未运行测试写成通过，不把推测写成事实。
 - 原系统代码、数据库、认证和部署变更均为零；交付物不含 Secret 或写接口。
 - 风险与限制已明确，候选仍符合只读 MVP 和平台中立边界。
+- Git diff 或非 Git artifact manifest 已按项目类型生成，不混用两种交付证据。
 
 ## 输出
 
@@ -28,7 +29,8 @@
 - `coverage-report.json`
 - `test-report.json`
 - `risk-report.json`
-- `candidate.diff`
+- Git 项目：`candidate.diff`
+- 非 Git 项目：`artifact-manifest.json`
 
 ## 停止条件
 

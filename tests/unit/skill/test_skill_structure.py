@@ -53,6 +53,25 @@ def test_skill_has_required_platform_neutral_structure_without_placeholders() ->
             assert heading in text
 
 
+def test_skill_requires_explicit_scope_audit_and_validation_level() -> None:
+    skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+    harness = (SKILL / "HARNESS.md").read_text(encoding="utf-8")
+    guides = "\n".join(
+        path.read_text(encoding="utf-8") for path in (SKILL / "guides").glob("*.md")
+    )
+
+    assert "system_readonly_complete" in skill
+    assert "只有用户明确" in skill
+    assert "scope_audit.py" in skill
+    assert "浅层全局发现" in harness
+    assert "source_scope" in guides
+    assert "offline_candidate" in guides
+    assert "source_connected_verified" in guides
+    assert "artifact-manifest.json" in guides
+    assert (SKILL / "scripts" / "scope_audit.py").is_file()
+    assert (SKILL / "scripts" / "artifact_manifest.py").is_file()
+
+
 def test_openai_metadata_and_platform_wrappers_delegate_to_the_single_harness() -> None:
     metadata = _yaml(SKILL / "agents" / "openai.yaml")
     interface = metadata["interface"]

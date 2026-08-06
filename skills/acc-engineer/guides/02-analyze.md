@@ -9,9 +9,9 @@
 
 ## 动作
 
-1. 只读梳理业务模块、REST 路由、字段、权限、Scope、租户边界、错误状态和现有测试。
+1. 先对路由注册、OpenAPI 和客户端调用面做浅层全局发现，建立所有发现路由的 `scope-inventory.yaml`。
 2. 交叉核对源码、OpenAPI、调用方和测试；冲突必须记录，不能自行选择一个版本当作事实。
-3. 为 API 路径、方法、输入/输出字段、权限、租户、效果和错误结论捕获 Evidence。
+3. 只对可能形成 Evidence 的路径使用有界 `--include` 深入检查，为 API 路径、字段、权限、租户、效果和错误捕获 Evidence。
 4. Evidence 使用文件与行号、JSON Pointer、OpenAPI Operation 或内容摘要，并记录稳定摘要值。 bundled capture 脚本的行号是 locator，digest 始终覆盖整个有界文件，与 `acc freeze` 一致。
 5. 将无法确认的内容标为未知，不补造接口、字段或权限。
 
@@ -21,10 +21,12 @@
 - 只分析已有 `GET`/`HEAD`；不探测生产环境，不调用写接口，不接触生产 Secret。
 - 原系统只读基线无变化，所有分析产物均位于 ACC 项目目录。
 - 事实、冲突和推测已明确分开。
+- 全局发现分母独立于 Evidence `--include` 列表，每条路由都有稳定 ID。
 
 ## 输出
 
 - `system-map.yaml`
+- `scope-inventory.yaml`
 - `analysis-report.md`
 - `evidence/`
 
