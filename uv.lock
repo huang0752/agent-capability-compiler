@@ -59,6 +59,8 @@ dependencies = [
     { name = "jsonschema" },
     { name = "mcp" },
     { name = "pydantic" },
+    { name = "starlette" },
+    { name = "uvicorn" },
 ]
 
 [package.metadata]
@@ -66,8 +68,10 @@ requires-dist = [
     { name = "acc-core", editable = "packages/acc-core" },
     { name = "httpx", specifier = ">=0.28,<1" },
     { name = "jsonschema", specifier = ">=4.23,<5" },
-    { name = "mcp", specifier = ">=1.12,<2" },
+    { name = "mcp", specifier = ">=1.29,<2" },
     { name = "pydantic", specifier = ">=2.10,<3" },
+    { name = "starlette", specifier = ">=1.3,<2" },
+    { name = "uvicorn", specifier = ">=0.52,<1" },
 ]
 
 [[package]]

@@ -1,0 +1,195 @@
+from __future__ import annotations
+
+import pytest
+from pydantic import ValidationError
+
+from acc_runtime.context import PrincipalContext
+from acc_runtime.gateway.models import (
+    GatewaySessionRecord,
+    GatewaySessionStatus,
+    GatewaySettings,
+    SessionCreateRequest,
+    SessionCreateResponse,
+)
+
+
+def _context() -> PrincipalContext:
+    return PrincipalContext(
+        principal_id="user-a",
+        gateway_session_id="session-a",
+        target_system_id="system-a",
+        source_scopes={"read"},
+        deployment_scope_ceiling={"documents.read"},
+        scope_mapping={"read": {"documents.read"}},
+        tenant_context={"tenant_id": "tenant-a"},
+        auth_state_handle="auth-a",
+    )
+
+
+def test_gateway_settings_defaults_and_accepts_exact_allowlists() -> None:
+    settings = GatewaySettings(
+        allowed_hosts=("gateway.example.com", "gateway.example.com:8443"),
+        allowed_origins=("https://agent.example.com",),
+    )
+
+    assert settings.session_ttl_seconds == 3600
+    assert settings.max_sessions == 1000
+    assert settings.listen_host == "127.0.0.1"
+    assert settings.allowed_hosts == (
+        "gateway.example.com",
+        "gateway.example.com:8443",
+    )
+
+
+@pytest.mark.parametrize("ttl", [0, 86401])
+def test_gateway_settings_rejects_ttl_outside_safe_range(ttl: int) -> None:
+    with pytest.raises(ValidationError):
+        GatewaySettings(allowed_hosts=("localhost",), session_ttl_seconds=ttl)
+
+
+def test_gateway_settings_rejects_nonpositive_capacity() -> None:
+    with pytest.raises(ValidationError):
+        GatewaySettings(allowed_hosts=("localhost",), max_sessions=0)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("allowed_hosts", ()),
+        ("allowed_hosts", ("*",)),
+        ("allowed_hosts", ("https://gateway.example.com",)),
+        ("allowed_hosts", ("user@gateway.example.com",)),
+        ("allowed_hosts", ("gateway.example.com/path",)),
+        ("allowed_origins", ("*",)),
+        ("allowed_origins", ("https://user:secret@agent.example.com",)),
+        ("allowed_origins", ("https://agent.example.com/path",)),
+        ("allowed_origins", ("https://agent.example.com?next=/x",)),
+        ("allowed_origins", ("https://agent.example.com/#fragment",)),
+    ],
+)
+def test_gateway_settings_rejects_ambiguous_or_wildcard_allowlist_entries(
+    field: str,
+    value: tuple[str, ...],
+) -> None:
+    values: dict[str, object] = {"allowed_hosts": ("localhost",), field: value}
+    with pytest.raises(ValidationError):
+        GatewaySettings.model_validate(values)
+
+
+def test_gateway_settings_rejects_plaintext_non_loopback_listener() -> None:
+    with pytest.raises(ValidationError):
+        GatewaySettings(
+            listen_host="0.0.0.0",
+            tls_enabled=False,
+            allowed_hosts=("gateway.example.com",),
+        )
+
+
+def test_gateway_settings_accepts_tls_non_loopback_listener() -> None:
+    settings = GatewaySettings(
+        listen_host="0.0.0.0",
+        tls_enabled=True,
+        allowed_hosts=("gateway.example.com",),
+    )
+
+    assert settings.listen_host == "0.0.0.0"
+
+
+def test_session_create_request_only_accepts_identity_and_password() -> None:
+    request = SessionCreateRequest.model_validate(
+        {"identity": "a@example.com", "password": "top-secret"}
+    )
+
+    assert request.identity == "a@example.com"
+    assert request.password.get_secret_value() == "top-secret"
+    assert "top-secret" not in repr(request)
+    assert request.model_dump() == {"identity": "a@example.com"}
+
+    with pytest.raises(ValidationError):
+        SessionCreateRequest.model_validate(
+            {"identity": "a@example.com", "password": "secret", "scopes": ["admin"]}
+        )
+
+
+@pytest.mark.parametrize(
+    "invalid_values",
+    [
+        {"identity": "", "password": "validation-password-secret"},
+        {"identity": "a@example.com", "password": "", "unexpected": True},
+    ],
+)
+def test_session_create_validation_errors_never_echo_password(
+    invalid_values: dict[str, object],
+) -> None:
+    with pytest.raises(ValidationError) as caught:
+        SessionCreateRequest.model_validate(invalid_values)
+
+    assert "validation-password-secret" not in str(caught.value)
+
+
+def test_session_response_secret_is_one_shot_and_not_publicly_serialized() -> None:
+    response = SessionCreateResponse.model_validate(
+        {"gateway_token": "gateway-token-secret", "expires_in_seconds": 120}
+    )
+
+    assert response.gateway_token.get_secret_value() == "gateway-token-secret"
+    assert "gateway-token-secret" not in repr(response)
+    assert response.model_dump() == {"expires_in_seconds": 120}
+    assert response.one_time_payload() == {
+        "token": "gateway-token-secret",
+        "expires_in_seconds": 120,
+    }
+
+
+def test_gateway_session_record_hides_internal_identity_and_tokens() -> None:
+    record = GatewaySessionRecord(
+        session_id="session-a",
+        token_digest="a" * 64,
+        principal_context=_context(),
+        created_at=10.0,
+        expires_at=20.0,
+        status=GatewaySessionStatus.ACTIVE,
+    )
+
+    rendered = repr(record)
+    serialized = record.model_dump()
+    assert "user-a" not in rendered
+    assert "a" * 64 not in rendered
+    assert "user-a" not in str(serialized)
+    assert "a" * 64 not in str(serialized)
+    assert serialized == {
+        "session_id": "session-a",
+        "created_at": 10.0,
+        "expires_at": 20.0,
+        "status": GatewaySessionStatus.ACTIVE,
+    }
+
+
+def test_gateway_session_record_defensively_keeps_immutable_context() -> None:
+    tenant = {"tenant_id": "tenant-a", "nested": {"region": "east"}}
+    context = PrincipalContext(
+        principal_id="user-a",
+        gateway_session_id="session-a",
+        target_system_id="system-a",
+        source_scopes={"read"},
+        deployment_scope_ceiling={"documents.read"},
+        scope_mapping={"read": {"documents.read"}},
+        tenant_context=tenant,
+        auth_state_handle="auth-a",
+    )
+    record = GatewaySessionRecord(
+        session_id="session-a",
+        token_digest="a" * 64,
+        principal_context=context,
+        created_at=10.0,
+        expires_at=20.0,
+    )
+    tenant["tenant_id"] = "tenant-b"
+    nested = tenant["nested"]
+    assert isinstance(nested, dict)
+    nested["region"] = "west"
+
+    assert record.principal_context.tenant_context == {
+        "tenant_id": "tenant-a",
+        "nested": {"region": "east"},
+    }
