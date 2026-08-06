@@ -28,14 +28,11 @@ _TENANT_CONTEXT_PATH = re.compile(
 _CAMEL_ACRONYM_BOUNDARY = re.compile(r"([A-Z]+)([A-Z][a-z])")
 _CAMEL_WORD_BOUNDARY = re.compile(r"([a-z0-9])([A-Z])")
 _SEPARATOR_RUN = re.compile(r"[_-]+")
-_DENIED_TENANT_SEGMENTS = frozenset(
+_DENIED_TENANT_WORDS = frozenset(
     {
         "secret",
         "token",
-        "access_token",
         "password",
-        "header",
-        "headers",
         "authorization",
         "credential",
         "credentials",
@@ -43,14 +40,7 @@ _DENIED_TENANT_SEGMENTS = frozenset(
         "cookies",
         "jwt",
         "bearer",
-        "api_key",
-        "private_key",
         "csrf",
-        "refresh_token",
-        "auth_token",
-        "client_secret",
-        "session_token",
-        "set_cookie",
     }
 )
 
@@ -216,7 +206,7 @@ def resolve_context_binding(
         raise ValueError(f"context binding is not permitted: {reference}")
 
     path = reference.split(".")[1:]
-    if any(_normalized_segment(segment) in _DENIED_TENANT_SEGMENTS for segment in path):
+    if any(_segment_is_sensitive(segment) for segment in path):
         raise ValueError(f"context binding is not permitted: {reference}")
     if not isinstance(allowed_tenant_context_bindings, Collection) or isinstance(
         allowed_tenant_context_bindings,
@@ -240,6 +230,18 @@ def _normalized_segment(segment: str) -> str:
     with_acronym_boundaries = _CAMEL_ACRONYM_BOUNDARY.sub(r"\1_\2", segment)
     with_word_boundaries = _CAMEL_WORD_BOUNDARY.sub(r"\1_\2", with_acronym_boundaries)
     return _SEPARATOR_RUN.sub("_", with_word_boundaries).casefold()
+
+
+def _segment_is_sensitive(segment: str) -> bool:
+    normalized = _normalized_segment(segment)
+    words = frozenset(normalized.split("_"))
+    return (
+        normalized in {"header", "headers"}
+        or bool(words & _DENIED_TENANT_WORDS)
+        or {"api", "key"} <= words
+        or {"private", "key"} <= words
+        or {"set", "cookie"} <= words
+    )
 
 
 def _freeze_json(value: object) -> FrozenJsonValue:

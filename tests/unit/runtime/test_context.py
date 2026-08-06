@@ -310,6 +310,15 @@ def test_resolve_context_binding_fails_closed_for_missing_or_non_mapping_path(
         "tenant_context.identity.apiKey",
         "tenant_context.identity.privateKey",
         "tenant_context.request.Headers",
+        "tenant_context.identity.idToken",
+        "tenant_context.identity.oauthToken",
+        "tenant_context.identity.apiToken",
+        "tenant_context.identity.jwtToken",
+        "tenant_context.identity.passwordHash",
+        "tenant_context.identity.xApiKey",
+        "tenant_context.request.authorizationHeader",
+        "tenant_context.identity.privateSigningKey",
+        "tenant_context.response.setSecureCookie",
     ],
 )
 def test_resolve_context_binding_rejects_auth_scope_and_secret_paths(reference: str) -> None:
@@ -327,7 +336,14 @@ def test_resolve_context_binding_rejects_auth_scope_and_secret_paths(reference: 
 
 @pytest.mark.parametrize(
     "safe_segment",
-    ["secretary_id", "header_image", "tokenized_region"],
+    [
+        "secretary_id",
+        "secretaryId",
+        "header_image",
+        "headerImage",
+        "tokenized_region",
+        "tokenizedRegion",
+    ],
 )
 def test_resolve_context_binding_denylist_uses_exact_case_insensitive_segments(
     safe_segment: str,
