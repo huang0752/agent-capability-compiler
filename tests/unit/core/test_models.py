@@ -81,6 +81,47 @@ def test_project_models_the_milestone_one_contract() -> None:
     assert project.source_workspace.mode == "read_only"
     assert project.runtime.transport == ["stdio"]
     assert project.provider.base_url_ref == "CRM_BASE_URL"
+    assert project.provider.context_binding_allowlist == []
+
+
+def test_provider_accepts_sorted_unique_tenant_context_binding_allowlist() -> None:
+    document = project_document()
+    provider = deepcopy(document["provider"])
+    assert isinstance(provider, dict)
+    provider["context_binding_allowlist"] = [
+        "tenant_context.organization.region_id",
+        "tenant_context.secretary_id",
+    ]
+    document["provider"] = provider
+
+    project = models.Project.model_validate(document)
+
+    assert project.provider.context_binding_allowlist == [
+        "tenant_context.organization.region_id",
+        "tenant_context.secretary_id",
+    ]
+
+
+@pytest.mark.parametrize(
+    "allowlist",
+    [
+        ["tenant_context.tenant_id", "tenant_context.tenant_id"],
+        ["principal_id"],
+        ["tenant_context"],
+        ["tenant_context.z_field", "tenant_context.a_field"],
+    ],
+)
+def test_provider_rejects_duplicate_invalid_or_unsorted_context_binding_allowlist(
+    allowlist: list[str],
+) -> None:
+    document = project_document()
+    provider = deepcopy(document["provider"])
+    assert isinstance(provider, dict)
+    provider["context_binding_allowlist"] = allowlist
+    document["provider"] = provider
+
+    with pytest.raises(ValidationError, match="context_binding_allowlist"):
+        models.Project.model_validate(document)
 
 
 @pytest.mark.parametrize(
@@ -410,10 +451,6 @@ def test_operation_accepts_only_safe_context_binding_sources(source: str) -> Non
         "password",
         "header.authorization",
         "credential",
-        "tenant_context.access_token",
-        "tenant_context.profile.password_hash",
-        "tenant_context.headers.authorization",
-        "tenant_context.credential_ref",
         "tenant_context._private",
     ],
 )

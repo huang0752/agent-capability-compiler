@@ -578,26 +578,37 @@ def compile_project(project_root: str | Path = ".") -> CompilationReport:
         operation_id: set(operation.context_bindings)
         for operation_id, operation in validation.operations.items()
     }
+    context_binding_allowlist = set(validation.project.provider.context_binding_allowlist)
     for operation_id, operation in sorted(validation.operations.items()):
         properties = operation.input_schema.get("properties", {})
         declared_inputs = set(properties) if isinstance(properties, dict) else set()
         mapped_inputs = set(operation.http.path_parameters.values()) | set(
             operation.http.query_parameters.values()
         )
-        for target in sorted(operation.context_bindings):
-            if target in declared_inputs and target in mapped_inputs:
-                continue
+        for target, source in sorted(operation.context_bindings.items()):
             escaped_target = target.replace("~", "~0").replace("/", "~1")
-            _diagnostic(
-                diagnostics,
-                code="ACC_COMPILE_CONTEXT_BINDING_TARGET_INVALID",
-                message=(
-                    "A context binding target must be a declared Operation input mapped "
-                    f"to an HTTP path or query parameter: {target}"
-                ),
-                path=validation.operation_paths[operation_id],
-                pointer=f"/context_bindings/{escaped_target}",
-            )
+            if target not in declared_inputs or target not in mapped_inputs:
+                _diagnostic(
+                    diagnostics,
+                    code="ACC_COMPILE_CONTEXT_BINDING_TARGET_INVALID",
+                    message=(
+                        "A context binding target must be a declared Operation input mapped "
+                        f"to an HTTP path or query parameter: {target}"
+                    ),
+                    path=validation.operation_paths[operation_id],
+                    pointer=f"/context_bindings/{escaped_target}",
+                )
+            if source != "principal_id" and source not in context_binding_allowlist:
+                _diagnostic(
+                    diagnostics,
+                    code="ACC_COMPILE_CONTEXT_BINDING_SOURCE_NOT_ALLOWED",
+                    message=(
+                        "A tenant context binding source must be explicitly listed in "
+                        f"provider.context_binding_allowlist: {source}"
+                    ),
+                    path=validation.operation_paths[operation_id],
+                    pointer=f"/context_bindings/{escaped_target}",
+                )
     policy_ids = set(validation.policies)
     eval_targets = {eval_id: scenario.capability for eval_id, scenario in validation.evals.items()}
     dependencies: dict[str, set[str]] = {}

@@ -272,6 +272,16 @@ def test_schema_exports_all_models_as_draft_2020_12(tmp_path: Path) -> None:
         item for item in discriminators(project_schema) if item["propertyName"] == "kind"
     ]
     assert len(kind_discriminators) >= 2
+    allowlist_schema = project_schema["$defs"]["ProviderConfig"]["properties"][
+        "context_binding_allowlist"
+    ]
+    assert allowlist_schema["uniqueItems"] is True
+    assert allowlist_schema["items"]["pattern"].startswith("^tenant_context")
+
+    operation_schema = json.loads((output / "operation.schema.json").read_text(encoding="utf-8"))
+    binding_schema = operation_schema["properties"]["context_bindings"]["additionalProperties"]
+    assert "principal_id" in binding_schema["pattern"]
+    assert "tenant_context" in binding_schema["pattern"]
 
 
 def test_validate_accepts_an_evidence_bound_project(tmp_path: Path) -> None:

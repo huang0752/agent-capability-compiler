@@ -26,6 +26,14 @@ EnvironmentReference = Annotated[
     str,
     Field(min_length=1, pattern=r"^[A-Z][A-Z0-9_]*$"),
 ]
+_TENANT_CONTEXT_BINDING_PATTERN = (
+    r"^tenant_context\.[A-Za-z][A-Za-z0-9_-]*"
+    r"(?:\.[A-Za-z][A-Za-z0-9_-]*)*$"
+)
+TenantContextBindingReference = Annotated[
+    str,
+    Field(pattern=_TENANT_CONTEXT_BINDING_PATTERN),
+]
 ContextBindingReference = Annotated[
     str,
     Field(
@@ -35,16 +43,6 @@ ContextBindingReference = Annotated[
         )
     ),
 ]
-_SENSITIVE_CONTEXT_SEGMENTS = (
-    "authorization",
-    "cookie",
-    "credential",
-    "header",
-    "jwt",
-    "password",
-    "secret",
-    "token",
-)
 
 
 def _checked_json_schema(value: JsonObject) -> JsonObject:
@@ -221,6 +219,19 @@ class ProviderConfig(StrictModel):
     kind: Literal["http"]
     base_url_ref: EnvironmentReference
     auth: ProviderAuthConfig | None = None
+    context_binding_allowlist: list[TenantContextBindingReference] = Field(
+        default_factory=list,
+        json_schema_extra={"uniqueItems": True},
+    )
+
+    @field_validator("context_binding_allowlist")
+    @classmethod
+    def validate_context_binding_allowlist(cls, value: list[str]) -> list[str]:
+        if len(value) != len(set(value)):
+            raise ValueError("context_binding_allowlist entries must be unique")
+        if value != sorted(value):
+            raise ValueError("context_binding_allowlist entries must use sorted order")
+        return value
 
 
 class Project(StrictModel):
@@ -329,23 +340,6 @@ class Operation(StrictModel):
     @classmethod
     def validate_json_schema(cls, value: JsonObject) -> JsonObject:
         return _checked_json_schema(value)
-
-    @field_validator("context_bindings")
-    @classmethod
-    def validate_context_binding_sources(
-        cls,
-        value: dict[str, str],
-    ) -> dict[str, str]:
-        for source in value.values():
-            if source == "principal_id":
-                continue
-            for segment in source.removeprefix("tenant_context.").split("."):
-                lowered = segment.lower()
-                if any(marker in lowered for marker in _SENSITIVE_CONTEXT_SEGMENTS):
-                    raise ValueError(
-                        "context_bindings cannot reference sensitive tenant context segments"
-                    )
-        return value
 
     @model_validator(mode="after")
     def validate_parameter_mappings(self) -> Operation:
@@ -638,5 +632,6 @@ __all__ = [
     "RuntimeConfig",
     "SourceWorkspace",
     "StrictModel",
+    "TenantContextBindingReference",
     "WorkflowStep",
 ]

@@ -309,6 +309,15 @@
           "title": "Base Url Ref",
           "type": "string"
         },
+        "context_binding_allowlist": {
+          "items": {
+            "pattern": "^tenant_context\\.[A-Za-z][A-Za-z0-9_-]*(?:\\.[A-Za-z][A-Za-z0-9_-]*)*$",
+            "type": "string"
+          },
+          "title": "Context Binding Allowlist",
+          "type": "array",
+          "uniqueItems": true
+        },
         "kind": {
           "const": "http",
           "title": "Kind",

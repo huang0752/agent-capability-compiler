@@ -171,6 +171,13 @@ def _set_operation_context_binding(project: Path, target: str, source: str) -> N
     _write_yaml(operation_path, operation)
 
 
+def _set_context_binding_allowlist(project: Path, *sources: str) -> None:
+    project_path = project / "project.yaml"
+    document = yaml.safe_load(project_path.read_text(encoding="utf-8"))
+    document["provider"]["context_binding_allowlist"] = sorted(sources)
+    _write_yaml(project_path, document)
+
+
 def test_compile_project_accepts_context_binding_not_exposed_by_capability(
     tmp_path: Path,
 ) -> None:
@@ -187,6 +194,59 @@ def test_compile_project_accepts_context_binding_not_exposed_by_capability(
     assert report.ir is not None
     operation = cast(dict[str, Any], report.ir)["operations"]["crm.get_customer"]
     assert operation["context_bindings"] == {"customer_id": "principal_id"}
+
+
+@pytest.mark.parametrize(
+    "source",
+    ["tenant_context.session_id", "tenant_context.access_key"],
+)
+def test_compile_project_rejects_tenant_context_source_not_in_provider_allowlist(
+    tmp_path: Path,
+    source: str,
+) -> None:
+    project = _make_project(tmp_path)
+    _set_operation_context_binding(project, "customer_id", source)
+    capability = _load_capability(project)
+    capability["input_schema"]["properties"] = {}
+    capability["workflow"][0]["call"]["arguments"] = {}
+    _write_capability(project, capability)
+
+    report = compile_project(project)
+
+    diagnostic = next(
+        item
+        for item in report.diagnostics
+        if item.code == "ACC_COMPILE_CONTEXT_BINDING_SOURCE_NOT_ALLOWED"
+    )
+    assert diagnostic.pointer == "/context_bindings/customer_id"
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "tenant_context.customer_region",
+        "tenant_context.secretary_id",
+        "tenant_context.header_image",
+    ],
+)
+def test_compile_project_accepts_explicit_provider_context_binding_allowlist(
+    tmp_path: Path,
+    source: str,
+) -> None:
+    project = _make_project(tmp_path)
+    _set_context_binding_allowlist(project, source)
+    _set_operation_context_binding(project, "customer_id", source)
+    capability = _load_capability(project)
+    capability["input_schema"]["properties"] = {}
+    capability["workflow"][0]["call"]["arguments"] = {}
+    _write_capability(project, capability)
+
+    report = compile_project(project)
+
+    assert report.ok is True
+    assert not any(
+        item.code == "ACC_COMPILE_CONTEXT_BINDING_SOURCE_NOT_ALLOWED" for item in report.diagnostics
+    )
 
 
 def test_compile_project_rejects_context_binding_target_not_mapped_to_http(
