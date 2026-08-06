@@ -160,6 +160,16 @@ async def test_principal_mcp_arguments_cannot_choose_the_resolved_identity() -> 
         {"token": "source-token"},
         {"Authorization": "Bearer source-token"},
         {"password": "secret"},
+        {"accesstoken": "source-token"},
+        {"principalid": "forged"},
+        {"gatewaysessionid": "forged"},
+        {"authstatehandle": "forged"},
+        {"credentialref": "forged"},
+        {"effectivescopes": ["admin"]},
+        {"sourcescopes": ["admin"]},
+        {"refreshtoken": "source-token"},
+        {"idtoken": "source-token"},
+        {"tenantcontext": {"tenant_id": "forged"}},
     ],
 )
 async def test_principal_mcp_rejects_normalized_reserved_arguments_recursively(
@@ -185,7 +195,7 @@ def test_principal_mcp_rejects_tools_whose_schema_exposes_reserved_identity_inpu
             input_schema["properties"] = {
                 "tenant_id": {"type": "string"},
                 "user_id": {"type": "string"},
-                "GatewaySessionId": {"type": "string"},
+                "credentialref": {"type": "string"},
             }
             return tools
 
@@ -207,6 +217,18 @@ async def test_gateway_allows_unbound_business_tenant_and_user_ids() -> None:
         "tenant_id": "business-tenant",
         "user_id": "business-user",
     }
+
+
+@pytest.mark.asyncio
+async def test_gateway_reserved_matching_does_not_use_unsafe_substrings() -> None:
+    runtime = ContextualRuntime()
+    result = await PrincipalCapabilityMcpServer(runtime, resolver=Resolver()).call_tool(
+        "get_customer",
+        {"myaccesstoken_label": "ordinary-business-label"},
+        access_token=_access("a"),
+    )
+    assert result.isError is False
+    assert runtime.calls[0][1] == {"myaccesstoken_label": "ordinary-business-label"}
 
 
 def test_principal_server_uses_public_sdk_server_without_private_owner_maps() -> None:

@@ -86,6 +86,9 @@ _GATEWAY_RESERVED_ARGUMENTS = frozenset(
         "token",
     }
 )
+_GATEWAY_RESERVED_COMPACT_ARGUMENTS = {
+    name.replace("_", ""): name for name in _GATEWAY_RESERVED_ARGUMENTS
+}
 
 
 class CapabilityMcpServer:
@@ -324,9 +327,9 @@ def _reserved_argument_names(arguments: Mapping[str, object] | None) -> list[str
         if isinstance(current, Mapping):
             for key, value in current.items():
                 if isinstance(key, str):
-                    normalized = _normalized_argument_name(key)
-                    if normalized in _GATEWAY_RESERVED_ARGUMENTS:
-                        found.add(normalized)
+                    reserved = _reserved_argument_name(key)
+                    if reserved is not None:
+                        found.add(reserved)
                 pending.append(value)
         elif isinstance(current, (list, tuple)):
             pending.extend(current)
@@ -347,13 +350,20 @@ def _reserved_schema_property_names(schema: Mapping[str, object]) -> frozenset[s
             if isinstance(properties, Mapping):
                 for key in properties:
                     if isinstance(key, str):
-                        normalized = _normalized_argument_name(key)
-                        if normalized in _GATEWAY_RESERVED_ARGUMENTS:
-                            found.add(normalized)
+                        reserved = _reserved_argument_name(key)
+                        if reserved is not None:
+                            found.add(reserved)
             pending.extend(current.values())
         elif isinstance(current, (list, tuple)):
             pending.extend(current)
     return frozenset(found)
+
+
+def _reserved_argument_name(value: str) -> str | None:
+    normalized = _normalized_argument_name(value)
+    if normalized in _GATEWAY_RESERVED_ARGUMENTS:
+        return normalized
+    return _GATEWAY_RESERVED_COMPACT_ARGUMENTS.get(normalized.replace("_", ""))
 
 
 def _raise_mcp_cancelled() -> Never:
