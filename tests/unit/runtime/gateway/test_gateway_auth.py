@@ -5,6 +5,8 @@ import types
 from collections.abc import Iterator, Mapping
 
 import pytest
+from mcp.server.auth.middleware.auth_context import AuthContextMiddleware, get_access_token
+from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
 from mcp.server.auth.provider import AccessToken, TokenVerifier
 
 from acc_runtime.context import PrincipalContext
@@ -75,7 +77,8 @@ async def test_gateway_verifier_uses_public_sdk_contract_and_wall_clock_expiry()
     access = await verifier.verify_token("opaque-gateway-token")
 
     assert access is not None
-    assert access.token == "opaque-gateway-token"
+    assert access.token.startswith("acc-gateway-access-v1.")
+    assert access.token != "opaque-gateway-token"
     assert access.client_id == "project-a"
     assert access.subject == "session-a"
     assert access.scopes == ["customer.read"]
@@ -84,9 +87,30 @@ async def test_gateway_verifier_uses_public_sdk_contract_and_wall_clock_expiry()
     assert access.resource is None
     assert store.token_calls == ["opaque-gateway-token"]
     dumped = access.model_dump()
+    assert "opaque-gateway-token" not in repr(access)
+    assert "opaque-gateway-token" not in repr(dumped)
     assert "principal" not in repr(dumped).lower()
     assert "tenant" not in repr(dumped).lower()
     assert "source.read" not in repr(dumped)
+
+    observed: list[AccessToken | None] = []
+
+    async def app(scope: object, receive: object, send: object) -> None:
+        observed.append(get_access_token())
+
+    middleware = AuthContextMiddleware(app)
+    await middleware(
+        {"type": "http", "user": AuthenticatedUser(access)},
+        None,  # type: ignore[arg-type]
+        None,  # type: ignore[arg-type]
+    )
+    assert observed == [access]
+    assert "opaque-gateway-token" not in repr(observed)
+    assert not any(
+        "opaque-gateway-token" in value
+        for value in _object_graph(observed)
+        if isinstance(value, str)
+    )
 
 
 @pytest.mark.asyncio
@@ -254,13 +278,8 @@ async def test_principal_resolver_rejects_store_record_bound_to_another_session_
         ).resolve(access)
 
 
-def _reachable_values(error: BaseException) -> Iterator[object]:
-    pending: list[object] = []
-    traceback = error.__traceback__
-    while traceback:
-        if "/packages/acc-runtime/" in traceback.tb_frame.f_code.co_filename:
-            pending.extend(traceback.tb_frame.f_locals.values())
-        traceback = traceback.tb_next
+def _object_graph(*roots: object) -> Iterator[object]:
+    pending = list(roots)
     seen: set[int] = set()
     while pending:
         value = pending.pop()
@@ -289,6 +308,16 @@ def _reachable_values(error: BaseException) -> Iterator[object]:
             for slot in slots:
                 if isinstance(slot, str) and hasattr(value, slot):
                     pending.append(getattr(value, slot))
+
+
+def _reachable_values(error: BaseException) -> Iterator[object]:
+    pending: list[object] = []
+    traceback = error.__traceback__
+    while traceback:
+        if "/packages/acc-runtime/" in traceback.tb_frame.f_code.co_filename:
+            pending.extend(traceback.tb_frame.f_locals.values())
+        traceback = traceback.tb_next
+    yield from _object_graph(*pending)
 
 
 @pytest.mark.asyncio

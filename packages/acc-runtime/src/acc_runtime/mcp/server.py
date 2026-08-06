@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Never, Protocol, cast
@@ -55,6 +56,36 @@ class _McpCancelled:
 
 _MCP_CANCELLED = _McpCancelled()
 type _McpCallOutcome = types.CallToolResult | _McpCancelled
+
+_CAMEL_ACRONYM_BOUNDARY = re.compile(r"([A-Z]+)([A-Z][a-z])")
+_CAMEL_WORD_BOUNDARY = re.compile(r"([a-z0-9])([A-Z])")
+_NON_ALNUM_RUN = re.compile(r"[^A-Za-z0-9]+")
+_GATEWAY_RESERVED_ARGUMENTS = frozenset(
+    {
+        "access_token",
+        "auth_state_handle",
+        "authorization",
+        "bearer",
+        "cookie",
+        "cookies",
+        "credential",
+        "credential_ref",
+        "credentials",
+        "effective_scopes",
+        "gateway_session_id",
+        "id_token",
+        "jwt",
+        "password",
+        "principal",
+        "principal_id",
+        "refresh_token",
+        "scope",
+        "scopes",
+        "source_scopes",
+        "tenant_context",
+        "token",
+    }
+)
 
 
 class CapabilityMcpServer:
@@ -153,7 +184,7 @@ class PrincipalCapabilityMcpServer:
     def list_tools(self) -> list[types.Tool]:
         """Reuse the stable public tool projection without adding identity inputs."""
 
-        return _translate_tools(self.runtime.tools())
+        return _translate_tools(self.runtime.tools(), reject_reserved_arguments=True)
 
     async def call_tool(
         self,
@@ -182,6 +213,18 @@ class PrincipalCapabilityMcpServer:
         access_token: AccessToken | None,
     ) -> _McpCallOutcome:
         try:
+            reserved_arguments = _reserved_argument_names(arguments)
+            if reserved_arguments:
+                return CapabilityMcpServer._result(
+                    {
+                        "error": {
+                            "code": "ACC_GATEWAY_RESERVED_ARGUMENT",
+                            "status": 400,
+                            "details": {"argument_names": reserved_arguments},
+                        }
+                    },
+                    is_error=True,
+                )
             principal = await self.resolver.resolve(access_token)
             result = await self.runtime.call_with_context(
                 name,
@@ -224,7 +267,11 @@ class PrincipalCapabilityMcpServer:
         return server
 
 
-def _translate_tools(definitions: list[dict[str, object]]) -> list[types.Tool]:
+def _translate_tools(
+    definitions: list[dict[str, object]],
+    *,
+    reject_reserved_arguments: bool = False,
+) -> list[types.Tool]:
     tools: list[types.Tool] = []
     for definition in definitions:
         name = definition.get("name")
@@ -236,6 +283,8 @@ def _translate_tools(definitions: list[dict[str, object]]) -> list[types.Tool]:
             or not isinstance(output_schema, dict)
         ):
             raise TypeError("runtime tool metadata is invalid")
+        if reject_reserved_arguments and _reserved_schema_property_names(input_schema):
+            raise TypeError("runtime tool schema exposes a reserved Gateway argument")
         title = definition.get("title")
         description = definition.get("description")
         tools.append(
@@ -253,6 +302,58 @@ def _translate_tools(definitions: list[dict[str, object]]) -> list[types.Tool]:
             )
         )
     return tools
+
+
+def _normalized_argument_name(value: str) -> str:
+    with_acronym_boundaries = _CAMEL_ACRONYM_BOUNDARY.sub(r"\1_\2", value)
+    with_word_boundaries = _CAMEL_WORD_BOUNDARY.sub(r"\1_\2", with_acronym_boundaries)
+    return _NON_ALNUM_RUN.sub("_", with_word_boundaries).strip("_").casefold()
+
+
+def _reserved_argument_names(arguments: Mapping[str, object] | None) -> list[str]:
+    """Find reserved identity/auth names recursively without retaining their values."""
+
+    found: set[str] = set()
+    pending: list[object] = [arguments]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, Mapping):
+            for key, value in current.items():
+                if isinstance(key, str):
+                    normalized = _normalized_argument_name(key)
+                    if normalized in _GATEWAY_RESERVED_ARGUMENTS:
+                        found.add(normalized)
+                pending.append(value)
+        elif isinstance(current, (list, tuple)):
+            pending.extend(current)
+    return sorted(found)
+
+
+def _reserved_schema_property_names(schema: Mapping[str, object]) -> frozenset[str]:
+    found: set[str] = set()
+    pending: list[object] = [schema]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, Mapping):
+            properties = current.get("properties")
+            if isinstance(properties, Mapping):
+                for key in properties:
+                    if isinstance(key, str):
+                        normalized = _normalized_argument_name(key)
+                        if normalized in _GATEWAY_RESERVED_ARGUMENTS:
+                            found.add(normalized)
+            pending.extend(current.values())
+        elif isinstance(current, (list, tuple)):
+            pending.extend(current)
+    return frozenset(found)
 
 
 def _raise_mcp_cancelled() -> Never:

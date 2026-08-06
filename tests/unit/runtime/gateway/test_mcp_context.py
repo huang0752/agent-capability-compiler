@@ -137,8 +137,76 @@ async def test_principal_mcp_arguments_cannot_choose_the_resolved_identity() -> 
         {"principal_id": "b", "scope": "admin", "credential": "secret"},
         access_token=_access("a"),
     )
+    assert result.isError is True
+    assert result.structuredContent == {
+        "error": {
+            "code": "ACC_GATEWAY_RESERVED_ARGUMENT",
+            "status": 400,
+            "details": {
+                "argument_names": ["credential", "principal_id", "scope"],
+            },
+        }
+    }
+    assert runtime.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"gatewaySessionId": "forged"},
+        {"nested": {"Effective-Scopes": ["admin"]}},
+        {"items": [{"AUTH_STATE_HANDLE": "forged"}]},
+        {"token": "source-token"},
+        {"Authorization": "Bearer source-token"},
+        {"password": "secret"},
+    ],
+)
+async def test_principal_mcp_rejects_normalized_reserved_arguments_recursively(
+    arguments: Mapping[str, object],
+) -> None:
+    runtime = ContextualRuntime()
+    resolver = Resolver()
+    result = await PrincipalCapabilityMcpServer(runtime, resolver=resolver).call_tool(
+        "get_customer", arguments, access_token=_access("a")
+    )
+    assert result.isError is True
+    assert result.structuredContent["error"]["code"] == "ACC_GATEWAY_RESERVED_ARGUMENT"  # type: ignore[index]
+    assert resolver.calls == []
+    assert runtime.calls == []
+
+
+def test_principal_mcp_rejects_tools_whose_schema_exposes_reserved_identity_input() -> None:
+    class ConflictingRuntime(ContextualRuntime):
+        def tools(self) -> list[dict[str, object]]:
+            tools = super().tools()
+            input_schema = tools[0]["input_schema"]
+            assert isinstance(input_schema, dict)
+            input_schema["properties"] = {
+                "tenant_id": {"type": "string"},
+                "user_id": {"type": "string"},
+                "GatewaySessionId": {"type": "string"},
+            }
+            return tools
+
+    adapter = PrincipalCapabilityMcpServer(ConflictingRuntime(), resolver=Resolver())
+    with pytest.raises(TypeError, match="reserved Gateway argument"):
+        adapter.list_tools()
+
+
+@pytest.mark.asyncio
+async def test_gateway_allows_unbound_business_tenant_and_user_ids() -> None:
+    runtime = ContextualRuntime()
+    result = await PrincipalCapabilityMcpServer(runtime, resolver=Resolver()).call_tool(
+        "get_customer",
+        {"tenant_id": "business-tenant", "user_id": "business-user"},
+        access_token=_access("a"),
+    )
     assert result.isError is False
-    assert runtime.calls[0][2].principal_id == "a"
+    assert runtime.calls[0][1] == {
+        "tenant_id": "business-tenant",
+        "user_id": "business-user",
+    }
 
 
 def test_principal_server_uses_public_sdk_server_without_private_owner_maps() -> None:

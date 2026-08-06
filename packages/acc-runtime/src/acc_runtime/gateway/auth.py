@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import math
 import time
 from collections.abc import Callable
@@ -93,7 +94,7 @@ class GatewayTokenVerifier(TokenVerifier):
             ):
                 return None
             return AccessToken(
-                token=token,
+                token=_sdk_access_token_id(self._project_id, record.token_digest),
                 client_id=self._project_id,
                 scopes=sorted(context.effective_scopes),
                 expires_at=int(wall_now + remaining),
@@ -174,6 +175,18 @@ def _valid_access_identity(token: AccessToken | None, project_id: str) -> bool:
         and token.subject
         and token.claims == {"iss": "acc-gateway"}
     )
+
+
+def _sdk_access_token_id(project_id: str, token_digest: str) -> str:
+    """Build a non-credential SDK identifier from an already one-way Store digest."""
+
+    digest = hashlib.sha256(
+        b"acc-gateway-access-v1\0"
+        + project_id.encode("utf-8", errors="strict")
+        + b"\0"
+        + token_digest.encode("ascii", errors="strict")
+    ).hexdigest()
+    return f"acc-gateway-access-v1.{digest}"
 
 
 def _raise_cancelled() -> Never:
