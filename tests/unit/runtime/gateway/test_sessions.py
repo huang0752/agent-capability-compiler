@@ -241,7 +241,7 @@ async def test_revoke_invalidates_both_indexes_and_is_idempotent() -> None:
         clock=Clock(),
         token_generator=lambda: "a" * 43,
     )
-    token, _ = await store.create(
+    token, record = await store.create(
         session_id="session-a",
         principal_context=_context("a", "session-a"),
     )
@@ -253,6 +253,7 @@ async def test_revoke_invalidates_both_indexes_and_is_idempotent() -> None:
         await store.resolve_token(token)
     with pytest.raises(GatewaySessionInvalidError):
         await store.resolve_session_id("session-a")
+    assert await store.pop_expired_records() == (record,)
 
 
 @pytest.mark.anyio
@@ -292,7 +293,7 @@ async def test_expired_session_is_removed_and_capacity_can_be_reused() -> None:
         clock=clock,
         token_generator=lambda: next(generator),
     )
-    token_a, _ = await store.create(
+    token_a, record_a = await store.create(
         session_id="session-a",
         principal_context=_context("a", "session-a"),
     )
@@ -300,7 +301,8 @@ async def test_expired_session_is_removed_and_capacity_can_be_reused() -> None:
 
     with pytest.raises(GatewaySessionExpiredError):
         await store.resolve_token(token_a)
-    assert await store.purge_expired() == 0
+    assert await store.purge_expired() == 1
+    assert await store.pop_expired_records() == (record_a,)
 
     await store.create(
         session_id="session-b",
@@ -451,12 +453,18 @@ async def test_cancelled_token_resolution_drops_raw_tokens_and_store_graph() -> 
 
 
 @pytest.mark.anyio
-async def test_non_utf8_gateway_token_is_stably_rejected_without_leaking() -> None:
+@pytest.mark.parametrize("operation", ["resolve", "revoke"])
+async def test_non_utf8_gateway_token_is_stably_rejected_without_leaking(
+    operation: str,
+) -> None:
     invalid_token = "surrogate-token-secret-\ud800"
     store = InMemoryGatewaySessionStore(max_sessions=1, ttl_seconds=60, clock=Clock())
 
     with pytest.raises(GatewaySessionInvalidError) as caught:
-        await store.resolve_token(SecretValue(invalid_token))
+        if operation == "resolve":
+            await store.resolve_token(SecretValue(invalid_token))
+        else:
+            await store.revoke_token(SecretValue(invalid_token))
 
     assert caught.value.code == "ACC_GATEWAY_SESSION_INVALID"
     assert caught.value.__cause__ is None
@@ -542,7 +550,7 @@ async def test_source_refresh_boundary_requires_reauthentication_before_expiry()
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("operation", ["mark_reauth", "revoke"])
+@pytest.mark.parametrize("operation", ["mark_reauth", "revoke", "revoke_token"])
 async def test_cancelled_session_mutation_drops_store_token_graph(operation: str) -> None:
     token_a = base64.urlsafe_b64encode(b"a" * 32).rstrip(b"=").decode("ascii")
     token_b = base64.urlsafe_b64encode(b"b" * 32).rstrip(b"=").decode("ascii")
@@ -552,17 +560,18 @@ async def test_cancelled_session_mutation_drops_store_token_graph(operation: str
         clock=Clock(),
         token_generator=TokenGenerator(token_a, token_b),
     )
-    await store.create(
+    returned_a, _ = await store.create(
         session_id="session-a",
         principal_context=_context("a", "session-a"),
     )
     await store._lock.acquire()
-    call = (
-        store.mark_reauth_required("session-a")
-        if operation == "mark_reauth"
-        else store.revoke("session-a")
-    )
-    task = asyncio.create_task(call)
+    task: asyncio.Task[object]
+    if operation == "mark_reauth":
+        task = asyncio.create_task(store.mark_reauth_required("session-a"))
+    elif operation == "revoke":
+        task = asyncio.create_task(store.revoke("session-a"))
+    else:
+        task = asyncio.create_task(store.revoke_token(returned_a))
     await asyncio.sleep(0)
     task.cancel()
     store._lock.release()
@@ -725,6 +734,10 @@ async def test_reauth_wins_at_gateway_tie_but_expires_after_tie(
     clock.value = 105.000001
     with pytest.raises(GatewaySessionExpiredError):
         await store.resolve_token(token)
+    with pytest.raises(GatewaySessionExpiredError):
+        await store.resolve_session_id("session-a")
+    collected = await store.pop_expired_records()
+    assert [record.session_id for record in collected] == ["session-a"]
     with pytest.raises(GatewaySessionInvalidError):
         await store.resolve_session_id("session-a")
 
@@ -759,7 +772,7 @@ async def test_purge_removes_old_reauth_session_and_create_recovers_capacity() -
 
 
 @pytest.mark.anyio
-async def test_mark_reauth_after_gateway_ttl_expires_and_removes_session() -> None:
+async def test_mark_reauth_after_gateway_ttl_expires_but_retains_for_collection() -> None:
     clock = Clock()
     store = InMemoryGatewaySessionStore(
         max_sessions=1,
@@ -767,7 +780,7 @@ async def test_mark_reauth_after_gateway_ttl_expires_and_removes_session() -> No
         clock=clock,
         token_generator=lambda: "a" * 43,
     )
-    token, _ = await store.create(
+    token, record = await store.create(
         session_id="session-a",
         principal_context=_context("a", "session-a"),
     )
@@ -775,5 +788,158 @@ async def test_mark_reauth_after_gateway_ttl_expires_and_removes_session() -> No
 
     with pytest.raises(GatewaySessionExpiredError):
         await store.mark_reauth_required("session-a")
+    with pytest.raises(GatewaySessionExpiredError):
+        await store.resolve_token(token)
+    assert await store.pop_expired_records() == (record,)
+
+
+@pytest.mark.anyio
+async def test_expired_resolve_retains_record_until_revoke_token_collects_it() -> None:
+    clock = Clock()
+    store = InMemoryGatewaySessionStore(
+        max_sessions=1,
+        ttl_seconds=5,
+        clock=clock,
+        token_generator=lambda: "a" * 43,
+    )
+    token, record = await store.create(
+        session_id="session-a",
+        principal_context=_context("a", "session-a"),
+    )
+    clock.value = 106.0
+
+    with pytest.raises(GatewaySessionExpiredError):
+        await store.resolve_token(token)
+    assert await store.revoke_token(token) == record
+    assert await store.revoke_token(token) is None
     with pytest.raises(GatewaySessionInvalidError):
         await store.resolve_token(token)
+
+
+@pytest.mark.anyio
+async def test_expired_session_id_resolve_retains_record_for_lifecycle_revoke() -> None:
+    clock = Clock()
+    store = InMemoryGatewaySessionStore(
+        max_sessions=1,
+        ttl_seconds=5,
+        clock=clock,
+        token_generator=lambda: "a" * 43,
+    )
+    _, record = await store.create(
+        session_id="session-a",
+        principal_context=_context("a", "session-a"),
+    )
+    clock.value = 106.0
+
+    with pytest.raises(GatewaySessionExpiredError):
+        await store.resolve_session_id("session-a")
+    assert await store.revoke_session("session-a") == record
+
+
+@pytest.mark.anyio
+async def test_purge_and_create_capacity_return_every_removed_record_to_collector() -> None:
+    clock = Clock()
+    generator = _tokens("a" * 43, "b" * 43, "c" * 43)
+    store = InMemoryGatewaySessionStore(
+        max_sessions=1,
+        ttl_seconds=5,
+        clock=clock,
+        token_generator=lambda: next(generator),
+    )
+    _, record_a = await store.create(
+        session_id="session-a",
+        principal_context=_context("a", "session-a"),
+    )
+    clock.value = 106.0
+    assert await store.purge_expired() == 1
+    assert await store.pop_expired_records() == (record_a,)
+    assert await store.pop_expired_records() == ()
+
+    _, record_b = await store.create(
+        session_id="session-b",
+        principal_context=_context("b", "session-b"),
+    )
+    clock.value = 112.0
+    _, record_c = await store.create(
+        session_id="session-c",
+        principal_context=_context("c", "session-c"),
+    )
+
+    assert await store.pop_expired_records() == (record_b,)
+    assert (await store.resolve_session_id("session-c")) == record_c
+
+
+@pytest.mark.anyio
+async def test_close_returns_all_removed_records_once_through_collector() -> None:
+    generator = _tokens("a" * 43, "b" * 43)
+    store = InMemoryGatewaySessionStore(
+        max_sessions=2,
+        ttl_seconds=60,
+        clock=Clock(),
+        token_generator=lambda: next(generator),
+    )
+    _, record_a = await store.create(
+        session_id="session-a",
+        principal_context=_context("a", "session-a"),
+    )
+    _, record_b = await store.create(
+        session_id="session-b",
+        principal_context=_context("b", "session-b"),
+    )
+
+    await store.close()
+    await store.close()
+
+    collected = await store.pop_expired_records()
+    assert {record.session_id for record in collected} == {"session-a", "session-b"}
+    assert record_a in collected
+    assert record_b in collected
+    assert await store.pop_expired_records() == ()
+
+
+@pytest.mark.anyio
+async def test_cancelled_expired_collector_drops_store_token_graph() -> None:
+    token_a = base64.urlsafe_b64encode(b"a" * 32).rstrip(b"=").decode("ascii")
+    token_b = base64.urlsafe_b64encode(b"b" * 32).rstrip(b"=").decode("ascii")
+    store = InMemoryGatewaySessionStore(
+        max_sessions=2,
+        ttl_seconds=60,
+        clock=Clock(),
+        token_generator=TokenGenerator(token_a, token_b),
+    )
+    await store.create(
+        session_id="session-a",
+        principal_context=_context("a", "session-a"),
+    )
+    await store._lock.acquire()
+    collecting = asyncio.create_task(store.pop_expired_records())
+    await asyncio.sleep(0)
+    collecting.cancel()
+    store._lock.release()
+
+    with pytest.raises(asyncio.CancelledError) as caught:
+        await collecting
+
+    _assert_runtime_traceback_cannot_reach_secret(caught.value, token_a)
+    _assert_runtime_traceback_cannot_reach_secret(caught.value, token_b)
+
+
+@pytest.mark.anyio
+async def test_nonfinite_clock_does_not_collect_or_lose_expired_record() -> None:
+    clock = Clock()
+    store = InMemoryGatewaySessionStore(
+        max_sessions=1,
+        ttl_seconds=5,
+        clock=clock,
+        token_generator=lambda: "a" * 43,
+    )
+    _, record = await store.create(
+        session_id="session-a",
+        principal_context=_context("a", "session-a"),
+    )
+    clock.value = float("nan")
+    with pytest.raises(GatewaySessionInvalidError):
+        await store.pop_expired_records()
+
+    clock.value = 106.0
+    assert await store.pop_expired_records() == (record,)
