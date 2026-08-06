@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import types
 from collections.abc import Mapping
 from typing import Any
 
@@ -79,11 +80,16 @@ class _RecordingStrategy(HttpAuthStrategy):
         self.authorized: list[PrincipalContext] = []
         self.unauthorized: list[tuple[PrincipalContext, AuthAttempt]] = []
         self.generations: dict[AuthStateKey, int] = {}
+        self.active_generations: dict[AuthStateKey, int] = {}
 
     async def authorize(self, context: PrincipalContext) -> AuthAttempt:
         self.authorized.append(context)
-        generation = self.generations.get(context.auth_state_key, 0) + 1
-        self.generations[context.auth_state_key] = generation
+        key = context.auth_state_key
+        generation = self.active_generations.get(key)
+        if generation is None:
+            generation = self.generations.get(key, 0) + 1
+            self.generations[key] = generation
+            self.active_generations[key] = generation
         token = SecretValue(f"token-{context.principal_id}-{generation}")
         authentication = AuthenticationResult(token=token, token_type="Bearer")
         assert authentication.authorization is not None
@@ -102,13 +108,95 @@ class _RecordingStrategy(HttpAuthStrategy):
         failed_attempt: AuthAttempt,
     ) -> bool:
         self.unauthorized.append((context, failed_attempt))
+        if self.active_generations.get(context.auth_state_key) == failed_attempt.generation:
+            self.active_generations.pop(context.auth_state_key, None)
         return self.retry
 
     async def invalidate(self, auth_state_key: AuthStateKey) -> None:
-        self.generations.pop(auth_state_key, None)
+        self.active_generations.pop(auth_state_key, None)
 
     async def aclose(self) -> None:
         return None
+
+
+class _SensitiveStrategy(_RecordingStrategy):
+    def __init__(self, other_users_token: str, *, retry: bool = False) -> None:
+        super().__init__(retry=retry)
+        self.other_users_token = SecretValue(other_users_token)
+
+
+def _assert_runtime_exception_cannot_reach_secret(
+    error: BaseException,
+    *secrets: str,
+) -> None:
+    pending: list[object] = [error]
+    seen: set[int] = set()
+    while pending:
+        value = pending.pop()
+        if value is None or id(value) in seen:
+            continue
+        seen.add(id(value))
+        if isinstance(value, str):
+            for secret in secrets:
+                assert secret not in value
+            continue
+        if isinstance(value, bytes):
+            for secret in secrets:
+                assert secret.encode() not in value
+            continue
+        if isinstance(value, SecretValue):
+            pending.append(value.get_secret_value())
+            continue
+        if isinstance(value, httpx.Request):
+            pending.extend([value.content, value.headers, str(value.url)])
+            continue
+        if isinstance(value, httpx.Response):
+            pending.extend([value.headers, value.request])
+            if value.is_closed:
+                pending.append(value.content)
+            continue
+        if isinstance(value, Mapping):
+            pending.extend(value.keys())
+            pending.extend(value.values())
+            continue
+        if isinstance(value, (list, tuple, set, frozenset)):
+            pending.extend(value)
+            continue
+        if isinstance(value, BaseException):
+            pending.extend(
+                [
+                    value.args,
+                    value.__cause__,
+                    value.__context__,
+                    getattr(value, "details", None),
+                ]
+            )
+            traceback = value.__traceback__
+            while traceback is not None:
+                if "/packages/acc-runtime/" in traceback.tb_frame.f_code.co_filename:
+                    pending.extend(traceback.tb_frame.f_locals.values())
+                traceback = traceback.tb_next
+            continue
+        if isinstance(
+            value,
+            (
+                asyncio.Future,
+                asyncio.Lock,
+                types.FunctionType,
+                types.MethodType,
+                type,
+            ),
+        ):
+            continue
+        namespace = getattr(value, "__dict__", None)
+        if isinstance(namespace, dict):
+            pending.extend(namespace.values())
+        slots = getattr(type(value), "__slots__", ())
+        if isinstance(slots, str):
+            slots = (slots,)
+        for slot in slots:
+            if isinstance(slot, str) and hasattr(value, slot):
+                pending.append(getattr(value, slot))
 
 
 def _provider(
@@ -236,8 +324,66 @@ async def test_provider_maps_second_401_to_stable_unauthorized_without_looping()
     assert caught.value.details == {"operation": "crm.get_customer"}
     assert len(requests) == 2
     assert len(strategy.authorized) == 2
-    assert len(strategy.unauthorized) == 1
+    assert [attempt.generation for _, attempt in strategy.unauthorized] == [1, 2]
+    next_attempt = await strategy.authorize(_context("user-a"))
+    assert next_attempt.generation == 3
     assert "secret upstream body" not in str(caught.value.to_dict())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "through_compiled_call"),
+    [(401, False), (403, False), (403, True)],
+)
+async def test_provider_public_error_traceback_cannot_reach_any_principal_token(
+    status: int,
+    through_compiled_call: bool,
+) -> None:
+    current_token = "current-principal-token-must-not-leak"
+    other_users_token = "other-principal-token-must-not-leak"
+
+    class FixedSensitiveStrategy(_SensitiveStrategy):
+        async def authorize(self, context: PrincipalContext) -> AuthAttempt:
+            self.authorized.append(context)
+            authentication = AuthenticationResult(
+                token=SecretValue(current_token),
+                token_type="Bearer",
+            )
+            assert authentication.authorization is not None
+            return AuthAttempt(
+                headers={"Authorization": authentication.authorization},
+                state_key=context.auth_state_key,
+                generation=1,
+                authentication=authentication,
+            )
+
+    strategy = FixedSensitiveStrategy(other_users_token)
+    provider, client = _provider(
+        strategy,
+        lambda request: httpx.Response(status, text="private upstream response"),
+    )
+    try:
+        with pytest.raises(ACCRuntimeError) as caught:
+            if through_compiled_call:
+                await provider.call(
+                    _operation().model_dump(mode="json"),
+                    {"customer_id": "one"},
+                    _context("user-a"),
+                )
+            else:
+                await provider.execute(
+                    _operation(),
+                    {"customer_id": "one"},
+                    principal_context=_context("user-a"),
+                )
+    finally:
+        await client.aclose()
+
+    _assert_runtime_exception_cannot_reach_secret(
+        caught.value,
+        current_token,
+        other_users_token,
+    )
 
 
 @pytest.mark.asyncio

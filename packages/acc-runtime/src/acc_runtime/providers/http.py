@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
 import os
 from collections.abc import Mapping
-from typing import Protocol, cast
+from dataclasses import dataclass
+from typing import Never, Protocol, cast
 from urllib.parse import quote, urlencode, urlsplit
 
 import httpx
@@ -21,6 +23,22 @@ from acc_runtime.credentials import SecretValue, resolve_secret
 from acc_runtime.errors import RuntimeError
 
 LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class _ProviderFailure:
+    error_type: type[RuntimeError]
+    message: str
+    details: Mapping[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class _Cancelled:
+    pass
+
+
+_CANCELLED = _Cancelled()
+type _ProviderOutcome = JsonValue | _ProviderFailure | _Cancelled
 
 
 class HttpBaseUrlError(RuntimeError):
@@ -133,14 +151,41 @@ class HttpProvider:
     ) -> JsonValue:
         """Operation-caller protocol used by the generic workflow executor."""
 
+        provider = self
+        outcome = await provider._call_outcome(
+            operation,
+            arguments,
+            principal_context,
+        )
+        if not isinstance(outcome, (_ProviderFailure, _Cancelled)):
+            return outcome
+        failure = outcome
+        del outcome
+        del operation
+        del arguments
+        del principal_context
+        del provider
+        del self
+        _raise_provider_failure(failure)
+
+    async def _call_outcome(
+        self,
+        operation: Mapping[str, object],
+        arguments: Mapping[str, JsonValue],
+        principal_context: PrincipalContext | None,
+    ) -> _ProviderOutcome:
         try:
             definition = Operation.model_validate(operation)
-        except ValidationError as exc:
-            raise HttpOperationError("compiled HTTP operation is invalid") from exc
-        return await self.execute(
+        except ValidationError:
+            return _ProviderFailure(
+                error_type=HttpOperationError,
+                message="compiled HTTP operation is invalid",
+                details={},
+            )
+        return await self._execute_outcome(
             definition,
             arguments,
-            principal_context=principal_context,
+            principal_context,
         )
 
     async def execute(
@@ -152,6 +197,67 @@ class HttpProvider:
     ) -> JsonValue:
         """Validate, execute, bound, decode, and validate one HTTP response."""
 
+        provider = self
+        outcome = await provider._execute_outcome(
+            operation,
+            arguments,
+            principal_context,
+        )
+        if not isinstance(outcome, (_ProviderFailure, _Cancelled)):
+            return outcome
+        failure = outcome
+        del outcome
+        del operation
+        del arguments
+        del principal_context
+        del provider
+        del self
+        _raise_provider_failure(failure)
+
+    async def _execute_outcome(
+        self,
+        operation: Operation,
+        arguments: Mapping[str, JsonValue],
+        principal_context: PrincipalContext | None,
+    ) -> _ProviderOutcome:
+        try:
+            return await self._execute_operation(operation, arguments, principal_context)
+        except asyncio.CancelledError:
+            return _CANCELLED
+        except RuntimeError as error:
+            return _ProviderFailure(
+                error_type=type(error),
+                message="runtime request failed",
+                details=dict(error.details),
+            )
+        except httpx.TimeoutException:
+            LOGGER.warning("HTTP operation timed out operation=%s", operation.id)
+            return _ProviderFailure(
+                error_type=HttpTimeoutError,
+                message="upstream request timed out",
+                details={"operation": operation.id, "phase": "operation"},
+            )
+        except httpx.RequestError:
+            LOGGER.warning("HTTP operation failed operation=%s", operation.id)
+            return _ProviderFailure(
+                error_type=HttpRequestError,
+                message="upstream request failed",
+                details={"operation": operation.id},
+            )
+        except Exception:
+            LOGGER.warning("HTTP operation failed operation=%s", operation.id)
+            return _ProviderFailure(
+                error_type=HttpRequestError,
+                message="upstream request failed",
+                details={"operation": operation.id},
+            )
+
+    async def _execute_operation(
+        self,
+        operation: Operation,
+        arguments: Mapping[str, JsonValue],
+        principal_context: PrincipalContext | None,
+    ) -> JsonValue:
         self._validate_schema(operation.input_schema, arguments, operation, input_value=True)
         base_url = self._fixed_base_url(operation)
         if operation.http.method not in {"GET", "HEAD"}:
@@ -294,6 +400,10 @@ class HttpProvider:
         try:
             return await self._send(client, operation, url, retry_headers)
         except _OperationUnauthorized:
+            await self._auth_strategy.on_unauthorized(
+                principal_context,
+                retry_attempt,
+            )
             raise AuthUnauthorizedError(
                 "source authentication is unauthorized",
                 details={"operation": operation.id},
@@ -554,3 +664,9 @@ __all__ = [
 
 class _OperationUnauthorized(Exception):
     """Internal response signal that never retains response content."""
+
+
+def _raise_provider_failure(failure: _ProviderFailure | _Cancelled) -> Never:
+    if isinstance(failure, _Cancelled):
+        raise asyncio.CancelledError from None
+    raise failure.error_type(failure.message, details=failure.details) from None
