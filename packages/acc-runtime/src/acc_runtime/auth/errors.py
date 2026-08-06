@@ -4,73 +4,85 @@ from acc_runtime.errors import RuntimeError
 
 
 class AuthError(RuntimeError):
-    """Base error for provider-level authentication."""
-
-    code = "ACC_RUNTIME_AUTH_ERROR"
-    status = 502
-
-
-class AuthConfigurationError(AuthError):
-    """The resolved authentication endpoint is not a fixed HTTP origin."""
+    """Base class whose code remains inside the reviewed auth taxonomy."""
 
     code = "ACC_RUNTIME_AUTH_CONFIGURATION_INVALID"
     status = 500
 
 
-class AuthCredentialError(AuthError):
-    """A credential source returned empty or malformed secret material."""
+class AuthConfigurationError(AuthError):
+    """The resolved authentication configuration is unsafe or inconsistent."""
 
-    code = "ACC_RUNTIME_AUTH_CREDENTIAL_INVALID"
+    code = "ACC_RUNTIME_AUTH_CONFIGURATION_INVALID"
     status = 500
 
 
-class AuthLoginRejectedError(AuthError):
-    """The source system rejected a login request."""
+class AuthSecretMissingError(AuthError):
+    """Required authentication secret material is unavailable."""
 
-    code = "ACC_RUNTIME_AUTH_LOGIN_REJECTED"
-    status = 401
+    code = "ACC_RUNTIME_AUTH_SECRET_MISSING"
+    status = 500
 
 
-class AuthUpstreamError(AuthError):
-    """The source login endpoint returned an upstream failure."""
+class AuthCredentialError(AuthSecretMissingError):
+    """Compatibility name for invalid or unavailable secret material."""
 
-    code = "ACC_RUNTIME_AUTH_UPSTREAM_ERROR"
+
+class AuthLoginFailedError(AuthError):
+    """The bounded source login exchange failed."""
+
+    code = "ACC_RUNTIME_AUTH_LOGIN_FAILED"
     status = 502
 
 
-class AuthTimeoutError(AuthError):
+class AuthLoginRejectedError(AuthLoginFailedError):
+    """Compatibility subtype for a source login rejection."""
+
+    status = 401
+
+
+class AuthUpstreamError(AuthLoginFailedError):
+    """Compatibility subtype for a source login upstream failure."""
+
+
+class AuthRequestError(AuthLoginFailedError):
+    """Compatibility subtype for a source login network failure."""
+
+
+class AuthResponseInvalidError(AuthError):
+    """The source login response did not satisfy the declared contract."""
+
+    code = "ACC_RUNTIME_AUTH_RESPONSE_INVALID"
+    status = 502
+
+
+class AuthInvalidResponseError(AuthResponseInvalidError):
+    """Compatibility name for an invalid source login response."""
+
+
+class AuthUnauthorizedError(AuthError):
+    """The current source authentication is no longer authorized."""
+
+    code = "ACC_RUNTIME_AUTH_UNAUTHORIZED"
+    status = 401
+
+
+class AuthReauthenticationRequiredError(AuthUnauthorizedError):
+    """Compatibility subtype for one-shot sessions requiring a new login."""
+
+
+class AuthTimeoutError(RuntimeError):
     """The bounded source login request timed out."""
 
-    code = "ACC_RUNTIME_AUTH_TIMEOUT"
+    code = "ACC_RUNTIME_HTTP_TIMEOUT"
     status = 504
 
 
-class AuthRequestError(AuthError):
-    """The source login request could not be completed."""
-
-    code = "ACC_RUNTIME_AUTH_REQUEST_FAILED"
-    status = 502
-
-
-class AuthResponseTooLargeError(AuthError):
+class AuthResponseTooLargeError(RuntimeError):
     """The source login response exceeded its configured byte limit."""
 
-    code = "ACC_RUNTIME_AUTH_RESPONSE_TOO_LARGE"
+    code = "ACC_RUNTIME_HTTP_RESPONSE_TOO_LARGE"
     status = 502
-
-
-class AuthInvalidResponseError(AuthError):
-    """The source login response did not satisfy the declared contract."""
-
-    code = "ACC_RUNTIME_AUTH_INVALID_RESPONSE"
-    status = 502
-
-
-class AuthReauthenticationRequiredError(AuthError):
-    """A non-renewable session must be authenticated again by its caller."""
-
-    code = "ACC_RUNTIME_AUTH_REAUTHENTICATION_REQUIRED"
-    status = 401
 
 
 __all__ = [
@@ -78,10 +90,14 @@ __all__ = [
     "AuthCredentialError",
     "AuthError",
     "AuthInvalidResponseError",
+    "AuthLoginFailedError",
     "AuthLoginRejectedError",
     "AuthReauthenticationRequiredError",
     "AuthRequestError",
+    "AuthResponseInvalidError",
     "AuthResponseTooLargeError",
+    "AuthSecretMissingError",
     "AuthTimeoutError",
+    "AuthUnauthorizedError",
     "AuthUpstreamError",
 ]

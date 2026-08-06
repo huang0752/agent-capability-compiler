@@ -5,7 +5,6 @@ import gzip
 import json
 import logging
 from collections.abc import Callable, Mapping
-from contextlib import asynccontextmanager
 from typing import cast
 
 import httpx
@@ -18,14 +17,19 @@ from acc_core.models import (
 )
 from acc_runtime.auth import (
     AuthAttempt,
+    AuthConfigurationError,
     AuthCredentialError,
     AuthenticationResult,
     AuthInvalidResponseError,
+    AuthLoginFailedError,
     AuthLoginRejectedError,
     AuthReauthenticationRequiredError,
     AuthRequestError,
+    AuthResponseInvalidError,
     AuthResponseTooLargeError,
+    AuthSecretMissingError,
     AuthTimeoutError,
+    AuthUnauthorizedError,
     AuthUpstreamError,
     BearerSecretAuthStrategy,
     CredentialPair,
@@ -37,7 +41,7 @@ from acc_runtime.auth import (
     PasswordBearerAuthStrategy,
 )
 from acc_runtime.context import AuthStateKey, PrincipalContext
-from acc_runtime.credentials import SecretValue
+from acc_runtime.credentials import SecretNotFoundError, SecretValue
 
 
 class _Clock:
@@ -142,6 +146,65 @@ def _authorization(result: AuthenticationResult | AuthAttempt) -> str | None:
     return authorization.get_secret_value()
 
 
+def _assert_exception_graph_has_no_secret(error: BaseException, secret: str) -> None:
+    pending: list[object] = [error]
+    seen: set[int] = set()
+    while pending:
+        value = pending.pop()
+        if id(value) in seen:
+            continue
+        seen.add(id(value))
+        if isinstance(value, str):
+            assert secret not in value
+            continue
+        if isinstance(value, bytes):
+            assert secret.encode() not in value
+            continue
+        if isinstance(value, Mapping):
+            pending.extend(value.keys())
+            pending.extend(value.values())
+            continue
+        if isinstance(value, (list, tuple, set, frozenset)):
+            pending.extend(value)
+            continue
+        if isinstance(value, httpx.Request):
+            pending.extend([value.headers, value.content, str(value.url)])
+            continue
+        if isinstance(value, httpx.Response):
+            pending.extend([value.headers, value.request])
+            if value.is_closed:
+                pending.append(value.content)
+            continue
+        if isinstance(value, BaseException):
+            pending.extend(
+                [
+                    value.args,
+                    value.__cause__,
+                    value.__context__,
+                    getattr(value, "details", None),
+                    getattr(value, "request", None),
+                    getattr(value, "response", None),
+                    getattr(value, "doc", None),
+                ]
+            )
+
+
+def test_auth_error_codes_are_limited_to_the_reviewed_public_taxonomy() -> None:
+    assert AuthConfigurationError.code == "ACC_RUNTIME_AUTH_CONFIGURATION_INVALID"
+    assert AuthSecretMissingError.code == "ACC_RUNTIME_AUTH_SECRET_MISSING"
+    assert AuthCredentialError.code == "ACC_RUNTIME_AUTH_SECRET_MISSING"
+    assert AuthLoginFailedError.code == "ACC_RUNTIME_AUTH_LOGIN_FAILED"
+    assert AuthLoginRejectedError.code == "ACC_RUNTIME_AUTH_LOGIN_FAILED"
+    assert AuthUpstreamError.code == "ACC_RUNTIME_AUTH_LOGIN_FAILED"
+    assert AuthRequestError.code == "ACC_RUNTIME_AUTH_LOGIN_FAILED"
+    assert AuthResponseInvalidError.code == "ACC_RUNTIME_AUTH_RESPONSE_INVALID"
+    assert AuthInvalidResponseError.code == "ACC_RUNTIME_AUTH_RESPONSE_INVALID"
+    assert AuthUnauthorizedError.code == "ACC_RUNTIME_AUTH_UNAUTHORIZED"
+    assert AuthReauthenticationRequiredError.code == "ACC_RUNTIME_AUTH_UNAUTHORIZED"
+    assert AuthTimeoutError.code == "ACC_RUNTIME_HTTP_TIMEOUT"
+    assert AuthResponseTooLargeError.code == "ACC_RUNTIME_HTTP_RESPONSE_TOO_LARGE"
+
+
 @pytest.mark.asyncio
 async def test_no_auth_strategy_returns_no_headers_or_identity_metadata() -> None:
     strategy: HttpAuthStrategy = NoAuthStrategy()
@@ -165,7 +228,7 @@ async def test_bearer_secret_strategy_resolves_environment_each_time() -> None:
 
     assert _authorization(first) == "Bearer token-one"
     assert _authorization(second) == "Bearer token-two"
-    assert await strategy.on_unauthorized(_context(), first) is True
+    assert await strategy.on_unauthorized(_context(), first) is False
 
 
 @pytest.mark.asyncio
@@ -190,7 +253,7 @@ async def test_auth_strategies_wrap_missing_environment_secrets_in_auth_error_fa
     for strategy in (bearer, password):
         with pytest.raises(AuthCredentialError) as caught:
             await strategy.headers(_context())
-        assert caught.value.code == "ACC_RUNTIME_AUTH_CREDENTIAL_INVALID"
+        assert caught.value.code == "ACC_RUNTIME_AUTH_SECRET_MISSING"
         assert caught.value.details == {}
 
 
@@ -351,7 +414,7 @@ async def test_concurrent_first_login_is_single_flight_per_auth_state_key() -> N
         return httpx.Response(200, json={"access_token": "shared-token"})
 
     strategy = PasswordBearerAuthStrategy(
-        config=_config(),
+        config=_config(retry_on_unauthorized=True),
         base_url="https://crm.example.test",
         credential_source=_CredentialSource(),
         client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
@@ -379,7 +442,7 @@ async def test_concurrent_401_refreshes_once_and_old_generation_cannot_clear_new
         return httpx.Response(200, json={"access_token": f"token-{login_calls}"})
 
     strategy = PasswordBearerAuthStrategy(
-        config=_config(),
+        config=_config(retry_on_unauthorized=True),
         base_url="https://crm.example.test",
         credential_source=_CredentialSource(),
         client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
@@ -467,7 +530,7 @@ async def test_password_login_maps_4xx_to_safe_rejected_error(status_code: int) 
     with pytest.raises(AuthLoginRejectedError) as caught:
         await strategy.headers(_context())
 
-    assert caught.value.code == "ACC_RUNTIME_AUTH_LOGIN_REJECTED"
+    assert caught.value.code == "ACC_RUNTIME_AUTH_LOGIN_FAILED"
     assert caught.value.status == 401
     assert caught.value.to_dict()["details"] == {"upstream_status": status_code}
     assert "private-password" not in str(caught.value)
@@ -482,7 +545,7 @@ async def test_password_login_maps_5xx_to_safe_upstream_error(status_code: int) 
     with pytest.raises(AuthUpstreamError) as caught:
         await strategy.headers(_context())
 
-    assert caught.value.code == "ACC_RUNTIME_AUTH_UPSTREAM_ERROR"
+    assert caught.value.code == "ACC_RUNTIME_AUTH_LOGIN_FAILED"
     assert caught.value.status == 502
     assert caught.value.to_dict()["details"] == {"upstream_status": status_code}
 
@@ -501,10 +564,10 @@ async def test_password_login_maps_timeout_and_request_failures_to_stable_errors
     with pytest.raises(AuthRequestError) as request_caught:
         await request_failure.headers(_context())
 
-    assert timeout_caught.value.code == "ACC_RUNTIME_AUTH_TIMEOUT"
+    assert timeout_caught.value.code == "ACC_RUNTIME_HTTP_TIMEOUT"
     assert timeout_caught.value.status == 504
-    assert timeout_caught.value.details == {}
-    assert request_caught.value.code == "ACC_RUNTIME_AUTH_REQUEST_FAILED"
+    assert timeout_caught.value.details == {"phase": "login"}
+    assert request_caught.value.code == "ACC_RUNTIME_AUTH_LOGIN_FAILED"
     assert request_caught.value.status == 502
     assert request_caught.value.details == {}
 
@@ -527,8 +590,8 @@ async def test_password_login_rejects_declared_and_streamed_oversize_responses()
     for strategy in (declared, streamed):
         with pytest.raises(AuthResponseTooLargeError) as caught:
             await strategy.headers(_context())
-        assert caught.value.code == "ACC_RUNTIME_AUTH_RESPONSE_TOO_LARGE"
-        assert caught.value.details == {"limit_bytes": 64}
+        assert caught.value.code == "ACC_RUNTIME_HTTP_RESPONSE_TOO_LARGE"
+        assert caught.value.details == {"limit_bytes": 64, "phase": "login"}
 
 
 @pytest.mark.asyncio
@@ -576,7 +639,7 @@ async def test_password_login_rejects_non_json_without_echoing_body(body: bytes)
     with pytest.raises(AuthInvalidResponseError) as caught:
         await strategy.headers(_context())
 
-    assert caught.value.code == "ACC_RUNTIME_AUTH_INVALID_RESPONSE"
+    assert caught.value.code == "ACC_RUNTIME_AUTH_RESPONSE_INVALID"
     assert caught.value.details == {"reason": "invalid_json"}
     assert "private-password" not in str(caught.value)
 
@@ -701,10 +764,10 @@ async def test_password_login_does_not_follow_redirects_and_validates_final_orig
         async def __aexit__(self, *args: object) -> None:
             return None
 
-        @asynccontextmanager
-        async def stream(self, *args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+        async def send(self, *args: object, **kwargs: object) -> httpx.Response:
             assert kwargs["follow_redirects"] is False
-            yield httpx.Response(
+            assert kwargs["auth"] is None
+            return httpx.Response(
                 200,
                 json={"access_token": "token"},
                 request=httpx.Request("POST", "https://evil.example/token"),
@@ -764,8 +827,11 @@ async def test_password_login_never_persists_response_cookies_between_attempts()
             headers={"Set-Cookie": "source_session=private-cookie; Path=/"},
         )
 
-    strategy = _password_strategy(handler)
     context = _context()
+    strategy = _password_strategy(
+        handler,
+        config=_config(retry_on_unauthorized=True),
+    )
     first = await strategy.headers(context)
     assert await strategy.on_unauthorized(context, first) is True
     await strategy.headers(context)
@@ -792,6 +858,7 @@ async def test_gateway_authenticates_before_principal_context_then_binds_full_ke
 
     strategy = PasswordBearerAuthStrategy(
         config=_config(
+            credentials={"kind": "gateway_session"},
             principal_pointer="/principal",
             scopes_pointer="/permissions",
             tenant_pointer="/tenant",
@@ -814,7 +881,7 @@ async def test_gateway_authenticates_before_principal_context_then_binds_full_ke
     assert login_result.tenant_context == {"tenant_id": "tenant-a"}
 
     context = _context("user-a", session_id="session-a")
-    await strategy.bind_state(context.auth_state_key, login_result, renewable=False)
+    await strategy.bind_state(context.auth_state_key, login_result)
     bound_result = await strategy.headers(context)
 
     assert bound_result.authentication is login_result
@@ -826,7 +893,7 @@ async def test_gateway_authenticates_before_principal_context_then_binds_full_ke
 @pytest.mark.asyncio
 async def test_gateway_bind_rejects_bare_auth_state_handle() -> None:
     strategy = PasswordBearerAuthStrategy(
-        config=_config(),
+        config=_config(credentials={"kind": "gateway_session"}),
         base_url="https://crm.example.test",
         credential_source=None,
         client_factory=_client_factory(
@@ -838,7 +905,7 @@ async def test_gateway_bind_rejects_bare_auth_state_handle() -> None:
     )
 
     with pytest.raises(TypeError, match="AuthStateKey"):
-        await strategy.bind_state("auth-state-a", result, renewable=False)  # type: ignore[arg-type]
+        await strategy.bind_state("auth-state-a", result)  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio
@@ -851,7 +918,7 @@ async def test_one_shot_401_marks_reauthentication_required_without_another_logi
         return httpx.Response(200, json={"access_token": "source-token"})
 
     strategy = PasswordBearerAuthStrategy(
-        config=_config(),
+        config=_config(credentials={"kind": "gateway_session"}),
         base_url="https://crm.example.test",
         credential_source=None,
         client_factory=_client_factory(handler),
@@ -860,7 +927,7 @@ async def test_one_shot_401_marks_reauthentication_required_without_another_logi
         CredentialPair(identity=SecretValue("alice"), password=SecretValue("private-password"))
     )
     context = _context("user-a", session_id="session-a")
-    await strategy.bind_state(context.auth_state_key, result, renewable=False)
+    await strategy.bind_state(context.auth_state_key, result)
 
     bound_attempt = await strategy.headers(context)
     retryable = await strategy.on_unauthorized(context, bound_attempt)
@@ -868,7 +935,7 @@ async def test_one_shot_401_marks_reauthentication_required_without_another_logi
     assert retryable is False
     with pytest.raises(AuthReauthenticationRequiredError) as caught:
         await strategy.headers(context)
-    assert caught.value.code == "ACC_RUNTIME_AUTH_REAUTHENTICATION_REQUIRED"
+    assert caught.value.code == "ACC_RUNTIME_AUTH_UNAUTHORIZED"
     assert login_calls == 1
 
 
@@ -923,3 +990,336 @@ async def test_auth_secrets_do_not_enter_repr_logs_or_errors(
     assert password not in combined
     assert token not in combined
     assert "[REDACTED]" in combined
+
+
+@pytest.mark.asyncio
+async def test_safe_auth_errors_detach_secret_bearing_exception_graphs() -> None:
+    secret = "private-exception-secret"
+
+    class LeakySecretSource:
+        @property
+        def renewable(self) -> bool:
+            return True
+
+        async def acquire(self, _key: AuthStateKey) -> CredentialPair:
+            raise SecretNotFoundError(secret, details={"unsafe": secret})
+
+    secret_strategy = PasswordBearerAuthStrategy(
+        config=_config(),
+        base_url="https://crm.example.test",
+        credential_source=LeakySecretSource(),
+        client_factory=_client_factory(
+            lambda _request: httpx.Response(200, json={"access_token": "token"})
+        ),
+    )
+
+    def network_failure(_request: httpx.Request) -> httpx.Response:
+        unsafe_request = httpx.Request(
+            "POST",
+            "https://crm.example.test/api/auth/login",
+            headers={"Authorization": f"Bearer {secret}"},
+            content=secret,
+        )
+        raise httpx.ConnectError(secret, request=unsafe_request)
+
+    network_strategy = _password_strategy(network_failure)
+    timeout_strategy = _password_strategy(
+        lambda _request: (_ for _ in ()).throw(
+            httpx.ReadTimeout(
+                secret,
+                request=httpx.Request(
+                    "POST",
+                    "https://crm.example.test/api/auth/login",
+                    content=secret,
+                ),
+            )
+        )
+    )
+    json_strategy = _password_strategy(
+        lambda _request: httpx.Response(
+            200,
+            content=f'{{"access_token":"{secret}", broken'.encode(),
+        )
+    )
+
+    errors: list[BaseException] = []
+    with pytest.raises(AuthConfigurationError) as configuration_caught:
+        PasswordBearerAuthStrategy(
+            config=_config(),
+            base_url=f"https://crm.example.test:{secret}",
+            credential_source=_CredentialSource(),
+        )
+    errors.append(configuration_caught.value)
+    for strategy in (secret_strategy, network_strategy, timeout_strategy, json_strategy):
+        with pytest.raises(
+            (
+                AuthSecretMissingError,
+                AuthLoginFailedError,
+                AuthResponseInvalidError,
+                AuthTimeoutError,
+            )
+        ) as caught:
+            await strategy.headers(_context())
+        errors.append(caught.value)
+
+    for error in errors:
+        assert error.__cause__ is None
+        assert error.__context__ is None
+        _assert_exception_graph_has_no_secret(error, secret)
+
+
+@pytest.mark.asyncio
+async def test_failed_single_flight_shares_one_safe_error_then_allows_a_new_retry() -> None:
+    calls = 0
+    should_fail = True
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0.01)
+        if should_fail:
+            return httpx.Response(503)
+        return httpx.Response(200, json={"access_token": "recovered-token"})
+
+    strategy = PasswordBearerAuthStrategy(
+        config=_config(),
+        base_url="https://crm.example.test",
+        credential_source=_CredentialSource(),
+        client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    context = _context()
+
+    first_batch = await asyncio.gather(
+        *(strategy.headers(context) for _ in range(8)),
+        return_exceptions=True,
+    )
+    failures = [item for item in first_batch if isinstance(item, BaseException)]
+
+    assert len(failures) == 8
+    assert all(isinstance(item, AuthLoginFailedError) for item in failures)
+    assert len({id(item) for item in failures}) == 1
+    assert calls == 1
+
+    should_fail = False
+    recovered = await strategy.headers(context)
+
+    assert _authorization(recovered) == "Bearer recovered-token"
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_cancelled_waiter_does_not_cancel_shared_login_for_same_key() -> None:
+    calls = 0
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        started.set()
+        await release.wait()
+        return httpx.Response(200, json={"access_token": "shared-token"})
+
+    strategy = PasswordBearerAuthStrategy(
+        config=_config(),
+        base_url="https://crm.example.test",
+        credential_source=_CredentialSource(),
+        client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    context = _context()
+    cancelled = asyncio.create_task(strategy.headers(context))
+    survivor = asyncio.create_task(strategy.headers(context))
+    await started.wait()
+
+    cancelled.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled
+    release.set()
+    result = await survivor
+
+    assert _authorization(result) == "Bearer shared-token"
+    assert calls == 1
+
+
+def test_password_strategy_requires_credential_source_matching_config_kind() -> None:
+    factory = _client_factory(lambda _request: httpx.Response(200, json={"access_token": "token"}))
+    with pytest.raises(AuthConfigurationError):
+        PasswordBearerAuthStrategy(
+            config=_config(),
+            base_url="https://crm.example.test",
+            credential_source=None,
+            client_factory=factory,
+        )
+    with pytest.raises(AuthConfigurationError):
+        PasswordBearerAuthStrategy(
+            config=_config(),
+            base_url="https://crm.example.test",
+            credential_source=_CredentialSource(renewable=False),
+            client_factory=factory,
+        )
+    with pytest.raises(AuthConfigurationError):
+        PasswordBearerAuthStrategy(
+            config=_config(credentials={"kind": "gateway_session"}),
+            base_url="https://crm.example.test",
+            credential_source=_CredentialSource(),
+            client_factory=factory,
+        )
+
+
+@pytest.mark.asyncio
+async def test_default_password_401_does_not_replay_but_next_call_may_reauthenticate() -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={"access_token": f"token-{calls}"})
+
+    strategy = _password_strategy(handler, config=_config(retry_on_unauthorized=False))
+    context = _context()
+    failed_attempt = await strategy.headers(context)
+
+    assert await strategy.on_unauthorized(context, failed_attempt) is False
+    next_attempt = await strategy.headers(context)
+
+    assert next_attempt.generation == 2
+    assert _authorization(next_attempt) == "Bearer token-2"
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_login_request_does_not_inherit_factory_headers_cookies_or_auth() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "authorization" not in request.headers
+        assert "cookie" not in request.headers
+        assert "x-factory-default" not in request.headers
+        assert request.headers["accept"] == "application/json"
+        assert request.headers["content-type"] == "application/json"
+        assert set(request.headers) == {
+            "accept",
+            "content-length",
+            "content-type",
+            "host",
+        }
+        assert json.loads(request.content) == {
+            "email": "alice@example.test",
+            "password": "private-password",
+        }
+        return httpx.Response(200, json={"access_token": "token"})
+
+    def factory() -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            headers={
+                "Authorization": "Bearer inherited-token",
+                "X-Factory-Default": "unsafe",
+            },
+            cookies={"source_session": "inherited-cookie"},
+            auth=("inherited-user", "inherited-password"),
+            transport=httpx.MockTransport(handler),
+        )
+
+    strategy = PasswordBearerAuthStrategy(
+        config=_config(),
+        base_url="https://crm.example.test",
+        credential_source=_CredentialSource(),
+        client_factory=factory,
+    )
+
+    result = await strategy.headers(_context())
+
+    assert _authorization(result) == "Bearer token"
+
+
+@pytest.mark.asyncio
+async def test_all_cancelled_waiters_are_cleaned_and_a_later_call_can_retry() -> None:
+    calls = 0
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            started.set()
+            await release.wait()
+            return httpx.Response(503)
+        return httpx.Response(200, json={"access_token": "retried-token"})
+
+    strategy = PasswordBearerAuthStrategy(
+        config=_config(),
+        base_url="https://crm.example.test",
+        credential_source=_CredentialSource(),
+        client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    context = _context()
+    waiters = [asyncio.create_task(strategy.headers(context)) for _ in range(2)]
+    await started.wait()
+    for waiter in waiters:
+        waiter.cancel()
+    await asyncio.gather(*waiters, return_exceptions=True)
+    release.set()
+    await asyncio.sleep(0.01)
+
+    retried = await strategy.headers(context)
+
+    assert _authorization(retried) == "Bearer retried-token"
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_gateway_state_invalidate_and_aclose_are_idempotent() -> None:
+    strategy = PasswordBearerAuthStrategy(
+        config=_config(credentials={"kind": "gateway_session"}),
+        base_url="https://crm.example.test",
+        credential_source=None,
+        client_factory=_client_factory(
+            lambda _request: httpx.Response(200, json={"access_token": "source-token"})
+        ),
+    )
+    result = await strategy.authenticate_once(
+        CredentialPair(identity=SecretValue("alice"), password=SecretValue("password"))
+    )
+    context = _context("user-a", session_id="session-a")
+    await strategy.bind_state(context.auth_state_key, result)
+
+    await strategy.invalidate(context.auth_state_key)
+    await strategy.invalidate(context.auth_state_key)
+    with pytest.raises(AuthUnauthorizedError):
+        await strategy.headers(context)
+
+    await strategy.aclose()
+    await strategy.aclose()
+    with pytest.raises(AuthConfigurationError):
+        await strategy.headers(context)
+
+
+@pytest.mark.asyncio
+async def test_aclose_cancels_active_login_and_closes_its_fresh_client() -> None:
+    started = asyncio.Event()
+    never_release = asyncio.Event()
+    clients: list[httpx.AsyncClient] = []
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        started.set()
+        await never_release.wait()
+        return httpx.Response(200, json={"access_token": "unreachable"})
+
+    def factory() -> httpx.AsyncClient:
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        clients.append(client)
+        return client
+
+    strategy = PasswordBearerAuthStrategy(
+        config=_config(),
+        base_url="https://crm.example.test",
+        credential_source=_CredentialSource(),
+        client_factory=factory,
+    )
+    pending = asyncio.create_task(strategy.headers(_context()))
+    await started.wait()
+
+    await strategy.aclose()
+
+    with pytest.raises(asyncio.CancelledError):
+        await pending
+    assert clients[0].is_closed is True

@@ -10,6 +10,7 @@ import math
 import re
 import time
 from collections.abc import Callable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Protocol, cast
@@ -136,6 +137,12 @@ class HttpAuthStrategy(Protocol):
     ) -> bool:
         """Invalidate only the failed generation and report whether retry is possible."""
 
+    async def invalidate(self, auth_state_key: AuthStateKey) -> None:
+        """Release all state for one complete authentication-state key."""
+
+    async def aclose(self) -> None:
+        """Release all strategy-owned authentication state."""
+
 
 class NoAuthStrategy:
     """Explicit no-auth strategy that never touches credentials."""
@@ -163,6 +170,12 @@ class NoAuthStrategy:
         _require_attempt(failed_attempt, context.auth_state_key)
         return False
 
+    async def invalidate(self, auth_state_key: AuthStateKey) -> None:
+        _require_auth_state_key(auth_state_key)
+
+    async def aclose(self) -> None:
+        return None
+
 
 class BearerSecretAuthStrategy:
     """Resolve a fixed Bearer secret afresh for every request."""
@@ -180,10 +193,14 @@ class BearerSecretAuthStrategy:
 
     async def authorize(self, context: PrincipalContext) -> AuthAttempt:
         _require_context(context)
+        missing_secret = False
         try:
             token = resolve_secret(self._token_ref, self._environment)
-        except (SecretNotFoundError, SecretReferenceError) as exc:
-            raise AuthCredentialError("provider authentication credential is unavailable") from exc
+        except (SecretNotFoundError, SecretReferenceError):
+            missing_secret = True
+            token = None
+        if missing_secret or token is None:
+            raise AuthCredentialError("provider authentication credential is unavailable")
         raw_token = _secret_text(token, field="token")
         result = AuthenticationResult(token=SecretValue(raw_token), token_type="Bearer")
         assert result.authorization is not None
@@ -204,7 +221,13 @@ class BearerSecretAuthStrategy:
     ) -> bool:
         _require_context(context)
         _require_attempt(failed_attempt, context.auth_state_key)
-        return True
+        return False
+
+    async def invalidate(self, auth_state_key: AuthStateKey) -> None:
+        _require_auth_state_key(auth_state_key)
+
+    async def aclose(self) -> None:
+        return None
 
 
 @dataclass(slots=True)
@@ -214,6 +237,12 @@ class _BoundState:
     reauthentication_required: bool = False
 
 
+@dataclass(slots=True)
+class _InFlight:
+    task: asyncio.Task[AuthAttempt]
+    waiters: int = 0
+
+
 class PasswordBearerAuthStrategy:
     """Exchange bounded credentials for isolated in-memory Bearer state."""
 
@@ -221,12 +250,13 @@ class PasswordBearerAuthStrategy:
         "_base_url",
         "_client_factory",
         "_clock",
+        "_closed",
         "_configuration",
         "_credential_source",
         "_generations",
-        "_locks",
-        "_locks_guard",
+        "_inflight",
         "_origin",
+        "_state_lock",
         "_states",
     )
 
@@ -242,13 +272,28 @@ class PasswordBearerAuthStrategy:
         self._configuration = config
         self._origin = _fixed_origin(base_url)
         self._base_url = base_url.rstrip("/")
+        credentials_kind = config.credentials.kind
+        if credentials_kind == "environment_secret":
+            if (
+                credential_source is None
+                or not credential_source.renewable
+                or not callable(getattr(credential_source, "acquire", None))
+            ):
+                raise AuthConfigurationError(
+                    "environment authentication requires a renewable credential source"
+                )
+        elif credential_source is not None:
+            raise AuthConfigurationError(
+                "gateway session authentication accepts credentials only at login"
+            )
         self._credential_source = credential_source
         self._client_factory = client_factory or (lambda: httpx.AsyncClient(follow_redirects=False))
         self._clock = clock or time.monotonic
         self._states: dict[AuthStateKey, _BoundState] = {}
         self._generations: dict[AuthStateKey, int] = {}
-        self._locks: dict[AuthStateKey, asyncio.Lock] = {}
-        self._locks_guard = asyncio.Lock()
+        self._inflight: dict[AuthStateKey, _InFlight] = {}
+        self._state_lock = asyncio.Lock()
+        self._closed = False
 
     async def authenticate_once(
         self,
@@ -256,86 +301,107 @@ class PasswordBearerAuthStrategy:
     ) -> AuthenticationResult:
         """Login without a Principal so Gateway session creation has no identity cycle."""
 
+        self._ensure_open()
         if not isinstance(credentials, CredentialPair):
             raise TypeError("authentication requires a CredentialPair")
         identity = _secret_text(credentials.identity, field="identity")
         password = _secret_text(credentials.password, field="password")
-        body = {
-            self._configuration.identity_field: identity,
-            self._configuration.password_field: password,
-        }
+        body = json.dumps(
+            {
+                self._configuration.identity_field: identity,
+                self._configuration.password_field: password,
+            },
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        ).encode()
         url = f"{self._base_url}{self._configuration.login_path}"
+        request = httpx.Request(
+            "POST",
+            url,
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            },
+            content=body,
+            extensions={"timeout": httpx.Timeout(self._configuration.timeout_seconds).as_dict()},
+        )
 
+        payload: JsonValue | object = _MISSING
+        transport_failure: str | None = None
         try:
             client = self._client_factory()
-            async with (
-                client,
-                client.stream(
-                    "POST",
-                    url,
-                    json=body,
-                    headers={"Accept": "application/json"},
-                    timeout=httpx.Timeout(self._configuration.timeout_seconds),
+            async with client:
+                response = await client.send(
+                    request,
+                    auth=None,
                     follow_redirects=False,
-                ) as response,
-            ):
-                if _origin(response.url) != self._origin:
-                    raise _invalid_response("origin_mismatch")
-                if 300 <= response.status_code < 500:
-                    LOGGER.warning(
-                        "source login was rejected status=%s",
-                        response.status_code,
-                    )
-                    raise AuthLoginRejectedError(
-                        "source login was rejected",
-                        details={"upstream_status": response.status_code},
-                    )
-                if response.status_code >= 500 or response.status_code < 200:
-                    LOGGER.warning(
-                        "source login returned an upstream failure status=%s",
-                        response.status_code,
-                    )
-                    raise AuthUpstreamError(
-                        "source login returned an upstream failure",
-                        details={"upstream_status": response.status_code},
-                    )
-                payload = await self._bounded_json(response)
-        except (AuthInvalidResponseError, AuthLoginRejectedError, AuthUpstreamError):
-            raise
-        except httpx.TimeoutException as exc:
-            LOGGER.warning("source login timed out")
-            raise AuthTimeoutError("source login timed out") from exc
-        except httpx.RequestError as exc:
-            LOGGER.warning("source login request failed")
-            raise AuthRequestError("source login request failed") from exc
+                    stream=True,
+                )
+                try:
+                    if _origin(response.url) != self._origin:
+                        raise _invalid_response("origin_mismatch")
+                    if 300 <= response.status_code < 500:
+                        LOGGER.warning(
+                            "source login was rejected status=%s",
+                            response.status_code,
+                        )
+                        raise AuthLoginRejectedError(
+                            "source login was rejected",
+                            details={"upstream_status": response.status_code},
+                        )
+                    if response.status_code >= 500 or response.status_code < 200:
+                        LOGGER.warning(
+                            "source login returned an upstream failure status=%s",
+                            response.status_code,
+                        )
+                        raise AuthUpstreamError(
+                            "source login returned an upstream failure",
+                            details={"upstream_status": response.status_code},
+                        )
+                    payload = await self._bounded_json(response)
+                finally:
+                    await response.aclose()
+        except httpx.TimeoutException:
+            transport_failure = "timeout"
+        except httpx.RequestError:
+            transport_failure = "request"
 
-        return self._authentication_result(payload)
+        if transport_failure == "timeout":
+            LOGGER.warning("source login timed out")
+            raise AuthTimeoutError(
+                "source login timed out",
+                details={"phase": "login"},
+            )
+        if transport_failure == "request":
+            LOGGER.warning("source login request failed")
+            raise AuthRequestError("source login request failed")
+        if payload is _MISSING:  # pragma: no cover - every branch above returns or raises
+            raise AuthRequestError("source login request failed")
+        return self._authentication_result(cast(JsonValue, payload))
 
     async def bind_state(
         self,
         auth_state_key: AuthStateKey,
         result: AuthenticationResult,
-        *,
-        renewable: bool,
     ) -> None:
         """Bind a pre-context login result only after Gateway builds the final Principal."""
 
-        if not isinstance(auth_state_key, AuthStateKey):
-            raise TypeError("authentication state binding requires an AuthStateKey")
+        self._ensure_open()
+        _require_auth_state_key(auth_state_key)
         _require_result(result)
-        lock = await self._lock_for(auth_state_key)
-        async with lock:
+        async with self._state_lock:
             attempt = self._new_attempt(auth_state_key, result)
             self._states[auth_state_key] = _BoundState(
                 attempt=attempt,
-                renewable=renewable,
+                renewable=self._configuration.credentials.kind == "environment_secret",
             )
 
     async def authorize(self, context: PrincipalContext) -> AuthAttempt:
+        self._ensure_open()
         _require_context(context)
         key = context.auth_state_key
-        lock = await self._lock_for(key)
-        async with lock:
+        async with self._state_lock:
             state = self._states.get(key)
             if state is not None and state.reauthentication_required:
                 raise AuthReauthenticationRequiredError("source session requires reauthentication")
@@ -361,18 +427,22 @@ class PasswordBearerAuthStrategy:
                     state.attempt = None
                     state.reauthentication_required = True
                 raise AuthReauthenticationRequiredError("source session requires reauthentication")
+            flight = self._inflight.get(key)
+            if flight is None:
+                task = asyncio.create_task(self._renew_state(key))
+                flight = _InFlight(task=task)
+                self._inflight[key] = flight
 
-            renewable_source = cast(RenewableCredentialSource, source)
-            try:
-                credentials = await renewable_source.acquire(key)
-            except (SecretNotFoundError, SecretReferenceError) as exc:
-                raise AuthCredentialError(
-                    "provider authentication credential is unavailable"
-                ) from exc
-            result = await self.authenticate_once(credentials)
-            attempt = self._new_attempt(key, result)
-            self._states[key] = _BoundState(attempt=attempt, renewable=True)
-            return attempt
+                def completed(_completed: asyncio.Future[AuthAttempt]) -> None:
+                    self._flight_done(key, flight)
+
+                task.add_done_callback(completed)
+            flight.waiters += 1
+
+        try:
+            return await asyncio.shield(flight.task)
+        finally:
+            await self._release_waiter(key, flight)
 
     async def headers(self, context: PrincipalContext) -> AuthAttempt:
         return await self.authorize(context)
@@ -382,23 +452,110 @@ class PasswordBearerAuthStrategy:
         context: PrincipalContext,
         failed_attempt: AuthAttempt,
     ) -> bool:
+        self._ensure_open()
         _require_context(context)
         key = context.auth_state_key
         _require_attempt(failed_attempt, key)
-        lock = await self._lock_for(key)
-        async with lock:
+        async with self._state_lock:
             state = self._states.get(key)
             if state is None:
-                source = self._credential_source
-                return source is not None and source.renewable
+                return self._retry_on_unauthorized()
             if state.attempt is None or state.attempt.generation != failed_attempt.generation:
-                return state.renewable
+                return state.renewable and self._retry_on_unauthorized()
             if state.renewable:
                 del self._states[key]
-                return True
+                return self._retry_on_unauthorized()
             state.attempt = None
             state.reauthentication_required = True
             return False
+
+    async def invalidate(self, auth_state_key: AuthStateKey) -> None:
+        """Release a Principal's token, generation, and in-flight login."""
+
+        _require_auth_state_key(auth_state_key)
+        if self._closed:
+            return
+        flight: _InFlight | None
+        async with self._state_lock:
+            self._states.pop(auth_state_key, None)
+            self._generations.pop(auth_state_key, None)
+            flight = self._inflight.pop(auth_state_key, None)
+        if flight is not None and not flight.task.done():
+            flight.task.cancel()
+            await asyncio.gather(flight.task, return_exceptions=True)
+
+    async def aclose(self) -> None:
+        """Cancel outstanding logins and erase all in-memory authentication state."""
+
+        async with self._state_lock:
+            if self._closed and not self._inflight:
+                return
+            self._closed = True
+            flights = tuple(self._inflight.values())
+            self._inflight.clear()
+            self._states.clear()
+            self._generations.clear()
+        tasks = tuple(flight.task for flight in flights if not flight.task.done())
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _renew_state(self, key: AuthStateKey) -> AuthAttempt:
+        source = cast(RenewableCredentialSource, self._credential_source)
+        missing_secret = False
+        try:
+            credentials = await source.acquire(key)
+        except (SecretNotFoundError, SecretReferenceError):
+            missing_secret = True
+            credentials = None
+        if missing_secret or credentials is None:
+            raise AuthCredentialError("provider authentication credential is unavailable")
+
+        result = await self.authenticate_once(credentials)
+        async with self._state_lock:
+            self._ensure_open()
+            attempt = self._new_attempt(key, result)
+            self._states[key] = _BoundState(attempt=attempt, renewable=True)
+            return attempt
+
+    async def _release_waiter(self, key: AuthStateKey, flight: _InFlight) -> None:
+        if self._closed:
+            return
+        async with self._state_lock:
+            current = self._inflight.get(key)
+            if current is not flight:
+                return
+            flight.waiters -= 1
+            if flight.waiters == 0 and flight.task.done():
+                self._inflight.pop(key, None)
+
+    def _flight_done(self, key: AuthStateKey, flight: _InFlight) -> None:
+        with suppress(asyncio.CancelledError):
+            flight.task.exception()
+        if not self._closed:
+            asyncio.get_running_loop().create_task(self._cleanup_completed_flight(key, flight))
+
+    async def _cleanup_completed_flight(
+        self,
+        key: AuthStateKey,
+        flight: _InFlight,
+    ) -> None:
+        if self._closed:
+            return
+        async with self._state_lock:
+            if self._inflight.get(key) is flight and flight.waiters == 0:
+                self._inflight.pop(key, None)
+
+    def _retry_on_unauthorized(self) -> bool:
+        return (
+            self._configuration.credentials.kind == "environment_secret"
+            and self._configuration.retry_on_unauthorized
+        )
+
+    def _ensure_open(self) -> None:
+        if self._closed:
+            raise AuthConfigurationError("authentication strategy is closed")
 
     def _new_attempt(
         self,
@@ -414,10 +571,6 @@ class PasswordBearerAuthStrategy:
             generation=generation,
             authentication=result,
         )
-
-    async def _lock_for(self, key: AuthStateKey) -> asyncio.Lock:
-        async with self._locks_guard:
-            return self._locks.setdefault(key, asyncio.Lock())
 
     async def _bounded_json(self, response: httpx.Response) -> JsonValue:
         limit = self._configuration.max_response_bytes
@@ -436,14 +589,19 @@ class PasswordBearerAuthStrategy:
             body.extend(chunk[:remaining])
             if len(body) > limit:
                 raise _response_too_large(limit)
+        invalid_json = False
         try:
-            return cast(
+            parsed = cast(
                 JsonValue,
                 json.loads(body, parse_constant=_reject_json_constant),
             )
-        except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+            invalid_json = True
+            parsed = None
+        if invalid_json:
             LOGGER.warning("source login returned invalid JSON")
-            raise _invalid_response("invalid_json") from exc
+            raise _invalid_response("invalid_json")
+        return parsed
 
     def _authentication_result(self, payload: JsonValue) -> AuthenticationResult:
         token = _pointer_value(payload, self._configuration.token_pointer)
@@ -519,11 +677,16 @@ class PasswordBearerAuthStrategy:
 
 
 def _fixed_origin(base_url: str) -> tuple[str, str, int]:
+    invalid_url = False
     try:
         parsed = urlsplit(base_url)
         port = parsed.port
-    except (TypeError, ValueError) as exc:
-        raise AuthConfigurationError("authentication base URL is invalid") from exc
+    except (TypeError, ValueError):
+        invalid_url = True
+        parsed = None
+        port = None
+    if invalid_url or parsed is None:
+        raise AuthConfigurationError("authentication base URL is invalid")
     if (
         parsed.scheme not in {"http", "https"}
         or parsed.hostname is None
@@ -587,6 +750,11 @@ def _require_context(context: PrincipalContext) -> None:
         raise TypeError("authentication requires a PrincipalContext")
 
 
+def _require_auth_state_key(auth_state_key: AuthStateKey) -> None:
+    if not isinstance(auth_state_key, AuthStateKey):
+        raise TypeError("authentication state operation requires an AuthStateKey")
+
+
 def _require_result(result: AuthenticationResult) -> None:
     if not isinstance(result, AuthenticationResult):
         raise TypeError("authentication invalidation requires an AuthenticationResult")
@@ -607,7 +775,7 @@ def _response_too_large(limit: int) -> AuthResponseTooLargeError:
     LOGGER.warning("source login response exceeded configured size limit")
     return AuthResponseTooLargeError(
         "source login response exceeded configured size limit",
-        details={"limit_bytes": limit},
+        details={"limit_bytes": limit, "phase": "login"},
     )
 
 
