@@ -35,12 +35,15 @@ def test_diagnostic_optionally_includes_a_json_pointer() -> None:
         "message": "invalid",
         "path": "scope.yaml",
     }
-    assert module.diagnostic(
-        "ACC_SCOPE_INVALID",
-        "invalid",
-        path="scope.yaml",
-        pointer="/routes/0/disposition",
-    )["pointer"] == "/routes/0/disposition"
+    assert (
+        module.diagnostic(
+            "ACC_SCOPE_INVALID",
+            "invalid",
+            path="scope.yaml",
+            pointer="/routes/0/disposition",
+        )["pointer"]
+        == "/routes/0/disposition"
+    )
 
 
 def test_verify_snapshots_regular_files_without_following_symlinks(tmp_path: Path) -> None:
@@ -188,8 +191,6 @@ def test_verify_scoped_snapshot_ignores_changes_outside_include_paths(tmp_path: 
 
     assert unchanged.returncode == 0
     assert unchanged_payload["result"]["unchanged"] is True
-    assert unchanged_payload["result"]["snapshot"]["include_paths"] == [
-        "backend/app/routes.py"
-    ]
+    assert unchanged_payload["result"]["snapshot"]["include_paths"] == ["backend/app/routes.py"]
     assert changed.returncode == 3
     assert changed_payload["diagnostics"][0]["code"] == "ACC_SKILL_WORKSPACE_CHANGED"

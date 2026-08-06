@@ -29,9 +29,7 @@ def _route(
         "domain": domain,
         "method": method,
         "path": f"/api/{route_id.replace('.', '/')}",
-        "evidence_sources": (
-            ["customer-routes"] if evidence_sources is None else evidence_sources
-        ),
+        "evidence_sources": (["customer-routes"] if evidence_sources is None else evidence_sources),
         "eligibility": "eligible",
         "disposition": disposition,
         "operation_id": operation_id,
@@ -97,9 +95,7 @@ def _write_project(
 ) -> Path:
     project = tmp_path / "acc-project"
     project.mkdir()
-    actual_routes: list[object] = (
-        routes if routes is not None else [_route("customer.search")]
-    )
+    actual_routes: list[object] = routes if routes is not None else [_route("customer.search")]
     scope: dict[str, object] = {
         "user_confirmation": user_confirmation,
         "selected_domains": selected_domains or [],
@@ -143,23 +139,18 @@ def _write_project(
             and route["operation_id"]
         }
     )
-    actual_system_operations = (
-        operation_ids if system_operations is None else system_operations
-    )
+    actual_system_operations = operation_ids if system_operations is None else system_operations
     (project / "system-map.yaml").write_text(
         yaml.safe_dump(
             {
                 "candidate_operations": [
-                    {"id": operation_id}
-                    for operation_id in actual_system_operations
+                    {"id": operation_id} for operation_id in actual_system_operations
                 ]
             }
         ),
         encoding="utf-8",
     )
-    actual_plan_dependencies = (
-        operation_ids if plan_dependencies is None else plan_dependencies
-    )
+    actual_plan_dependencies = operation_ids if plan_dependencies is None else plan_dependencies
     (project / "capability-plan.yaml").write_text(
         yaml.safe_dump(
             {
@@ -326,9 +317,7 @@ def test_schema_version_must_be_one_without_echoing_input(tmp_path: Path) -> Non
     inventory_path = project / "scope-inventory.yaml"
     inventory = yaml.safe_load(inventory_path.read_text(encoding="utf-8"))
     inventory["schema_version"] = secret
-    inventory_path.write_text(
-        yaml.safe_dump(inventory, sort_keys=False), encoding="utf-8"
-    )
+    inventory_path.write_text(yaml.safe_dump(inventory, sort_keys=False), encoding="utf-8")
 
     completed, payload = _run(project)
 
@@ -362,9 +351,7 @@ def test_route_domain_must_be_a_non_empty_string(tmp_path: Path) -> None:
         "/api/../customers",
     ],
 )
-def test_route_path_must_be_a_safe_origin_relative_path(
-    tmp_path: Path, invalid_path: str
-) -> None:
+def test_route_path_must_be_a_safe_origin_relative_path(tmp_path: Path, invalid_path: str) -> None:
     route = _route("customer.search")
     route["path"] = invalid_path
     project = _write_project(tmp_path, routes=[route])
@@ -391,9 +378,7 @@ def test_route_eligibility_must_be_declared_without_echoing_input(tmp_path: Path
 
 
 @pytest.mark.parametrize("disposition", ["planned", "composed"])
-def test_ineligible_routes_cannot_be_planned_or_composed(
-    tmp_path: Path, disposition: str
-) -> None:
+def test_ineligible_routes_cannot_be_planned_or_composed(tmp_path: Path, disposition: str) -> None:
     route = _route("customer.search", disposition=disposition)
     route["eligibility"] = "ineligible"
     project = _write_project(tmp_path, routes=[route])
@@ -437,15 +422,11 @@ def test_source_scope_counts_only_eligible_route_dispositions(
         },
     ]
     project = _write_project(tmp_path, routes=routes)
-    inventory = yaml.safe_load(
-        (project / "scope-inventory.yaml").read_text(encoding="utf-8")
-    )
+    inventory = yaml.safe_load((project / "scope-inventory.yaml").read_text(encoding="utf-8"))
     monkeypatch.syspath_prepend(str(SCRIPT.parent))
     script = runpy.run_path(str(SCRIPT))
 
-    result, diagnostics = script["audit_inventory"](
-        inventory, path="scope-inventory.yaml"
-    )
+    result, diagnostics = script["audit_inventory"](inventory, path="scope-inventory.yaml")
 
     assert diagnostics == []
     assert inventory["summary"]["excluded"] == 1

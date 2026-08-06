@@ -49,9 +49,7 @@ _DEMO_PRINCIPALS = {
 
 def _error(status_code: int, code: str, message: str) -> HTTPException:
     headers = (
-        {"WWW-Authenticate": "Bearer"}
-        if status_code == status.HTTP_401_UNAUTHORIZED
-        else None
+        {"WWW-Authenticate": "Bearer"} if status_code == status.HTTP_401_UNAUTHORIZED else None
     )
     return HTTPException(
         status_code=status_code,

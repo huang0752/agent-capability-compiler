@@ -82,12 +82,8 @@ async def test_search_and_customer_context_routes_return_synthetic_tenant_data(
 
     search = await client.get("/customers", params={**tenant, "q": "acme"}, headers=headers)
     customer = await client.get("/customers/cust-a-001", params=tenant, headers=headers)
-    contacts = await client.get(
-        "/customers/cust-a-001/contacts", params=tenant, headers=headers
-    )
-    followups = await client.get(
-        "/customers/cust-a-001/followups", params=tenant, headers=headers
-    )
+    contacts = await client.get("/customers/cust-a-001/contacts", params=tenant, headers=headers)
+    followups = await client.get("/customers/cust-a-001/followups", params=tenant, headers=headers)
     todos = await client.get("/customers/cust-a-001/todos", params=tenant, headers=headers)
 
     assert search.status_code == 200

@@ -14,15 +14,11 @@ def _project(tmp_path: Path) -> Path:
     project = tmp_path / "acc-project"
     (project / "capabilities").mkdir(parents=True)
     (project / "project.yaml").write_text("id: example\n", encoding="utf-8")
-    (project / "capabilities" / "read.yaml").write_text(
-        "id: read_example\n", encoding="utf-8"
-    )
+    (project / "capabilities" / "read.yaml").write_text("id: read_example\n", encoding="utf-8")
     return project
 
 
-def _run(
-    project: Path, *arguments: str
-) -> tuple[subprocess.CompletedProcess[str], dict[str, Any]]:
+def _run(project: Path, *arguments: str) -> tuple[subprocess.CompletedProcess[str], dict[str, Any]]:
     completed = subprocess.run(
         [sys.executable, str(SCRIPT), "--project", str(project), *arguments],
         cwd=ROOT,
@@ -47,8 +43,9 @@ def test_manifest_is_deterministic_sorted_and_excludes_its_output(tmp_path: Path
         "capabilities/read.yaml",
         "project.yaml",
     ]
-    assert json.loads((project / "artifact-manifest.json").read_text(encoding="utf-8")) == (
-        second_payload["result"]
+    assert (
+        json.loads((project / "artifact-manifest.json").read_text(encoding="utf-8"))
+        == (second_payload["result"])
     )
 
 

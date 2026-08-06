@@ -32,11 +32,7 @@ TodoAccess = Annotated[AccessContext, Depends(require_scope(TODO_READ))]
 
 def _customer(customer_id: str, tenant_id: str) -> Customer:
     customer = next(
-        (
-            item
-            for item in CUSTOMERS
-            if item.id == customer_id and item.tenant_id == tenant_id
-        ),
+        (item for item in CUSTOMERS if item.id == customer_id and item.tenant_id == tenant_id),
         None,
     )
     if customer is None:
@@ -141,9 +137,7 @@ async def find_overdue_followups(
     return [
         item
         for item in FOLLOWUPS
-        if item.tenant_id == access.tenant_id
-        and item.status == "open"
-        and item.due_date < as_of
+        if item.tenant_id == access.tenant_id and item.status == "open" and item.due_date < as_of
     ]
 
 

@@ -114,9 +114,7 @@ def plan_operation_ids(document: Mapping[str, object]) -> set[str]:
             continue
         dependencies = capability.get("operation_dependencies")
         if isinstance(dependencies, list):
-            result.update(
-                item for item in dependencies if isinstance(item, str) and item
-            )
+            result.update(item for item in dependencies if isinstance(item, str) and item)
     return result
 
 
@@ -257,9 +255,7 @@ def audit_inventory(
     for index, raw_route in enumerate(routes):
         counters["discovered_routes"] += 1
         pointer = f"/routes/{index}"
-        if not isinstance(raw_route, Mapping) or not all(
-            isinstance(key, str) for key in raw_route
-        ):
+        if not isinstance(raw_route, Mapping) or not all(isinstance(key, str) for key in raw_route):
             counters["unresolved"] += 1
             add_issue(
                 diagnostics,
@@ -517,12 +513,8 @@ def main(argv: list[str] | None = None) -> int:
     arguments = parser().parse_args(argv)
     try:
         project = safe_existing_path(arguments.project, kind="directory")
-        inventory_path = safe_existing_path(
-            str(project / "scope-inventory.yaml"), kind="file"
-        )
-        system_map_path = safe_existing_path(
-            str(project / "system-map.yaml"), kind="file"
-        )
+        inventory_path = safe_existing_path(str(project / "scope-inventory.yaml"), kind="file")
+        system_map_path = safe_existing_path(str(project / "system-map.yaml"), kind="file")
         capability_plan_path = safe_existing_path(
             str(project / "capability-plan.yaml"), kind="file"
         )

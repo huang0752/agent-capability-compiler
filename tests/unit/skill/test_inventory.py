@@ -78,8 +78,6 @@ def test_inventory_limits_hashing_to_explicit_include_paths(tmp_path: Path) -> N
     assert completed.returncode == 0
     assert payload["ok"] is True
     assert payload["result"]["include_paths"] == ["backend/app/routes.py"]
-    assert [item["path"] for item in payload["result"]["files"]] == [
-        "backend/app/routes.py"
-    ]
+    assert [item["path"] for item in payload["result"]["files"]] == ["backend/app/routes.py"]
     assert payload["result"]["sensitive_paths"] == []
     assert "must-not-be-read" not in completed.stdout

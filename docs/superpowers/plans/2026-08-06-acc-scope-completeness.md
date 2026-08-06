@@ -50,12 +50,15 @@ def test_diagnostic_optionally_includes_a_json_pointer() -> None:
         "message": "invalid",
         "path": "scope.yaml",
     }
-    assert module.diagnostic(
-        "ACC_SCOPE_INVALID",
-        "invalid",
-        path="scope.yaml",
-        pointer="/routes/0/disposition",
-    )["pointer"] == "/routes/0/disposition"
+    assert (
+        module.diagnostic(
+            "ACC_SCOPE_INVALID",
+            "invalid",
+            path="scope.yaml",
+            pointer="/routes/0/disposition",
+        )["pointer"]
+        == "/routes/0/disposition"
+    )
 ```
 
 - [ ] **Step 2: Run the test and verify RED**
@@ -124,36 +127,34 @@ git commit --only -m 'feat(skill): 支持范围诊断指针' -- \
 Extend `test_templates_track_current_strict_public_models` with:
 
 ```python
-    scope = _yaml(SKILL / "templates" / "scope-inventory.yaml")
-    assert scope["scope"] == {
-        "mode": "system_readonly_complete",
-        "user_confirmation": None,
-        "selected_domains": [],
-    }
-    route = scope["routes"][0]
-    assert set(route) == {
-        "id",
-        "domain",
-        "method",
-        "path",
-        "evidence_sources",
-        "eligibility",
-        "disposition",
-        "operation_id",
-        "capability_ids",
-        "reason",
-    }
-    baseline = json.loads(
-        (SKILL / "templates" / "coverage-baseline.json").read_text(encoding="utf-8")
-    )
-    assert baseline["scope_mode"] == "system_readonly_complete"
-    assert set(baseline["source_scope"]) == {
-        "eligible_read_routes",
-        "planned_or_composed",
-        "excluded",
-        "blocked_on_evidence",
-        "unresolved",
-    }
+scope = _yaml(SKILL / "templates" / "scope-inventory.yaml")
+assert scope["scope"] == {
+    "mode": "system_readonly_complete",
+    "user_confirmation": None,
+    "selected_domains": [],
+}
+route = scope["routes"][0]
+assert set(route) == {
+    "id",
+    "domain",
+    "method",
+    "path",
+    "evidence_sources",
+    "eligibility",
+    "disposition",
+    "operation_id",
+    "capability_ids",
+    "reason",
+}
+baseline = json.loads((SKILL / "templates" / "coverage-baseline.json").read_text(encoding="utf-8"))
+assert baseline["scope_mode"] == "system_readonly_complete"
+assert set(baseline["source_scope"]) == {
+    "eligible_read_routes",
+    "planned_or_composed",
+    "excluded",
+    "blocked_on_evidence",
+    "unresolved",
+}
 ```
 
 - [ ] **Step 2: Run and verify RED**
@@ -317,55 +318,133 @@ def load_document(path: Path) -> dict[str, object]:
     raw = read_file_bytes(path, metadata, DEFAULT_MAX_FILE_BYTES, path.name)
     value = yaml.safe_load(raw.decode("utf-8"))
     if not isinstance(value, dict):
-        raise SafePathError("ACC_SCOPE_DOCUMENT_INVALID", "document must be an object", path=path.name)
+        raise SafePathError(
+            "ACC_SCOPE_DOCUMENT_INVALID", "document must be an object", path=path.name
+        )
     return value
 
 
-def audit_inventory(document: Mapping[str, object], *, path: str) -> tuple[dict[str, object], list[dict[str, object]]]:
+def audit_inventory(
+    document: Mapping[str, object], *, path: str
+) -> tuple[dict[str, object], list[dict[str, object]]]:
     diagnostics: list[dict[str, object]] = []
     scope = document.get("scope")
     routes = document.get("routes")
     summary = document.get("summary")
     if not isinstance(scope, Mapping):
-        diagnostics.append(diagnostic("ACC_SCOPE_DOCUMENT_INVALID", "scope must be an object", path=path, pointer="/scope"))
+        diagnostics.append(
+            diagnostic(
+                "ACC_SCOPE_DOCUMENT_INVALID", "scope must be an object", path=path, pointer="/scope"
+            )
+        )
         return {}, diagnostics
     if not isinstance(routes, list) or not isinstance(summary, Mapping):
-        diagnostics.append(diagnostic("ACC_SCOPE_DOCUMENT_INVALID", "routes and summary are required", path=path))
+        diagnostics.append(
+            diagnostic("ACC_SCOPE_DOCUMENT_INVALID", "routes and summary are required", path=path)
+        )
         return {}, diagnostics
 
     mode = scope.get("mode")
     confirmation = scope.get("user_confirmation")
     selected_domains = scope.get("selected_domains")
     if mode not in SCOPE_MODES:
-        diagnostics.append(diagnostic("ACC_SCOPE_MODE_INVALID", "scope mode is invalid", path=path, pointer="/scope/mode"))
+        diagnostics.append(
+            diagnostic(
+                "ACC_SCOPE_MODE_INVALID", "scope mode is invalid", path=path, pointer="/scope/mode"
+            )
+        )
     if mode == "pilot" and (not isinstance(confirmation, str) or not confirmation.strip()):
-        diagnostics.append(diagnostic("ACC_SCOPE_CONFIRMATION_REQUIRED", "pilot requires explicit user confirmation", path=path, pointer="/scope/user_confirmation"))
-    if mode == "domain_complete" and (not isinstance(selected_domains, list) or not selected_domains):
-        diagnostics.append(diagnostic("ACC_SCOPE_DOMAIN_REQUIRED", "domain_complete requires selected domains", path=path, pointer="/scope/selected_domains"))
+        diagnostics.append(
+            diagnostic(
+                "ACC_SCOPE_CONFIRMATION_REQUIRED",
+                "pilot requires explicit user confirmation",
+                path=path,
+                pointer="/scope/user_confirmation",
+            )
+        )
+    if mode == "domain_complete" and (
+        not isinstance(selected_domains, list) or not selected_domains
+    ):
+        diagnostics.append(
+            diagnostic(
+                "ACC_SCOPE_DOMAIN_REQUIRED",
+                "domain_complete requires selected domains",
+                path=path,
+                pointer="/scope/selected_domains",
+            )
+        )
 
     seen: set[str] = set()
     operation_ids: set[str] = set()
-    counters = {name: 0 for name in ("discovered_routes", "eligible_read_routes", "planned", "composed", "excluded", "blocked_on_evidence", "out_of_scope", "unresolved")}
+    counters = {
+        name: 0
+        for name in (
+            "discovered_routes",
+            "eligible_read_routes",
+            "planned",
+            "composed",
+            "excluded",
+            "blocked_on_evidence",
+            "out_of_scope",
+            "unresolved",
+        )
+    }
     for index, raw_route in enumerate(routes):
         counters["discovered_routes"] += 1
         pointer = f"/routes/{index}"
         if not isinstance(raw_route, Mapping):
             counters["unresolved"] += 1
-            diagnostics.append(diagnostic("ACC_SCOPE_ROUTE_INVALID", "route must be an object", path=path, pointer=pointer))
+            diagnostics.append(
+                diagnostic(
+                    "ACC_SCOPE_ROUTE_INVALID", "route must be an object", path=path, pointer=pointer
+                )
+            )
             continue
         route_id = raw_route.get("id")
         if not isinstance(route_id, str) or not route_id:
             counters["unresolved"] += 1
-            diagnostics.append(diagnostic("ACC_SCOPE_ROUTE_INVALID", "route id is required", path=path, pointer=f"{pointer}/id"))
+            diagnostics.append(
+                diagnostic(
+                    "ACC_SCOPE_ROUTE_INVALID",
+                    "route id is required",
+                    path=path,
+                    pointer=f"{pointer}/id",
+                )
+            )
         elif route_id in seen:
-            diagnostics.append(diagnostic("ACC_SCOPE_ROUTE_DUPLICATE", "route id must be unique", path=path, pointer=f"{pointer}/id"))
+            diagnostics.append(
+                diagnostic(
+                    "ACC_SCOPE_ROUTE_DUPLICATE",
+                    "route id must be unique",
+                    path=path,
+                    pointer=f"{pointer}/id",
+                )
+            )
         else:
             seen.add(route_id)
         if raw_route.get("method") not in {"GET", "HEAD"}:
-            diagnostics.append(diagnostic("ACC_SCOPE_METHOD_INVALID", "scope inventory permits GET or HEAD", path=path, pointer=f"{pointer}/method"))
+            diagnostics.append(
+                diagnostic(
+                    "ACC_SCOPE_METHOD_INVALID",
+                    "scope inventory permits GET or HEAD",
+                    path=path,
+                    pointer=f"{pointer}/method",
+                )
+            )
         evidence = raw_route.get("evidence_sources")
-        if not isinstance(evidence, list) or not evidence or not all(isinstance(item, str) and item for item in evidence):
-            diagnostics.append(diagnostic("ACC_SCOPE_EVIDENCE_REQUIRED", "route evidence is required", path=path, pointer=f"{pointer}/evidence_sources"))
+        if (
+            not isinstance(evidence, list)
+            or not evidence
+            or not all(isinstance(item, str) and item for item in evidence)
+        ):
+            diagnostics.append(
+                diagnostic(
+                    "ACC_SCOPE_EVIDENCE_REQUIRED",
+                    "route evidence is required",
+                    path=path,
+                    pointer=f"{pointer}/evidence_sources",
+                )
+            )
 
         eligibility = raw_route.get("eligibility")
         disposition = raw_route.get("disposition")
@@ -373,26 +452,70 @@ def audit_inventory(document: Mapping[str, object], *, path: str) -> tuple[dict[
             counters["eligible_read_routes"] += 1
         if disposition not in DISPOSITIONS:
             counters["unresolved"] += 1
-            diagnostics.append(diagnostic("ACC_SCOPE_DISPOSITION_INVALID", "route disposition is invalid", path=path, pointer=f"{pointer}/disposition"))
+            diagnostics.append(
+                diagnostic(
+                    "ACC_SCOPE_DISPOSITION_INVALID",
+                    "route disposition is invalid",
+                    path=path,
+                    pointer=f"{pointer}/disposition",
+                )
+            )
             continue
         counters[str(disposition)] += 1
         reason = raw_route.get("reason")
-        if disposition in {"excluded", "blocked_on_evidence", "out_of_scope"} and (not isinstance(reason, str) or not reason.strip()):
-            diagnostics.append(diagnostic("ACC_SCOPE_REASON_REQUIRED", "route disposition requires a reason", path=path, pointer=f"{pointer}/reason"))
+        if disposition in {"excluded", "blocked_on_evidence", "out_of_scope"} and (
+            not isinstance(reason, str) or not reason.strip()
+        ):
+            diagnostics.append(
+                diagnostic(
+                    "ACC_SCOPE_REASON_REQUIRED",
+                    "route disposition requires a reason",
+                    path=path,
+                    pointer=f"{pointer}/reason",
+                )
+            )
         operation_id = raw_route.get("operation_id")
         if disposition in {"planned", "composed"}:
             if not isinstance(operation_id, str) or not operation_id:
-                diagnostics.append(diagnostic("ACC_SCOPE_OPERATION_REQUIRED", "planned route requires an operation", path=path, pointer=f"{pointer}/operation_id"))
+                diagnostics.append(
+                    diagnostic(
+                        "ACC_SCOPE_OPERATION_REQUIRED",
+                        "planned route requires an operation",
+                        path=path,
+                        pointer=f"{pointer}/operation_id",
+                    )
+                )
             else:
                 operation_ids.add(operation_id)
         if mode == "system_readonly_complete" and disposition == "out_of_scope":
-            diagnostics.append(diagnostic("ACC_SCOPE_OUT_OF_SCOPE_FORBIDDEN", "system scope cannot omit an eligible route", path=path, pointer=f"{pointer}/disposition"))
+            diagnostics.append(
+                diagnostic(
+                    "ACC_SCOPE_OUT_OF_SCOPE_FORBIDDEN",
+                    "system scope cannot omit an eligible route",
+                    path=path,
+                    pointer=f"{pointer}/disposition",
+                )
+            )
         if mode == "system_readonly_complete" and disposition == "blocked_on_evidence":
-            diagnostics.append(diagnostic("ACC_SCOPE_EVIDENCE_BLOCKED", "system scope has unresolved evidence", path=path, pointer=f"{pointer}/disposition"))
+            diagnostics.append(
+                diagnostic(
+                    "ACC_SCOPE_EVIDENCE_BLOCKED",
+                    "system scope has unresolved evidence",
+                    path=path,
+                    pointer=f"{pointer}/disposition",
+                )
+            )
 
     for name, actual in counters.items():
         if summary.get(name) != actual:
-            diagnostics.append(diagnostic("ACC_SCOPE_SUMMARY_MISMATCH", "declared scope summary does not match routes", path=path, pointer=f"/summary/{name}"))
+            diagnostics.append(
+                diagnostic(
+                    "ACC_SCOPE_SUMMARY_MISMATCH",
+                    "declared scope summary does not match routes",
+                    path=path,
+                    pointer=f"/summary/{name}",
+                )
+            )
     result: dict[str, object] = {
         "scope_mode": mode,
         "selected_domains": sorted(
@@ -470,7 +593,9 @@ def test_coverage_baseline_must_match_inventory_denominator(tmp_path: Path) -> N
     assert payload["diagnostics"][0]["code"] == "ACC_SCOPE_COVERAGE_MISMATCH"
 
 
-def test_domain_complete_requires_selected_domains_and_disposes_each_selected_route(tmp_path: Path) -> None:
+def test_domain_complete_requires_selected_domains_and_disposes_each_selected_route(
+    tmp_path: Path,
+) -> None:
     project = _write_project(tmp_path, mode="domain_complete", selected_domains=["customer"])
     completed, payload = _run(project)
     assert completed.returncode == 0
