@@ -48,7 +48,7 @@ def test_inventory_is_sorted_and_never_reads_or_outputs_secret_files(tmp_path: P
 def test_inventory_fails_closed_on_oversized_regular_files(tmp_path: Path) -> None:
     workspace = tmp_path / "source"
     workspace.mkdir()
-    (workspace / "large.bin").write_bytes(b"12345")
+    (workspace / "large.bin").write_bytes(b"x" * 100)
 
     completed, payload = _run("--workspace", str(workspace), "--max-file-bytes", "4")
 
@@ -56,3 +56,30 @@ def test_inventory_fails_closed_on_oversized_regular_files(tmp_path: Path) -> No
     assert payload["ok"] is False
     assert payload["diagnostics"][0]["code"] == "ACC_SKILL_FILE_TOO_LARGE"
     assert "12345" not in completed.stdout
+
+
+def test_inventory_limits_hashing_to_explicit_include_paths(tmp_path: Path) -> None:
+    workspace = tmp_path / "source"
+    selected = workspace / "backend" / "app"
+    selected.mkdir(parents=True)
+    (selected / "routes.py").write_text("router = object()\n", encoding="utf-8")
+    (workspace / ".env").write_text("must-not-be-read", encoding="utf-8")
+    (workspace / "large.bin").write_bytes(b"x" * 100)
+
+    completed, payload = _run(
+        "--workspace",
+        str(workspace),
+        "--max-file-bytes",
+        "64",
+        "--include",
+        "backend/app/routes.py",
+    )
+
+    assert completed.returncode == 0
+    assert payload["ok"] is True
+    assert payload["result"]["include_paths"] == ["backend/app/routes.py"]
+    assert [item["path"] for item in payload["result"]["files"]] == [
+        "backend/app/routes.py"
+    ]
+    assert payload["result"]["sensitive_paths"] == []
+    assert "must-not-be-read" not in completed.stdout

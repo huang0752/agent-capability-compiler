@@ -16,6 +16,7 @@ from verify_read_only_workspace import (
     emit,
     is_sensitive_path,
     iter_workspace,
+    normalize_include_paths,
     safe_existing_path,
 )
 
@@ -25,6 +26,7 @@ def parser() -> JsonArgumentParser:
     value.add_argument("--source-workspace", required=True)
     value.add_argument("--project-dir", required=True)
     value.add_argument("--acc-command", default="acc")
+    value.add_argument("--include", action="append", default=[])
     value.add_argument("--max-file-bytes", type=bounded_size, default=DEFAULT_MAX_FILE_BYTES)
     return value
 
@@ -68,6 +70,7 @@ def main(argv: list[str] | None = None) -> int:
         source = safe_existing_path(arguments.source_workspace, kind="directory")
         project = safe_existing_path(arguments.project_dir, kind="directory")
         ensure_disjoint(source, project)
+        include_paths = normalize_include_paths(source, arguments.include)
         acc_path = shutil.which(arguments.acc_command)
         regular_paths: list[str] = []
         sensitive_paths: list[str] = []
@@ -75,7 +78,7 @@ def main(argv: list[str] | None = None) -> int:
         oversized: list[str] = []
         openapi_candidates: list[str] = []
         test_candidates: list[str] = []
-        for relative, path, metadata in iter_workspace(source):
+        for relative, path, metadata in iter_workspace(source, include_paths):
             if path is None or metadata is None:
                 symlinks.append(relative)
                 continue
@@ -126,6 +129,7 @@ def main(argv: list[str] | None = None) -> int:
             "source_workspace": str(source),
             "project_dir": str(project),
             "source_mode": "read_only",
+            "include_paths": include_paths,
             "acc_available": acc_path is not None,
             "openapi_candidates": openapi_candidates,
             "test_candidates": test_candidates,

@@ -11,7 +11,7 @@
 
 1. 用 `pwd -P` 或 `realpath` 解析两个目录的真实路径，确认它们互不包含；安全脚本会有意拒绝含符号链接的路径组成，包括 macOS `/var` 别名。
 2. 对全新目标先运行 `acc init <acc_project>` 并进入该目录，再运行 `acc doctor --json`；不得对尚无 `project.yaml` 的空目录直接执行 Doctor。
-3. 只读盘点 README、OpenAPI、测试和权限文档；不要启动或连接生产环境。
+3. 只读盘点 README、OpenAPI、测试和权限文档；不要启动或连接生产环境。大型仓库应给 `preflight.py`、`inventory.py` 和两次 `verify_read_only_workspace.py` 传入完全相同、可重复的相对路径 `--include` 白名单，只覆盖可能形成 Evidence 的源码与测试文件；默认不传时仍执行全工作区 fail-closed 扫描。
 4. 建立原系统只读基线，并检查计划中的命令是否可能修改源码、数据库、认证或依赖文件。
 5. 识别疑似生产凭据、Token、私钥和生产地址；只报告风险位置，不读取、复制或输出 Secret 值。
 

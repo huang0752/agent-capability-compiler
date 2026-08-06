@@ -15,6 +15,7 @@ from verify_read_only_workspace import (
     hash_file,
     is_sensitive_path,
     iter_workspace,
+    normalize_include_paths,
     safe_existing_path,
 )
 
@@ -22,6 +23,7 @@ from verify_read_only_workspace import (
 def parser() -> JsonArgumentParser:
     value = JsonArgumentParser(command="inventory")
     value.add_argument("--workspace", required=True)
+    value.add_argument("--include", action="append", default=[])
     value.add_argument("--max-file-bytes", type=bounded_size, default=DEFAULT_MAX_FILE_BYTES)
     return value
 
@@ -36,11 +38,12 @@ def main(argv: list[str] | None = None) -> int:
     arguments = parser().parse_args(argv)
     try:
         workspace = safe_existing_path(arguments.workspace, kind="directory")
+        include_paths = normalize_include_paths(workspace, arguments.include)
         files: list[dict[str, object]] = []
         sensitive_paths: list[str] = []
         symlinks: list[str] = []
         openapi_candidates: list[str] = []
-        for relative, path, metadata in iter_workspace(workspace):
+        for relative, path, metadata in iter_workspace(workspace, include_paths):
             if path is None or metadata is None:
                 symlinks.append(relative)
                 continue
@@ -59,6 +62,7 @@ def main(argv: list[str] | None = None) -> int:
                 openapi_candidates.append(relative)
         result = {
             "root": str(workspace),
+            "include_paths": include_paths,
             "files": files,
             "sensitive_paths": sensitive_paths,
             "symlinks": symlinks,

@@ -50,6 +50,12 @@ Use the bundled scripts instead of recreating fragile checks:
 - `scripts/evidence_capture.py` — atomically capture bounded evidence into the ACC project.
 - `scripts/summarize_diagnostics.py` — summarize ACC JSON diagnostics without hiding failures.
 
+For large existing repositories, pass repeatable workspace-relative `--include` values to
+`preflight.py`, `inventory.py`, and `verify_read_only_workspace.py`. Keep the list limited to the
+source, schema, authorization, client, and test files that can become Evidence. The default remains
+a fail-closed full-workspace scan. Include paths reject absolute paths, parent traversal, missing
+paths, and symlink path components.
+
 Run scripts with Python 3.12: use `uv run python <script> --help` in an ACC checkout, or `python3 <script> --help` elsewhere. Consume their JSON output rather than scraping prose. Pass canonical physical paths (`pwd -P` or `realpath`) because the safety helpers intentionally reject symlink path components, including macOS `/var` aliases.
 
 ## Templates and references

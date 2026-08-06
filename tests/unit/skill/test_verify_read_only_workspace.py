@@ -119,3 +119,55 @@ def test_verify_never_opens_sensitive_named_baselines(tmp_path: Path) -> None:
     assert completed.returncode == 3
     assert payload["diagnostics"][0]["code"] == "ACC_SKILL_SECRET_REJECTED"
     assert secret not in completed.stdout
+
+
+def test_verify_scoped_snapshot_ignores_changes_outside_include_paths(tmp_path: Path) -> None:
+    workspace = tmp_path / "source"
+    selected = workspace / "backend" / "app"
+    selected.mkdir(parents=True)
+    route = selected / "routes.py"
+    route.write_text("value = 1\n", encoding="utf-8")
+    outside = workspace / "large.bin"
+    outside.write_bytes(b"x" * 4096)
+
+    _, first = _run(
+        "--workspace",
+        str(workspace),
+        "--max-file-bytes",
+        "2048",
+        "--include",
+        "backend/app/routes.py",
+    )
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(json.dumps(first), encoding="utf-8")
+    outside.write_bytes(b"changed-outside-scope")
+
+    unchanged, unchanged_payload = _run(
+        "--workspace",
+        str(workspace),
+        "--baseline",
+        str(baseline),
+        "--max-file-bytes",
+        "2048",
+        "--include",
+        "backend/app/routes.py",
+    )
+    route.write_text("value = 2\n", encoding="utf-8")
+    changed, changed_payload = _run(
+        "--workspace",
+        str(workspace),
+        "--baseline",
+        str(baseline),
+        "--max-file-bytes",
+        "2048",
+        "--include",
+        "backend/app/routes.py",
+    )
+
+    assert unchanged.returncode == 0
+    assert unchanged_payload["result"]["unchanged"] is True
+    assert unchanged_payload["result"]["snapshot"]["include_paths"] == [
+        "backend/app/routes.py"
+    ]
+    assert changed.returncode == 3
+    assert changed_payload["diagnostics"][0]["code"] == "ACC_SKILL_WORKSPACE_CHANGED"

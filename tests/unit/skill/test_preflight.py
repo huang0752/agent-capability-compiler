@@ -92,7 +92,7 @@ def test_preflight_rejects_overlap_missing_acc_and_oversized_files(tmp_path: Pat
     nested_project.mkdir()
     sibling_project = tmp_path / "sibling-project"
     sibling_project.mkdir()
-    (source / "large.bin").write_bytes(b"12345")
+    (source / "large.bin").write_bytes(b"x" * 100)
 
     overlap, overlap_payload = _run(
         "--source-workspace",
@@ -110,7 +110,7 @@ def test_preflight_rejects_overlap_missing_acc_and_oversized_files(tmp_path: Pat
         "--acc-command",
         "definitely-missing-acc-command",
         "--max-file-bytes",
-        "4",
+        "64",
     )
 
     assert overlap.returncode == 2
@@ -120,3 +120,42 @@ def test_preflight_rejects_overlap_missing_acc_and_oversized_files(tmp_path: Pat
         "ACC_SKILL_ACC_NOT_FOUND",
         "ACC_SKILL_FILE_TOO_LARGE",
     ]
+
+
+def test_preflight_scans_only_explicit_include_boundaries(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    project = tmp_path / "project"
+    selected = source / "backend" / "app"
+    selected.mkdir(parents=True)
+    project.mkdir()
+    (selected / "openapi.json").write_text("{}", encoding="utf-8")
+    (selected / "test_api.py").write_text("def test_api(): pass\n", encoding="utf-8")
+    (source / ".env").write_text("must-not-be-read", encoding="utf-8")
+    (source / "large.bin").write_bytes(b"x" * 100)
+    outside = tmp_path / "outside.txt"
+    outside.write_text("must-not-be-followed", encoding="utf-8")
+    (source / "linked.txt").symlink_to(outside)
+
+    completed, payload = _run(
+        "--source-workspace",
+        str(source),
+        "--project-dir",
+        str(project),
+        "--acc-command",
+        sys.executable,
+        "--max-file-bytes",
+        "64",
+        "--include",
+        "backend/app",
+    )
+
+    assert completed.returncode == 0
+    assert payload["ok"] is True
+    assert payload["result"]["include_paths"] == ["backend/app"]
+    assert payload["result"]["openapi_candidates"] == ["backend/app/openapi.json"]
+    assert payload["result"]["test_candidates"] == ["backend/app/test_api.py"]
+    assert payload["result"]["sensitive_paths"] == []
+    assert payload["result"]["symlinks"] == []
+    assert payload["result"]["oversized_paths"] == []
+    assert "must-not-be-read" not in completed.stdout
+    assert "must-not-be-followed" not in completed.stdout

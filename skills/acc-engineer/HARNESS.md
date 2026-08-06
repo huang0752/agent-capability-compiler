@@ -39,7 +39,7 @@ On a safety or evidence failure, transition to `STOP` and report the blocker. On
 
 ### 0. Preflight
 
-Canonicalize both paths with `pwd -P` or `realpath`. For a new target, create the distinct project directory with `acc init <acc_project>`, enter it, then run `acc doctor --json`; do not run Doctor against an uninitialized empty directory. Run the bundled preflight and read-only verification scripts with Python 3.12. Confirm checkout identity, separate paths, OpenAPI/test discoverability, and absence of likely production secrets in the intended inputs. Record a source snapshot. Stop on ambiguity or risk.
+Canonicalize both paths with `pwd -P` or `realpath`. For a new target, create the distinct project directory with `acc init <acc_project>`, enter it, then run `acc doctor --json`; do not run Doctor against an uninitialized empty directory. Run the bundled preflight and read-only verification scripts with Python 3.12. For a large checkout, pass the same repeatable, workspace-relative `--include` boundaries to Preflight, Inventory, and both source-snapshot calls; do not broaden the scan merely to include generated dependencies, repository metadata, local environments, or binary assets that cannot become Evidence. Confirm checkout identity, separate paths, OpenAPI/test discoverability, and absence of likely production secrets in the intended inputs. Record a source snapshot. Stop on ambiguity or risk.
 
 ### 1. Analyze
 

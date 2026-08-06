@@ -11,7 +11,7 @@
 
 1. 生成 `HANDOFF.md`、`coverage-report.json`、`test-report.json`、`risk-report.json` 和 `candidate.diff`。
 2. 说明能力范围、Evidence 来源、安全边界、实际执行的命令、通过/失败/未运行项和已知限制。
-3. 验证 `candidate.diff` 仅包含 ACC 项目内容，原系统修改数量为零。
+3. 使用 Preflight 时完全相同的 `--include` 列表复核源快照；同时复核源仓库 Git commit 与工作区状态，验证 `candidate.diff` 仅包含 ACC 项目内容，原系统修改数量为零。
 4. 扫描交付物中的 Secret、生产地址、Token、完整上游响应和生产数据；发现即停止并清理。
 5. 给出人工复核顺序，但不自动提交、push、部署或访问生产环境。
 

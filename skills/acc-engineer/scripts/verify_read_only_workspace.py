@@ -151,7 +151,44 @@ def reject_symlink_components(path: Path, *, allow_missing_leaf: bool = False) -
             )
 
 
-def iter_workspace(root: Path) -> Iterator[WalkEntry]:
+def normalize_include_paths(root: Path, raw_paths: list[str] | None) -> list[str]:
+    """Validate and normalize explicit workspace-relative scan boundaries."""
+
+    if not raw_paths:
+        return []
+    normalized: list[str] = []
+    for raw in raw_paths:
+        reject_parent_segments(raw)
+        relative = Path(raw)
+        if relative.is_absolute():
+            raise SafePathError(
+                "ACC_SKILL_PATH_INVALID",
+                "include paths must be relative to the workspace",
+                path=raw,
+            )
+        candidate = root / relative
+        reject_symlink_components(candidate)
+        if not candidate.exists():
+            raise SafePathError(
+                "ACC_SKILL_PATH_INVALID",
+                "include path does not exist",
+                path=raw,
+            )
+        value = candidate.relative_to(root).as_posix()
+        if value == ".":
+            return ["."]
+        normalized.append(value)
+
+    selected: list[str] = []
+    for value in sorted(set(normalized)):
+        path = Path(value)
+        if any(path == Path(parent) or path.is_relative_to(Path(parent)) for parent in selected):
+            continue
+        selected.append(value)
+    return selected
+
+
+def iter_workspace(root: Path, include_paths: list[str] | None = None) -> Iterator[WalkEntry]:
     """Yield sorted regular files and symlink markers without following links."""
 
     def visit(directory: Path, prefix: str) -> Iterator[WalkEntry]:
@@ -180,7 +217,17 @@ def iter_workspace(root: Path) -> Iterator[WalkEntry]:
                     path=relative,
                 ) from exc
 
-    yield from visit(root, "")
+    selected = normalize_include_paths(root, include_paths)
+    if not selected or selected == ["."]:
+        yield from visit(root, "")
+        return
+    for relative in selected:
+        path = root / relative
+        metadata = path.lstat()
+        if stat.S_ISDIR(metadata.st_mode):
+            yield from visit(path, relative)
+        elif stat.S_ISREG(metadata.st_mode):
+            yield relative, path, metadata
 
 
 def hash_file(path: Path, metadata: os.stat_result, max_file_bytes: int, relative: str) -> str:
@@ -229,11 +276,16 @@ def read_file_bytes(
     return b"".join(chunks)
 
 
-def build_snapshot(root: Path, max_file_bytes: int) -> dict[str, object]:
+def build_snapshot(
+    root: Path,
+    max_file_bytes: int,
+    include_paths: list[str] | None = None,
+) -> dict[str, object]:
+    selected = normalize_include_paths(root, include_paths)
     files: list[dict[str, object]] = []
     sensitive_paths: list[dict[str, object]] = []
     symlinks: list[str] = []
-    for relative, path, metadata in iter_workspace(root):
+    for relative, path, metadata in iter_workspace(root, selected):
         if path is None or metadata is None:
             symlinks.append(relative)
             continue
@@ -249,6 +301,7 @@ def build_snapshot(root: Path, max_file_bytes: int) -> dict[str, object]:
         )
     canonical = json.dumps(
         {
+            "include_paths": selected,
             "files": files,
             "sensitive_paths": sensitive_paths,
             "symlinks": symlinks,
@@ -259,6 +312,7 @@ def build_snapshot(root: Path, max_file_bytes: int) -> dict[str, object]:
     return {
         "algorithm": "sha256",
         "digest": f"sha256:{hashlib.sha256(canonical).hexdigest()}",
+        "include_paths": selected,
         "files": files,
         "sensitive_paths": sensitive_paths,
         "symlinks": symlinks,
@@ -306,6 +360,7 @@ def parser() -> JsonArgumentParser:
     value = JsonArgumentParser(command="verify-read-only-workspace")
     value.add_argument("--workspace", required=True)
     value.add_argument("--baseline")
+    value.add_argument("--include", action="append", default=[])
     value.add_argument("--max-file-bytes", type=bounded_size, default=DEFAULT_MAX_FILE_BYTES)
     return value
 
@@ -315,7 +370,7 @@ def main(argv: list[str] | None = None) -> int:
     arguments = parser().parse_args(argv)
     try:
         workspace = safe_existing_path(arguments.workspace, kind="directory")
-        snapshot = build_snapshot(workspace, arguments.max_file_bytes)
+        snapshot = build_snapshot(workspace, arguments.max_file_bytes, arguments.include)
         unchanged: bool | None = None
         diagnostics: list[dict[str, object]] = []
         if arguments.baseline:
