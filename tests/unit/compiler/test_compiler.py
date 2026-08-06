@@ -309,6 +309,72 @@ def test_compile_project_rejects_context_binding_with_open_capability_input(
     assert diagnostic.pointer == "/input_schema/additionalProperties"
 
 
+def test_compile_project_requires_root_object_for_context_binding_input(
+    tmp_path: Path,
+) -> None:
+    project = _make_project(tmp_path)
+    _set_operation_context_binding(project, "customer_id", "principal_id")
+    capability = _load_capability(project)
+    capability["input_schema"] = {
+        "type": "array",
+        "items": {"type": "string"},
+        "additionalProperties": False,
+    }
+    capability["workflow"][0]["call"]["arguments"] = {}
+    _write_capability(project, capability)
+
+    report = compile_project(project)
+
+    diagnostic = next(
+        item
+        for item in report.diagnostics
+        if item.code == "ACC_COMPILE_CONTEXT_BINDING_PUBLIC_INPUT"
+    )
+    assert diagnostic.pointer == "/input_schema/type"
+
+
+@pytest.mark.parametrize(
+    ("keyword", "value"),
+    [
+        ("patternProperties", {"^customer_id$": {"type": "string"}}),
+        ("$ref", "#/$defs/input"),
+        ("allOf", [{}]),
+        ("anyOf", [{}]),
+        ("oneOf", [{}]),
+        ("if", {}),
+        ("then", {}),
+        ("else", {}),
+        ("unevaluatedProperties", False),
+    ],
+)
+def test_compile_project_rejects_context_binding_with_schema_keyword_bypass(
+    tmp_path: Path,
+    keyword: str,
+    value: object,
+) -> None:
+    project = _make_project(tmp_path)
+    _set_operation_context_binding(project, "customer_id", "principal_id")
+    capability = _load_capability(project)
+    capability["input_schema"]["properties"] = {}
+    capability["input_schema"]["additionalProperties"] = False
+    capability["input_schema"][keyword] = value
+    if keyword == "$ref":
+        capability["input_schema"]["$defs"] = {
+            "input": {"type": "object", "additionalProperties": True}
+        }
+    capability["workflow"][0]["call"]["arguments"] = {}
+    _write_capability(project, capability)
+
+    report = compile_project(project)
+
+    diagnostic = next(
+        item
+        for item in report.diagnostics
+        if item.code == "ACC_COMPILE_CONTEXT_BINDING_PUBLIC_INPUT"
+    )
+    assert diagnostic.pointer == f"/input_schema/{keyword}"
+
+
 @pytest.mark.parametrize(
     ("scopes_pointer", "scope_mapping", "accepted"),
     [

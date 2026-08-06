@@ -26,6 +26,25 @@ EnvironmentReference = Annotated[
     str,
     Field(min_length=1, pattern=r"^[A-Z][A-Z0-9_]*$"),
 ]
+ContextBindingReference = Annotated[
+    str,
+    Field(
+        pattern=(
+            r"^(?:principal_id|tenant_context\.[A-Za-z][A-Za-z0-9_-]*"
+            r"(?:\.[A-Za-z][A-Za-z0-9_-]*)*)$"
+        )
+    ),
+]
+_SENSITIVE_CONTEXT_SEGMENTS = (
+    "authorization",
+    "cookie",
+    "credential",
+    "header",
+    "jwt",
+    "password",
+    "secret",
+    "token",
+)
 
 
 def _checked_json_schema(value: JsonObject) -> JsonObject:
@@ -302,7 +321,7 @@ class Operation(StrictModel):
     input_schema: JsonObject
     output_schema: JsonObject
     http: HttpOperation
-    context_bindings: dict[NonEmptyString, NonEmptyString] = Field(default_factory=dict)
+    context_bindings: dict[NonEmptyString, ContextBindingReference] = Field(default_factory=dict)
     safety: OperationSafety
     evidence: Annotated[list[Evidence], Field(min_length=1)]
 
@@ -310,6 +329,23 @@ class Operation(StrictModel):
     @classmethod
     def validate_json_schema(cls, value: JsonObject) -> JsonObject:
         return _checked_json_schema(value)
+
+    @field_validator("context_bindings")
+    @classmethod
+    def validate_context_binding_sources(
+        cls,
+        value: dict[str, str],
+    ) -> dict[str, str]:
+        for source in value.values():
+            if source == "principal_id":
+                continue
+            for segment in source.removeprefix("tenant_context.").split("."):
+                lowered = segment.lower()
+                if any(marker in lowered for marker in _SENSITIVE_CONTEXT_SEGMENTS):
+                    raise ValueError(
+                        "context_bindings cannot reference sensitive tenant context segments"
+                    )
+        return value
 
     @model_validator(mode="after")
     def validate_parameter_mappings(self) -> Operation:
@@ -567,6 +603,7 @@ __all__ = [
     "CallAction",
     "CallStep",
     "Capability",
+    "ContextBindingReference",
     "EmitAction",
     "EmitStep",
     "EnvironmentSecretCredentials",

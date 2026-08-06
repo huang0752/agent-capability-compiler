@@ -377,6 +377,54 @@ def test_operation_supports_optional_legacy_credential_and_context_bindings() ->
     }
 
 
+@pytest.mark.parametrize(
+    "source",
+    [
+        "principal_id",
+        "tenant_context.tenant_id",
+        "tenant_context.organization.region-id",
+    ],
+)
+def test_operation_accepts_only_safe_context_binding_sources(source: str) -> None:
+    document = operation_document()
+    document["context_bindings"] = {"customer_id": source}
+
+    operation = models.Operation.model_validate(document)
+
+    assert operation.context_bindings["customer_id"] == source
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "tenant_context",
+        "tenant_context.",
+        "tenant_context..tenant_id",
+        "gateway_session_id",
+        "target_system_id",
+        "auth_state_handle",
+        "source_scopes",
+        "deployment_scope_ceiling",
+        "effective_scopes",
+        "token",
+        "password",
+        "header.authorization",
+        "credential",
+        "tenant_context.access_token",
+        "tenant_context.profile.password_hash",
+        "tenant_context.headers.authorization",
+        "tenant_context.credential_ref",
+        "tenant_context._private",
+    ],
+)
+def test_operation_rejects_untrusted_context_binding_sources(source: str) -> None:
+    document = operation_document()
+    document["context_bindings"] = {"customer_id": source}
+
+    with pytest.raises(ValidationError, match="context_bindings"):
+        models.Operation.model_validate(document)
+
+
 def test_operation_parameter_mappings_must_reference_declared_inputs() -> None:
     document = operation_document()
     http = deepcopy(document["http"])

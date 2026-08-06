@@ -32,6 +32,7 @@ class ValidationReport:
 
     project: Project | None = None
     operations: dict[str, Operation] = field(default_factory=dict)
+    operation_paths: dict[str, str] = field(default_factory=dict)
     capabilities: dict[str, Capability] = field(default_factory=dict)
     policies: dict[str, Policy] = field(default_factory=dict)
     evals: dict[str, Eval] = field(default_factory=dict)
@@ -165,6 +166,7 @@ def _load_collection[ModelT: StrictModel](
     model_type: type[ModelT],
     duplicate_code: str,
     diagnostics: list[Diagnostic],
+    relative_paths: dict[str, str] | None = None,
 ) -> dict[str, ModelT]:
     documents: dict[str, ModelT] = {}
     for relative_path in _document_paths(root, directory, diagnostics):
@@ -186,6 +188,8 @@ def _load_collection[ModelT: StrictModel](
             )
             continue
         documents[identifier] = model
+        if relative_paths is not None:
+            relative_paths[identifier] = relative_path
     return documents
 
 
@@ -232,7 +236,7 @@ def _validate_auth_contract(report: ValidationReport) -> None:
                         message=(
                             "Legacy authentication requires an Operation-level credential_ref."
                         ),
-                        path=f"operations/{operation_id}.yaml",
+                        path=report.operation_paths[operation_id],
                         pointer="/http/credential_ref",
                     )
                 )
@@ -247,7 +251,7 @@ def _validate_auth_contract(report: ValidationReport) -> None:
                     message=(
                         "Operation credential_ref is forbidden when provider.auth is configured."
                     ),
-                    path=f"operations/{operation_id}.yaml",
+                    path=report.operation_paths[operation_id],
                     pointer="/http/credential_ref",
                 )
             )
@@ -292,6 +296,7 @@ def validate_project(project_root: str | Path = ".") -> ValidationReport:
         Operation,
         "ACC_OPERATION_ID_DUPLICATE",
         report.diagnostics,
+        report.operation_paths,
     )
     report.capabilities = _load_collection(
         root,

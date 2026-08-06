@@ -189,6 +189,23 @@ def test_provider_auth_forbids_operation_credential(tmp_path: Path) -> None:
     assert diagnostic.pointer == "/http/credential_ref"
 
 
+def test_auth_diagnostic_uses_real_operation_relative_path(tmp_path: Path) -> None:
+    project = make_valid_project(tmp_path)
+    original = project / "operations" / "crm.get_customer.yaml"
+    renamed = project / "operations" / "customer-by-id.yaml"
+    original.rename(renamed)
+    operation = yaml.safe_load(renamed.read_text(encoding="utf-8"))
+    operation["http"].pop("credential_ref")
+    _write_yaml(renamed, operation)
+
+    report = validate_project(project)
+
+    diagnostic = next(
+        item for item in report.diagnostics if item.code == "ACC_AUTH_CREDENTIAL_REQUIRED"
+    )
+    assert diagnostic.path == "operations/customer-by-id.yaml"
+
+
 @pytest.mark.parametrize(
     ("transport", "auth", "accepted"),
     [

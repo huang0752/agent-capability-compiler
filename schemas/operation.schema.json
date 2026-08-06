@@ -239,7 +239,7 @@
   "properties": {
     "context_bindings": {
       "additionalProperties": {
-        "minLength": 1,
+        "pattern": "^(?:principal_id|tenant_context\\.[A-Za-z][A-Za-z0-9_-]*(?:\\.[A-Za-z][A-Za-z0-9_-]*)*)$",
         "type": "string"
       },
       "propertyNames": {

@@ -507,6 +507,25 @@ def _compile_capability(
         for operation_id in dependencies
         for target in operation_bindings.get(operation_id, set())
     }
+    unsafe_root_keywords = (
+        "$ref",
+        "allOf",
+        "anyOf",
+        "oneOf",
+        "if",
+        "then",
+        "else",
+        "patternProperties",
+        "unevaluatedProperties",
+    )
+    if dependency_bindings and capability.input_schema.get("type") != "object":
+        _diagnostic(
+            diagnostics,
+            code="ACC_COMPILE_CONTEXT_BINDING_PUBLIC_INPUT",
+            message="A Capability using context bindings requires a root object input schema.",
+            path=path,
+            pointer="/input_schema/type",
+        )
     if dependency_bindings and capability.input_schema.get("additionalProperties") is not False:
         _diagnostic(
             diagnostics,
@@ -518,6 +537,21 @@ def _compile_capability(
             path=path,
             pointer="/input_schema/additionalProperties",
         )
+    if dependency_bindings:
+        for keyword in unsafe_root_keywords:
+            if keyword not in capability.input_schema:
+                continue
+            escaped_keyword = keyword.replace("~", "~0").replace("/", "~1")
+            _diagnostic(
+                diagnostics,
+                code="ACC_COMPILE_CONTEXT_BINDING_PUBLIC_INPUT",
+                message=(
+                    "A Capability using context bindings cannot use root input schema "
+                    f"keyword: {keyword}"
+                ),
+                path=path,
+                pointer=f"/input_schema/{escaped_keyword}",
+            )
     for target in sorted(public_inputs & dependency_bindings):
         escaped_target = target.replace("~", "~0").replace("/", "~1")
         _diagnostic(
@@ -561,7 +595,7 @@ def compile_project(project_root: str | Path = ".") -> CompilationReport:
                     "A context binding target must be a declared Operation input mapped "
                     f"to an HTTP path or query parameter: {target}"
                 ),
-                path=f"operations/{operation_id}.yaml",
+                path=validation.operation_paths[operation_id],
                 pointer=f"/context_bindings/{escaped_target}",
             )
     policy_ids = set(validation.policies)

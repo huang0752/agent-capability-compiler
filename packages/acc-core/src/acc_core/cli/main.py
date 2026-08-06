@@ -207,7 +207,8 @@ def _doctor_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope]
         {"name": "project", "ok": project_ok, "detail": str(project_root)},
     ]
     if python_ok and project_ok:
-        return EXIT_SUCCESS, _success("doctor", {"checks": checks})
+        warnings = [item for item in report.diagnostics if item.severity != "error"]
+        return EXIT_SUCCESS, _success("doctor", {"checks": checks}, warnings)
     diagnostic = (
         project_diagnostics[0]
         if project_diagnostics
@@ -387,7 +388,7 @@ def _coverage_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelop
     report = validate_project(Path(str(arguments.path)))
     if not report.ok or report.project is None:
         return EXIT_INPUT, _compilation_failure("coverage", report.diagnostics)
-    return EXIT_SUCCESS, _success("coverage", analyze_coverage(report))
+    return EXIT_SUCCESS, _success("coverage", analyze_coverage(report), report.diagnostics)
 
 
 def _read_json_document(path_value: str, *, max_bytes: int = 1_048_576) -> object:
@@ -480,6 +481,7 @@ def _pack_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope]:
             "project_id": built.manifest.project_id,
             "project_version": built.manifest.project_version,
         },
+        report.diagnostics,
     )
 
 
@@ -811,6 +813,8 @@ def _render(envelope: ResultEnvelope, *, json_output: bool) -> None:
         print(f"{envelope.command}: ok")
         if envelope.result:
             print(json.dumps(envelope.result, indent=2, ensure_ascii=False, sort_keys=True))
+        for diagnostic in envelope.diagnostics:
+            print(f"{diagnostic.code}: {diagnostic.message}", file=sys.stderr)
     else:
         for diagnostic in envelope.diagnostics:
             print(f"{diagnostic.code}: {diagnostic.message}", file=sys.stderr)

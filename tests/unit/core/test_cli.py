@@ -233,11 +233,17 @@ def test_doctor_reports_environment_and_project_checks(tmp_path: Path) -> None:
     completed = _run_acc("doctor", "--json", cwd=project)
 
     assert completed.returncode == 0, completed.stderr
-    payload = _json_envelope(completed, command="doctor", ok=True)
+    payload = _json_envelope(
+        completed,
+        command="doctor",
+        ok=True,
+        allow_warnings=True,
+    )
     checks = {check["name"]: check for check in payload["result"]["checks"]}
     assert {"python", "project"} <= checks.keys()
     assert checks["python"]["ok"] is True
     assert checks["project"]["ok"] is True
+    assert [item["code"] for item in payload["diagnostics"]] == ["ACC_AUTH_LEGACY_CREDENTIAL"]
 
 
 def test_schema_exports_all_models_as_draft_2020_12(tmp_path: Path) -> None:
@@ -310,6 +316,57 @@ def test_compile_check_preserves_legacy_auth_warning(tmp_path: Path) -> None:
     payload = _json_envelope(
         completed,
         command="compile",
+        ok=True,
+        allow_warnings=True,
+    )
+    assert [item["code"] for item in payload["diagnostics"]] == ["ACC_AUTH_LEGACY_CREDENTIAL"]
+
+
+def test_successful_default_output_writes_warnings_to_stderr(tmp_path: Path) -> None:
+    project = _make_valid_project(tmp_path)
+
+    completed = _run_acc("validate", cwd=project)
+
+    assert completed.returncode == 0
+    assert "validate: ok" in completed.stdout
+    assert "ACC_AUTH_LEGACY_CREDENTIAL" in completed.stderr
+
+
+@pytest.mark.parametrize("json_output", [False, True])
+def test_pack_success_preserves_compile_warnings(
+    tmp_path: Path,
+    json_output: bool,
+) -> None:
+    project = _make_valid_project(tmp_path)
+    arguments = ["pack", "--output", "build/test.accpkg"]
+    if json_output:
+        arguments.append("--json")
+
+    completed = _run_acc(*arguments, cwd=project)
+
+    assert completed.returncode == 0, completed.stderr
+    if json_output:
+        payload = _json_envelope(
+            completed,
+            command="pack",
+            ok=True,
+            allow_warnings=True,
+        )
+        assert [item["code"] for item in payload["diagnostics"]] == ["ACC_AUTH_LEGACY_CREDENTIAL"]
+    else:
+        assert "pack: ok" in completed.stdout
+        assert "ACC_AUTH_LEGACY_CREDENTIAL" in completed.stderr
+
+
+def test_coverage_success_preserves_validation_warning(tmp_path: Path) -> None:
+    project = _make_valid_project(tmp_path)
+
+    completed = _run_acc("coverage", "--json", cwd=project)
+
+    assert completed.returncode == 0, completed.stderr
+    payload = _json_envelope(
+        completed,
+        command="coverage",
         ok=True,
         allow_warnings=True,
     )
