@@ -6,7 +6,7 @@
 
 ## 背景
 
-ACC 已能扫描完整接口分母、编译 Read/Action Capability，并通过确定性 Core 校验 Evidence、Schema、权限和 Action 安全合同。但现有流程仍可能出现两类失真：
+ACC 已能扫描完整接口分母、编译 Read/Action Capability，并通过确定性 Core 校验 Evidence、Schema、身份传递边界和 Action 安全合同。但现有流程仍可能出现两类失真：
 
 1. AI 或项目生成器先挑少量容易实现的能力，再把其他候选批量标记为 `ineligible`；
 2. 用户面对完整接口清单逐项确认，认知成本过高，无法按业务目标做选择。
@@ -22,6 +22,7 @@ ACC 已能扫描完整接口分母、编译 Read/Action Capability，并通过�
 - 用户选择业务目标，不负责选择技术接口或编写 ACC 合同。
 - Core 从 typed evidence 和合同派生可发布状态，不信任 AI 自报的 `eligible`。
 - 支持代码变更后的增量重扫、影响分析和版本化领域决策。
+- 保持原系统为用户、租户、角色、资源和动态权限的唯一授权终裁者；ACC 不复制源 RBAC。
 
 ## 非目标
 
@@ -31,6 +32,7 @@ ACC 已能扫描完整接口分母、编译 Read/Action Capability，并通过�
 - 不要求一次完成整个大型系统的深度分析。
 - 不把前端隐藏、按钮禁用或 HTTP 方法当成权限和业务效果证明。
 - 不为特定系统硬编码领域、路由、权限或 Action 白名单。
+- 不根据源权限列表向用户授予能力，也不把 ACC Scope 映射当成源系统授权替代品。
 
 ## 核心原则
 
@@ -41,6 +43,7 @@ ACC 已能扫描完整接口分母、编译 Read/Action Capability，并通过�
 5. **明确项自动推进，异常项才询问**：降低用户负担，但不替用户猜业务政策。
 6. **领域结果版本化**：完成后不能静默改写；跨域发现通过变更请求处理。
 7. **验证等级诚实分层**：静态建模、离线执行、沙箱验证、源连接和生产发布互不冒充。
+8. **源系统授权终裁**：ACC 只验证身份不可伪造、调用使用当前源会话、部署边界只能收窄；每次资源访问仍由源 JWT 和源接口决定。
 
 ## 总体架构
 
@@ -64,7 +67,7 @@ Source Workspace
 
 - GET、HEAD、POST、PUT、PATCH、DELETE 等注册路由；
 - 前端页面、导航、事件、API 调用、默认值、条件、选项和结果消费；
-- 权限、租户、数据空间和身份边界；
+- 登录交换、JWT 使用方式、租户/主体上下文和权限终裁边界；
 - 实体名称、状态字段、服务调用和测试入口；
 - 下载、流式响应、异步任务、外部集成等特殊边界。
 
@@ -100,7 +103,7 @@ AI 可以按依赖、业务价值和风险推荐顺序，用户可调整。一�
 
 - 业务意图、资源和状态流；
 - 请求/响应 Schema；
-- 权限、租户、主体和数据边界；
+- 身份传递、租户/主体防覆盖和源系统授权终裁方式；
 - Read/Action effect 候选；
 - Action risk、reversibility、approval、retry、idempotency、conflict control 和 outcome resolution；
 - 默认值、选项、关联数据、条件和客户端状态；
@@ -125,7 +128,7 @@ excluded_intents: [hard_delete]
 AI 自动处理符合该策略且证据充分的候选。只有以下情况询问用户：
 
 - 源码、前端或测试互相冲突；
-- 业务效果、风险或权限语义无法确定；
+- 业务效果、风险或身份/授权终裁边界无法确定；
 - 多种 Capability 组合都合理；
 - Action 的审批、冲突控制或结果恢复需要业务选择；
 - 需要用户补充测试环境、人工流程或领域术语。
@@ -172,7 +175,9 @@ interaction_ids: []
 kind_claim: action
 effect_claim: transition
 claims:
-  authorization: {status: proven, evidence_refs: []}
+  authorization_boundary:
+    status: upstream_authoritative
+    evidence_refs: []
   schema: {status: proven, evidence_refs: []}
   risk: {status: candidate, evidence_refs: []}
   conflict_control: {status: missing, evidence_refs: []}
@@ -182,6 +187,15 @@ user_disposition: undecided
 verification_level: action_discovered
 gaps: []
 ```
+
+`authorization_boundary` 证明的是“哪个源身份发起调用、可信上下文不能被 Agent 覆盖、源接口仍会终裁”，而不是证明 ACC 复刻了原系统权限。允许的状态包括：
+
+- `upstream_authoritative`
+- `identity_binding_proven`
+- `context_isolation_proven`
+- `unknown`
+
+若登录响应提供源 permissions，ACC 可以把它们映射为调用性提示或提前拒绝，但该映射只能收窄，不能授予权限。any-of、动态权限、资源级权限和数据空间判断可以保持 `upstream_authoritative`，由源接口每次调用终裁。
 
 候选状态包括：
 
@@ -261,6 +275,24 @@ Action 继续 fail closed，但不能把乐观版本号和 source idempotency ke
 
 这些策略属于通用 ActionSemantics，不写入任何项目专属名称。
 
+## 身份、权限与部署边界
+
+ACC 明确区分三种不同事实：
+
+1. **源系统授权**：账号密码换取的源 JWT 是否能访问某个租户、资源或操作，由原系统最终判断；ACC 不复制 RBAC、角色继承、动态 any-of 权限或数据空间算法。
+2. **ACC 部署收窄**：Capability allowlist、effect ceiling、maximum risk 和可选 Scope precheck 决定当前 Agent 部署最多可以尝试什么。它们不能把源系统拒绝的调用变成允许。
+3. **单次 Action 意图确认**：用户拥有源权限不代表用户授权 Agent 执行本次高风险操作。`prepare → approve → commit → status` 的 approval 绑定本次输入、预览、Principal、会话和 Pack。
+
+运行时必须满足：
+
+- 用户账号密码只用于源登录交换，Agent 不接收密码或源 JWT；
+- Gateway token 只能恢复其绑定的 Principal 和源认证状态；
+- Capability 输入不能覆盖 Principal、tenant、source scopes、Authorization 或认证句柄；
+- 每次 REST 调用继续携带当前用户的源认证并由源接口终裁；
+- 源 401/403/404 被映射为稳定错误，不触发权限推断、权限提升或跨用户重试；
+- 可选 Scope mapping 只提供 callability 和提前拒绝，未知或动态权限不伪装成已证明；
+- 部署策略和 Action approval 只增加限制，不替代源授权。
+
 ## 领域处理流程
 
 ### 阶段 A：全局准备
@@ -299,7 +331,7 @@ Action 继续 fail closed，但不能把乐观版本号和 source idempotency ke
 - route/interaction/candidate disposition；
 - Read 与 Action 合同；
 - selector constructability；
-- 权限和租户证明；
+- 身份绑定、上下文隔离、源授权终裁和部署收窄边界；
 - Action lifecycle、安全策略和验证等级；
 - blocked、deferred、rejected 和 unknown；
 - 跨域依赖和测试结果。
@@ -314,7 +346,7 @@ Action 继续 fail closed，但不能把乐观版本号和 source idempotency ke
 - `business_goal_coverage`
 - `candidate_classification`
 - `semantics_provenance`
-- `authorization_boundary`
+- `identity_and_upstream_authorization`
 - `lifecycle_constructability`
 - `conflict_control_fidelity`
 - `idempotency_fidelity`
@@ -348,6 +380,7 @@ Action 继续 fail closed，但不能把乐观版本号和 source idempotency ke
 - AI 扫描中断：保留扫描游标和已冻结 Evidence，不把部分结果标为完成。
 - 候选分类冲突：保持 unknown，生成单个用户问题。
 - Evidence 漂移：使对应 Claim 失效并触发变更请求。
+- 源 permissions 缺失或动态：保持 `upstream_authoritative`，不阻止建模，但禁止宣称 ACC 已完成等价权限预检。
 - 用户暂不回答：领域进入 `awaiting_user`，其他无依赖领域可以继续。
 - Core 校验失败：领域进入 `validation_failed`，保留诊断和修复建议。
 - 跨域循环：生成依赖组，由用户确认统一处理顺序或拆分边界。
@@ -370,6 +403,7 @@ Action 继续 fail closed，但不能把乐观版本号和 source idempotency ke
 - 领域开始、异常提问、结束确认的完整状态机；
 - 跨域依赖和 ChangeRequest；
 - Read、Action、UI Interaction 与 Scope/Coverage 同源闭包；
+- 当前用户源 JWT 终裁、A/B 会话隔离、身份参数防覆盖，以及 Scope 仅收窄不授权；
 - 中断后恢复和 Evidence 漂移。
 
 ### 跨行业 E2E Fixtures
