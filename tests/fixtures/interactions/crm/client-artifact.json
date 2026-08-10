@@ -1,0 +1,1 @@
+{"artifact_kind":"client_source_snapshot","surface":"customer-workspace","events":[{"event":"screen_load","request":"GET /customers"},{"event":"select_customer","request":"GET /customers/{customer_id}","binding":"selected_record.id -> customer_id"}],"render":{"list":["id","name"],"detail":["id","name"]}}

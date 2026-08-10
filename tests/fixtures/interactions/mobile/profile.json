@@ -1,0 +1,1 @@
+{"id":"mobile","surface":"offline-filter","route_ids":[],"call_order":"independent","public_inputs":["/query"],"defaults":[],"selectors":[],"states":["ready"],"presentation":[{"id":"local-results","role":"table","fields":["/label","/value"],"state_ids":["ready"]}],"required_scenarios":["mobile.client-only.filter"],"action":false}

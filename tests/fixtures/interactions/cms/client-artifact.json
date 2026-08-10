@@ -1,0 +1,1 @@
+{"artifact_kind":"client_source_snapshot","surface":"article-editor","fields":{"title":{"render":"heading"},"body":{"render":"long_text","empty_state":"No content"}},"request":"GET /articles/{article_id}"}

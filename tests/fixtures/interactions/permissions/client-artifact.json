@@ -1,0 +1,1 @@
+{"artifact_kind":"client_source_snapshot","surface":"permission-browser","list":{"growth":"server_pagination","page_parameter":"page","identity_partition":"current_principal","fields":["code","name"]},"request":"GET /permissions"}

@@ -1,0 +1,1 @@
+{"artifact_kind":"client_source_snapshot","surface":"order-workbench","shared_context":{"order_id":"route.order_id"},"aggregation":["order-header","order-lines","approval-status"],"action":{"prepare":"preview","approve":"human-confirmation","commit":"submit","status":"poll"}}

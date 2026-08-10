@@ -1,0 +1,1 @@
+{"artifact_kind":"client_source_snapshot","surface":"ledger-search","selectors":[{"id":"account","source":"account-options"},{"id":"currency","source":"currency-options"},{"id":"period","source":"period-options"}],"dependency_graph":[]}

@@ -1,0 +1,1 @@
+{"id":"monitoring","surface":"job-monitor","route_ids":["GET /jobs/{job_id}"],"call_order":"sequential","public_inputs":["/job_id"],"defaults":[],"selectors":[],"states":["ready","stale"],"presentation":[{"id":"job-status","role":"status","fields":["/job_id","/status"],"state_ids":["ready","stale"]}],"required_scenarios":["monitoring.single-job.refresh"],"action":false}
