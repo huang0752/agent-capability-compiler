@@ -7,6 +7,11 @@ from typing import Literal, Protocol, Self
 from pydantic import ConfigDict, Field, JsonValue, ValidationInfo, field_validator, model_validator
 
 from acc_core.contracts import JsonPointer
+from acc_core.interactions.expressions import (
+    ConditionExpression,
+    iter_condition_references,
+    validate_condition_complexity,
+)
 from acc_core.models import Evidence, NonEmptyString, StrictModel
 
 type InteractionTriggerKind = Literal[
@@ -277,12 +282,12 @@ class OptionSource(InteractionModel):
 
 
 class InteractionCondition(InteractionModel):
-    """Evidence-bound placeholder for a condition normalized in the next model layer."""
+    """Apply a bounded, platform-neutral condition to one semantic target."""
 
     id: NonEmptyString
     target: Literal["visible", "enabled", "required", "reset"]
     target_pointer: JsonPointer
-    source_expression: NonEmptyString
+    expression: ConditionExpression
     evidence: Evidence
 
 
@@ -360,6 +365,26 @@ class InteractionEvidenceClaim(InteractionModel):
     evidence: Evidence
     evidence_pointer: JsonPointer | None = None
     authority: Literal["contract", "implementation", "test", "observation"]
+
+
+class InteractionOverride(InteractionModel):
+    """Document an evidence-backed deviation from one adopted source interaction."""
+
+    id: NonEmptyString
+    interaction_id: NonEmptyString
+    target_pointer: JsonPointer
+    justification: NonEmptyString
+    authority: Literal["contract", "implementation", "test"]
+    evidence: Evidence
+
+
+class InteractionOmission(InteractionModel):
+    """Document an evidence-backed decision not to adopt one source interaction."""
+
+    interaction_id: NonEmptyString
+    justification: NonEmptyString
+    authority: Literal["contract", "implementation", "test"]
+    evidence: Evidence
 
 
 class UIInteraction(InteractionModel):
@@ -471,12 +496,98 @@ class UIInteractionInventory(InteractionModel):
         return self
 
 
+class CapabilityInteractionContract(InteractionModel):
+    """Adopt evidenced source interactions for one Agent-facing Capability."""
+
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
+
+    schema_version: Literal["2"]
+    capability_id: NonEmptyString
+    interaction_ids: list[NonEmptyString]
+    public_input_bindings: list[InputBinding]
+    trusted_input_bindings: list[InputBinding]
+    defaults: list[InteractionDefault]
+    option_sources: list[OptionSource]
+    conditions: list[InteractionCondition]
+    related_data: list[RelatedDataBinding]
+    result_consumption: list[ResultConsumption]
+    required_scenarios: list[NonEmptyString]
+    overrides: list[InteractionOverride] = Field(default_factory=list)
+    omissions: list[InteractionOmission]
+
+    @field_validator("interaction_ids", "required_scenarios")
+    @classmethod
+    def validate_sorted_references(cls, value: list[str], info: ValidationInfo) -> list[str]:
+        return _validate_unique_sorted(value, field_name=_validation_field_name(info))
+
+    @field_validator(
+        "public_input_bindings",
+        "trusted_input_bindings",
+        "defaults",
+        "option_sources",
+        "conditions",
+        "related_data",
+        "result_consumption",
+        "overrides",
+    )
+    @classmethod
+    def validate_sorted_contract_models(
+        cls, value: list[_Identified], info: ValidationInfo
+    ) -> list[_Identified]:
+        return _validate_models_by_id(value, field_name=_validation_field_name(info))
+
+    @field_validator("omissions")
+    @classmethod
+    def validate_sorted_omissions(
+        cls, value: list[InteractionOmission]
+    ) -> list[InteractionOmission]:
+        identifiers = [item.interaction_id for item in value]
+        _validate_unique_sorted(identifiers, field_name="omission interaction ids")
+        return value
+
+    @model_validator(mode="after")
+    def validate_contract_closure(self) -> Self:
+        if any(binding.source_kind == "trusted_context" for binding in self.public_input_bindings):
+            raise ValueError("public input bindings cannot use trusted_context")
+        if any(binding.source_kind != "trusted_context" for binding in self.trusted_input_bindings):
+            raise ValueError("trusted input bindings must use trusted_context")
+
+        bindings = [*self.public_input_bindings, *self.trusted_input_bindings]
+        binding_targets = [binding.target_pointer for binding in bindings]
+        if len(binding_targets) != len(set(binding_targets)):
+            raise ValueError("input binding target pointers must be unique")
+
+        declared_inputs = set(binding_targets)
+        declared_inputs.update(default.target_pointer for default in self.defaults)
+        declared_inputs.update(source.target_pointer for source in self.option_sources)
+        for condition in self.conditions:
+            validate_condition_complexity(condition.expression)
+            if condition.target_pointer not in declared_inputs:
+                raise ValueError("condition target must reference a declared capability input")
+            if any(
+                pointer not in declared_inputs
+                for pointer in iter_condition_references(condition.expression)
+            ):
+                raise ValueError("condition reference must resolve to a declared capability input")
+
+        adopted = set(self.interaction_ids)
+        omitted = {omission.interaction_id for omission in self.omissions}
+        if adopted & omitted:
+            raise ValueError("an interaction cannot be both adopted and omitted")
+        if any(override.interaction_id not in adopted for override in self.overrides):
+            raise ValueError("an override must reference an adopted interaction")
+        return self
+
+
 __all__ = [
+    "CapabilityInteractionContract",
     "InputBinding",
     "InputMapping",
     "InteractionCondition",
     "InteractionDefault",
     "InteractionEvidenceClaim",
+    "InteractionOmission",
+    "InteractionOverride",
     "InteractionScope",
     "InteractionState",
     "InteractionSummary",

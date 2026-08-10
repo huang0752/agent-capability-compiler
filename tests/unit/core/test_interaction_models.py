@@ -119,7 +119,10 @@ def test_inventory_accepts_platform_neutral_nested_interaction_facts() -> None:
                     "id": "country-visible",
                     "target": "visible",
                     "target_pointer": "/country_id",
-                    "source_expression": "country selector is enabled for this flow",
+                    "expression": {
+                        "operator": "present",
+                        "operand": {"kind": "reference", "pointer": "/country_id"},
+                    },
                     "evidence": _evidence(),
                 }
             ],
