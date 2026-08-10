@@ -18,6 +18,12 @@ from typing import Any, Never, cast
 import yaml
 from pydantic import JsonValue, ValidationError
 
+from acc_core.cli.domains import (
+    check_domain_review,
+    impact_domain_change,
+    show_domain,
+    status_domains,
+)
 from acc_core.cli.scope_diagnostics import analyze_run_scope_configuration
 from acc_core.compiler import compile_project
 from acc_core.compiler.diff import semantic_diff
@@ -90,6 +96,33 @@ def _parser() -> AccArgumentParser:
     coverage_parser.add_argument("path", nargs="?", default=".")
     _add_json_argument(coverage_parser)
     coverage_parser.set_defaults(handler=_coverage_command)
+
+    domains_parser = subparsers.add_parser("domains", help="inspect deterministic domain workflow")
+    domains_subparsers = domains_parser.add_subparsers(dest="domains_command", required=True)
+    domains_status_parser = domains_subparsers.add_parser("status", help="show domain readiness")
+    domains_status_parser.add_argument("path", nargs="?", default=".")
+    _add_json_argument(domains_status_parser)
+    domains_status_parser.set_defaults(handler=_domains_command)
+    domains_show_parser = domains_subparsers.add_parser("show", help="show one domain")
+    domains_show_parser.add_argument("domain_id")
+    domains_show_parser.add_argument("--project", default=".")
+    _add_json_argument(domains_show_parser)
+    domains_show_parser.set_defaults(handler=_domains_command)
+    domains_review_parser = domains_subparsers.add_parser(
+        "review", help="check a structured domain decision"
+    )
+    domains_review_parser.add_argument("review_path")
+    domains_review_parser.add_argument("--project", default=".")
+    domains_review_parser.add_argument("--check", action="store_true", required=True)
+    _add_json_argument(domains_review_parser)
+    domains_review_parser.set_defaults(handler=_domains_command)
+    domains_impact_parser = domains_subparsers.add_parser(
+        "impact", help="show one domain evidence-change impact"
+    )
+    domains_impact_parser.add_argument("request_id")
+    domains_impact_parser.add_argument("--project", default=".")
+    _add_json_argument(domains_impact_parser)
+    domains_impact_parser.set_defaults(handler=_domains_command)
 
     diff_parser = subparsers.add_parser("diff", help="compare two compiled JSON documents")
     diff_parser.add_argument("before")
@@ -472,6 +505,32 @@ def _coverage_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelop
         )
     result = analyze_coverage(report, inventory).model_dump(mode="json")
     return EXIT_SUCCESS, _success("coverage", result, report.diagnostics)
+
+
+def _domains_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope]:
+    command = f"domains {arguments.domains_command}"
+    if arguments.domains_command == "status":
+        result, diagnostics = status_domains(Path(str(arguments.path)).expanduser().resolve())
+    elif arguments.domains_command == "show":
+        result, diagnostics = show_domain(
+            Path(str(arguments.project)).expanduser().resolve(), str(arguments.domain_id)
+        )
+    elif arguments.domains_command == "review":
+        result, diagnostics = check_domain_review(
+            Path(str(arguments.project)).expanduser().resolve(), str(arguments.review_path)
+        )
+    else:
+        result, diagnostics = impact_domain_change(
+            Path(str(arguments.project)).expanduser().resolve(), str(arguments.request_id)
+        )
+    if result is None:
+        return EXIT_INPUT, ResultEnvelope(
+            ok=False,
+            command=command,
+            result=None,
+            diagnostics=diagnostics,
+        )
+    return EXIT_SUCCESS, _success(command, result, diagnostics)
 
 
 def _read_json_document(path_value: str, *, max_bytes: int = 1_048_576) -> object:
