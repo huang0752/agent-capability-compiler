@@ -233,6 +233,8 @@ def _init_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope]:
         "operations",
         "policies",
         "source-contracts",
+        "domain-decisions",
+        "domain-change-requests",
     ):
         (target / directory).mkdir()
     template = {

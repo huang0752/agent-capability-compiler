@@ -35,6 +35,10 @@ EXPORTED_SCHEMAS = {
     "source-contract.schema.json",
     "interaction-contract.schema.json",
     "ui-interaction-inventory.schema.json",
+    "domain-map.schema.json",
+    "capability-candidates.schema.json",
+    "domain-decision.schema.json",
+    "domain-change-request.schema.json",
 }
 PROJECT_DIRECTORIES = {
     "capabilities",
@@ -45,6 +49,8 @@ PROJECT_DIRECTORIES = {
     "policies",
     "source-contracts",
     "interaction-contracts",
+    "domain-decisions",
+    "domain-change-requests",
 }
 
 
@@ -1163,6 +1169,10 @@ def test_init_creates_minimal_project_and_never_overwrites(tmp_path: Path) -> No
     assert project_document["provider"]["auth"] == {"kind": "none"}
     assert {entry.name for entry in project.iterdir() if entry.is_dir()} >= PROJECT_DIRECTORIES
     assert not (project / "ui-interaction-inventory.yaml").exists()
+    assert not (project / "domain-map.yaml").exists()
+    assert not (project / "capability-candidates.yaml").exists()
+    assert not any((project / "domain-decisions").iterdir())
+    assert not any((project / "domain-change-requests").iterdir())
 
     original = (project / "project.yaml").read_text(encoding="utf-8")
     protected_content = f"{original}\n# this existing project must not be overwritten\n"
@@ -1248,6 +1258,14 @@ def test_schema_exports_all_models_as_draft_2020_12(tmp_path: Path) -> None:
         (output / "ui-interaction-inventory.schema.json").read_text(encoding="utf-8")
     )
     assert ui_inventory_schema["properties"]["schema_version"]["const"] == "2"
+    for filename in (
+        "domain-map.schema.json",
+        "capability-candidates.schema.json",
+        "domain-decision.schema.json",
+        "domain-change-request.schema.json",
+    ):
+        domain_schema = json.loads((output / filename).read_text(encoding="utf-8"))
+        assert domain_schema["properties"]["schema_version"]["const"] == "2"
     interaction_contract_schema = json.loads(
         (output / "interaction-contract.schema.json").read_text(encoding="utf-8")
     )

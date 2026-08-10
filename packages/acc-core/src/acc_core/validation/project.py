@@ -12,6 +12,14 @@ from pydantic import TypeAdapter, ValidationError
 from acc_core.contracts import SourceContract
 from acc_core.contracts.fidelity import analyze_operation_schema_fidelity
 from acc_core.diagnostics import Diagnostic
+from acc_core.domains import (
+    CapabilityCandidateLedger,
+    DomainChangeRequest,
+    DomainDecision,
+    DomainMap,
+    capability_candidate_ledger_digest,
+    domain_decision_digest,
+)
 from acc_core.interactions.models import (
     CapabilityInteractionContract,
     UIInteractionInventory,
@@ -23,6 +31,7 @@ from acc_core.models import (
     Capability,
     EnvironmentSecretCredentials,
     Eval,
+    Evidence,
     GatewaySessionCredentials,
     Operation,
     PasswordBearerAuthConfig,
@@ -59,6 +68,16 @@ class ValidationReport:
     ui_interaction_inventory_path: str | None = None
     interaction_contracts: dict[str, CapabilityInteractionContract] = field(default_factory=dict)
     interaction_contract_paths: dict[str, str] = field(default_factory=dict)
+    evidence_registry: dict[str, Evidence] = field(default_factory=dict)
+    evidence_paths: dict[str, str] = field(default_factory=dict)
+    domain_map: DomainMap | None = None
+    domain_map_path: str | None = None
+    capability_candidate_ledger: CapabilityCandidateLedger | None = None
+    capability_candidate_ledger_path: str | None = None
+    domain_decisions: dict[tuple[str, int], DomainDecision] = field(default_factory=dict)
+    domain_decision_paths: dict[tuple[str, int], str] = field(default_factory=dict)
+    domain_change_requests: dict[str, DomainChangeRequest] = field(default_factory=dict)
+    domain_change_request_paths: dict[str, str] = field(default_factory=dict)
     diagnostics: list[Diagnostic] = field(default_factory=list)
 
     @property
@@ -238,8 +257,6 @@ def _load_project_document(root: Path, diagnostics: list[Diagnostic]) -> Project
 
 def _document_paths(root: Path, directory: str, diagnostics: list[Diagnostic]) -> list[str]:
     target = root / directory
-    if not target.exists():
-        return []
     if target.is_symlink():
         diagnostics.append(
             Diagnostic(
@@ -250,6 +267,8 @@ def _document_paths(root: Path, directory: str, diagnostics: list[Diagnostic]) -
                 pointer=None,
             )
         )
+        return []
+    if not target.exists():
         return []
     if not target.is_dir():
         diagnostics.append(
@@ -359,6 +378,577 @@ def _load_adapter_collection[ModelT](
         if relative_paths is not None:
             relative_paths[identifier] = relative_path
     return documents
+
+
+def _load_domain_decisions(root: Path, report: ValidationReport) -> None:
+    for relative_path in _document_paths(root, "domain-decisions", report.diagnostics):
+        decision = _load_model(
+            root,
+            relative_path,
+            DomainDecision,
+            report.diagnostics,
+        )
+        if decision is None:
+            continue
+        key = (decision.domain_id, decision.revision)
+        if key in report.domain_decisions:
+            report.diagnostics.append(
+                Diagnostic(
+                    code="ACC_DOMAIN_DECISION_DUPLICATE",
+                    severity="error",
+                    message="A domain decision revision may be declared only once.",
+                    path=relative_path,
+                    pointer="/revision",
+                )
+            )
+            continue
+        report.domain_decisions[key] = decision
+        report.domain_decision_paths[key] = relative_path
+
+
+def _load_evidence_registry(root: Path, report: ValidationReport) -> None:
+    """Load strict Evidence cores while retaining forward-compatible audit artifacts."""
+
+    core_fields = set(Evidence.model_fields)
+    for relative_path in _document_paths(root, "evidence", report.diagnostics):
+        try:
+            document = load_project_object(root, relative_path)
+            core = {name: document[name] for name in core_fields if name in document}
+            evidence = Evidence.model_validate(core)
+        except ProjectIOError as exc:
+            report.diagnostics.append(
+                Diagnostic(
+                    code=exc.code,
+                    severity="error",
+                    message=str(exc),
+                    path=relative_path,
+                    pointer=None,
+                )
+            )
+            continue
+        except ValidationError as exc:
+            report.diagnostics.extend(
+                _validation_diagnostic(
+                    error,
+                    relative_path=relative_path,
+                    model_type=Evidence,
+                )
+                for error in exc.errors(include_url=False)
+            )
+            continue
+        if evidence.source_id in report.evidence_registry:
+            report.diagnostics.append(
+                Diagnostic(
+                    code="ACC_EVIDENCE_SOURCE_ID_DUPLICATE",
+                    severity="error",
+                    message="Evidence source_id may be declared only once.",
+                    path=relative_path,
+                    pointer="/source_id",
+                )
+            )
+            continue
+        report.evidence_registry[evidence.source_id] = evidence
+        report.evidence_paths[evidence.source_id] = relative_path
+
+
+def _decision_for_ref(
+    report: ValidationReport,
+    domain_id: str,
+    revision: int,
+    digest: str,
+) -> tuple[DomainDecision | None, bool]:
+    decision = report.domain_decisions.get((domain_id, revision))
+    return decision, decision is not None and domain_decision_digest(decision) == digest
+
+
+def _decision_ref_key(value: object) -> tuple[object, object, object]:
+    return (
+        getattr(value, "domain_id", None),
+        getattr(value, "revision", None),
+        getattr(value, "decision_digest", None),
+    )
+
+
+def _require_evidence(
+    report: ValidationReport,
+    evidence_ref: str,
+    *,
+    digest: str | None,
+    path: str | None,
+    pointer: str | None,
+) -> None:
+    evidence = report.evidence_registry.get(evidence_ref)
+    if evidence is None:
+        report.diagnostics.append(
+            Diagnostic(
+                code="ACC_DOMAIN_EVIDENCE_UNKNOWN",
+                severity="error",
+                message="Domain evidence reference must resolve through evidence/.",
+                path=path,
+                pointer=pointer,
+            )
+        )
+    elif digest is not None and evidence.digest != digest:
+        report.diagnostics.append(
+            Diagnostic(
+                code="ACC_DOMAIN_EVIDENCE_DIGEST_MISMATCH",
+                severity="error",
+                message="Domain evidence digest must equal the independent Evidence artifact.",
+                path=path,
+                pointer=pointer,
+            )
+        )
+
+
+def _candidate_evidence_refs(candidate: object) -> set[str]:
+    claims = getattr(candidate, "claims", None)
+    refs: set[str] = set()
+    if claims is not None:
+        for field_name in claims.__class__.model_fields:
+            claim = getattr(claims, field_name)
+            refs.update(claim.evidence_refs)
+    ineligibility = getattr(candidate, "ineligibility_claim", None)
+    if ineligibility is not None:
+        refs.update(ineligibility.evidence_refs)
+    return refs
+
+
+def _validate_domain_sidecar_closure(
+    report: ValidationReport,
+    *,
+    domain_map_declared: bool,
+    candidate_ledger_declared: bool,
+) -> None:
+    domain_map = report.domain_map
+    ledger = report.capability_candidate_ledger
+    dependent_sidecars_declared = bool(report.domain_decisions or report.domain_change_requests)
+    if (domain_map_declared or dependent_sidecars_declared) and not candidate_ledger_declared:
+        report.diagnostics.append(
+            Diagnostic(
+                code="ACC_DOMAIN_CANDIDATE_LEDGER_MISSING",
+                severity="error",
+                message="domain-map.yaml requires capability-candidates.yaml.",
+                path="domain-map.yaml",
+                pointer=None,
+            )
+        )
+    if (candidate_ledger_declared or dependent_sidecars_declared) and not domain_map_declared:
+        report.diagnostics.append(
+            Diagnostic(
+                code="ACC_DOMAIN_MAP_MISSING",
+                severity="error",
+                message="capability-candidates.yaml requires domain-map.yaml.",
+                path="capability-candidates.yaml",
+                pointer=None,
+            )
+        )
+    if domain_map is None or ledger is None:
+        return
+
+    domains = {domain.id: domain for domain in domain_map.domains}
+    candidates = {candidate.id: candidate for candidate in ledger.candidates}
+    classified = {
+        candidate_id: domain.id
+        for domain in domain_map.domains
+        for candidate_id in domain.candidate_ids
+    }
+    mapped_ids = set(classified) | set(domain_map.unclassified_candidate_ids)
+    candidate_ids = set(candidates)
+    for _candidate_id in sorted(mapped_ids - candidate_ids):
+        report.diagnostics.append(
+            Diagnostic(
+                code="ACC_DOMAIN_CANDIDATE_MISSING",
+                severity="error",
+                message="DomainMap references a candidate missing from the candidate ledger.",
+                path=report.domain_map_path,
+                pointer=None,
+            )
+        )
+    for _candidate_id in sorted(candidate_ids - mapped_ids):
+        report.diagnostics.append(
+            Diagnostic(
+                code="ACC_DOMAIN_CANDIDATE_ORPHAN",
+                severity="error",
+                message="Every candidate ledger entry must be classified or unclassified.",
+                path=report.capability_candidate_ledger_path,
+                pointer=None,
+            )
+        )
+    for candidate_id in sorted(candidate_ids & mapped_ids):
+        expected_domain = classified.get(candidate_id)
+        if candidates[candidate_id].domain_id != expected_domain:
+            report.diagnostics.append(
+                Diagnostic(
+                    code="ACC_DOMAIN_CANDIDATE_DOMAIN_MISMATCH",
+                    severity="error",
+                    message="Candidate domain_id must exactly match its DomainMap assignment.",
+                    path=report.capability_candidate_ledger_path,
+                    pointer=None,
+                )
+            )
+
+    for domain in domain_map.domains:
+        for evidence_ref in domain.evidence_refs:
+            _require_evidence(
+                report,
+                evidence_ref,
+                digest=None,
+                path=report.domain_map_path,
+                pointer="/domains",
+            )
+    for candidate in ledger.candidates:
+        for evidence_ref in sorted(_candidate_evidence_refs(candidate)):
+            _require_evidence(
+                report,
+                evidence_ref,
+                digest=None,
+                path=report.capability_candidate_ledger_path,
+                pointer="/candidates",
+            )
+
+    ledger_digest = capability_candidate_ledger_digest(ledger)
+
+    for key, decision in sorted(report.domain_decisions.items()):
+        path = report.domain_decision_paths.get(key)
+        decision_domain = domains.get(decision.domain_id)
+        if decision_domain is None:
+            report.diagnostics.append(
+                Diagnostic(
+                    code="ACC_DOMAIN_DECISION_DOMAIN_UNKNOWN",
+                    severity="error",
+                    message="DomainDecision references an unknown domain.",
+                    path=path,
+                    pointer="/domain_id",
+                )
+            )
+            continue
+        if decision.candidate_ledger_digest != ledger_digest:
+            report.diagnostics.append(
+                Diagnostic(
+                    code="ACC_DOMAIN_DECISION_LEDGER_DIGEST_MISMATCH",
+                    severity="error",
+                    message="DomainDecision must bind the canonical candidate ledger digest.",
+                    path=path,
+                    pointer="/candidate_ledger_digest",
+                )
+            )
+        if decision.candidate_snapshot_ids != decision_domain.candidate_ids:
+            report.diagnostics.append(
+                Diagnostic(
+                    code="ACC_DOMAIN_DECISION_CANDIDATE_SNAPSHOT_MISMATCH",
+                    severity="error",
+                    message="DomainDecision candidate snapshot must equal its domain denominator.",
+                    path=path,
+                    pointer="/candidate_snapshot_ids",
+                )
+            )
+        for index, disposition in enumerate(decision.candidate_dispositions):
+            disposition_candidate = candidates.get(disposition.candidate_id)
+            if (
+                disposition_candidate is None
+                or disposition_candidate.domain_id != decision.domain_id
+            ):
+                report.diagnostics.append(
+                    Diagnostic(
+                        code="ACC_DOMAIN_DECISION_CANDIDATE_UNKNOWN",
+                        severity="error",
+                        message="Candidate disposition must reference a candidate in this domain.",
+                        path=path,
+                        pointer=f"/candidate_dispositions/{index}/candidate_id",
+                    )
+                )
+            for capability_id in disposition.materialized_capability_ids:
+                if capability_id not in report.capabilities:
+                    report.diagnostics.append(
+                        Diagnostic(
+                            code="ACC_DOMAIN_MATERIALIZED_CAPABILITY_UNKNOWN",
+                            severity="error",
+                            message="Materialized Capability must exist in the Project.",
+                            path=path,
+                            pointer=f"/candidate_dispositions/{index}/materialized_capability_ids",
+                        )
+                    )
+        dependency_ids = [item.domain_id for item in decision.dependency_decisions]
+        if dependency_ids != decision_domain.dependency_domain_ids:
+            report.diagnostics.append(
+                Diagnostic(
+                    code="ACC_DOMAIN_DEPENDENCY_SNAPSHOT_MISMATCH",
+                    severity="error",
+                    message="Decision dependencies must equal the DomainMap dependency set.",
+                    path=path,
+                    pointer="/dependency_decisions",
+                )
+            )
+        for index, dependency in enumerate(decision.dependency_decisions):
+            _target, exact = _decision_for_ref(
+                report,
+                dependency.domain_id,
+                dependency.revision,
+                dependency.decision_digest,
+            )
+            if not exact:
+                report.diagnostics.append(
+                    Diagnostic(
+                        code="ACC_DOMAIN_DEPENDENCY_DECISION_UNKNOWN",
+                        severity="error",
+                        message="Dependency decision reference must resolve with an exact digest.",
+                        path=path,
+                        pointer=f"/dependency_decisions/{index}",
+                    )
+                )
+            dependency_domain = domains.get(dependency.domain_id)
+            if (
+                dependency_domain is None
+                or dependency_domain.active_decision_ref is None
+                or _decision_ref_key(dependency_domain.active_decision_ref)
+                != _decision_ref_key(dependency)
+            ):
+                report.diagnostics.append(
+                    Diagnostic(
+                        code="ACC_DOMAIN_DEPENDENCY_ACTIVE_DECISION_MISMATCH",
+                        severity="error",
+                        message=(
+                            "Dependency snapshot must bind the dependency domain's active decision."
+                        ),
+                        path=path,
+                        pointer=f"/dependency_decisions/{index}",
+                    )
+                )
+        snapshot_by_ref = {item.evidence_ref: item.digest for item in decision.evidence_snapshot}
+        for index, evidence_snapshot in enumerate(decision.evidence_snapshot):
+            _require_evidence(
+                report,
+                evidence_snapshot.evidence_ref,
+                digest=evidence_snapshot.digest,
+                path=path,
+                pointer=f"/evidence_snapshot/{index}",
+            )
+        required_evidence = set(decision_domain.evidence_refs)
+        for candidate_id in decision_domain.candidate_ids:
+            evidence_candidate = candidates.get(candidate_id)
+            if evidence_candidate is not None:
+                required_evidence.update(_candidate_evidence_refs(evidence_candidate))
+        if not required_evidence <= set(snapshot_by_ref):
+            report.diagnostics.append(
+                Diagnostic(
+                    code="ACC_DOMAIN_EVIDENCE_SNAPSHOT_INCOMPLETE",
+                    severity="error",
+                    message="Decision evidence snapshot must cover every domain candidate claim.",
+                    path=path,
+                    pointer="/evidence_snapshot",
+                )
+            )
+        confirmation = decision.user_confirmation
+        if confirmation is not None:
+            _require_evidence(
+                report,
+                confirmation.source_evidence_ref,
+                digest=confirmation.source_text_digest,
+                path=path,
+                pointer="/user_confirmation/source_evidence_ref",
+            )
+            confirmation_evidence = report.evidence_registry.get(confirmation.source_evidence_ref)
+            if (
+                confirmation_evidence is None
+                or confirmation_evidence.digest != confirmation.source_text_digest
+                or snapshot_by_ref.get(confirmation.source_evidence_ref)
+                != confirmation.source_text_digest
+            ):
+                report.diagnostics.append(
+                    Diagnostic(
+                        code="ACC_DOMAIN_CONFIRMATION_EVIDENCE_MISMATCH",
+                        severity="error",
+                        message="UserConfirmation must bind an exact Evidence snapshot digest.",
+                        path=path,
+                        pointer="/user_confirmation/source_evidence_ref",
+                    )
+                )
+
+    for domain in domain_map.domains:
+        active = domain.active_decision_ref
+        if active is None:
+            continue
+        active_decision, exact = _decision_for_ref(
+            report,
+            active.domain_id,
+            active.revision,
+            active.decision_digest,
+        )
+        if not exact:
+            report.diagnostics.append(
+                Diagnostic(
+                    code="ACC_DOMAIN_ACTIVE_DECISION_MISMATCH",
+                    severity="error",
+                    message=(
+                        "Active decision reference must resolve to its exact revision and digest."
+                    ),
+                    path=report.domain_map_path,
+                    pointer="/domains",
+                )
+            )
+            continue
+        assert active_decision is not None
+        allowed_statuses = {"completed"} if domain.status == "completed" else {"completed", "stale"}
+        if (
+            domain.status in {"completed", "stale"}
+            and active_decision.status not in allowed_statuses
+        ):
+            report.diagnostics.append(
+                Diagnostic(
+                    code="ACC_DOMAIN_ACTIVE_DECISION_STATUS_MISMATCH",
+                    severity="error",
+                    message="Domain status must agree with the referenced active decision status.",
+                    path=report.domain_map_path,
+                    pointer="/domains",
+                )
+            )
+        if any(
+            decision.domain_id == domain.id
+            and decision.revision > active.revision
+            and decision.status == "completed"
+            for decision in report.domain_decisions.values()
+        ):
+            report.diagnostics.append(
+                Diagnostic(
+                    code="ACC_DOMAIN_ACTIVE_DECISION_SUPERSEDED",
+                    severity="error",
+                    message="Active decision cannot precede a newer completed revision.",
+                    path=report.domain_map_path,
+                    pointer="/domains",
+                )
+            )
+
+    for request_id, request in sorted(report.domain_change_requests.items()):
+        path = report.domain_change_request_paths.get(request_id)
+        request_domain = domains.get(request.domain_id)
+        if request_domain is None:
+            report.diagnostics.append(
+                Diagnostic(
+                    code="ACC_DOMAIN_CHANGE_DOMAIN_UNKNOWN",
+                    severity="error",
+                    message="DomainChangeRequest references an unknown domain.",
+                    path=path,
+                    pointer="/domain_id",
+                )
+            )
+        _previous, previous_exact = _decision_for_ref(
+            report,
+            request.previous_decision.domain_id,
+            request.previous_decision.revision,
+            request.previous_decision.decision_digest,
+        )
+        if not previous_exact:
+            report.diagnostics.append(
+                Diagnostic(
+                    code="ACC_DOMAIN_CHANGE_PREVIOUS_DECISION_MISMATCH",
+                    severity="error",
+                    message="Change request previous decision must resolve exactly.",
+                    path=path,
+                    pointer="/previous_decision",
+                )
+            )
+        if (
+            request.status in {"proposed", "confirmed"}
+            and request_domain is not None
+            and (
+                request_domain.active_decision_ref is None
+                or _decision_ref_key(request.previous_decision)
+                != _decision_ref_key(request_domain.active_decision_ref)
+            )
+        ):
+            report.diagnostics.append(
+                Diagnostic(
+                    code="ACC_DOMAIN_CHANGE_PREVIOUS_NOT_ACTIVE",
+                    severity="error",
+                    message="Proposed or confirmed change must start from the active decision.",
+                    path=path,
+                    pointer="/previous_decision",
+                )
+            )
+        applied_decision: DomainDecision | None = None
+        if request.applied_decision_ref is not None:
+            applied_decision, applied_exact = _decision_for_ref(
+                report,
+                request.applied_decision_ref.domain_id,
+                request.applied_decision_ref.revision,
+                request.applied_decision_ref.decision_digest,
+            )
+            if not applied_exact:
+                report.diagnostics.append(
+                    Diagnostic(
+                        code="ACC_DOMAIN_CHANGE_APPLIED_DECISION_MISMATCH",
+                        severity="error",
+                        message="Applied decision reference must resolve exactly.",
+                        path=path,
+                        pointer="/applied_decision_ref",
+                    )
+                )
+        for candidate_id in request.affected_candidate_ids:
+            affected_candidate = candidates.get(candidate_id)
+            if affected_candidate is None or affected_candidate.domain_id != request.domain_id:
+                report.diagnostics.append(
+                    Diagnostic(
+                        code="ACC_DOMAIN_CHANGE_CANDIDATE_UNKNOWN",
+                        severity="error",
+                        message="Affected candidate must exist in the changed domain.",
+                        path=path,
+                        pointer="/affected_candidate_ids",
+                    )
+                )
+        for capability_id in request.affected_capability_ids:
+            if capability_id not in report.capabilities:
+                report.diagnostics.append(
+                    Diagnostic(
+                        code="ACC_DOMAIN_CHANGE_CAPABILITY_UNKNOWN",
+                        severity="error",
+                        message="Affected Capability must exist in the Project.",
+                        path=path,
+                        pointer="/affected_capability_ids",
+                    )
+                )
+        for index, evidence in enumerate(request.changed_evidence):
+            expected_digest = evidence.new_digest or evidence.old_digest
+            _require_evidence(
+                report,
+                evidence.evidence_ref,
+                digest=expected_digest,
+                path=path,
+                pointer=f"/changed_evidence/{index}/evidence_ref",
+            )
+        confirmation = request.confirmation
+        if confirmation is not None:
+            _require_evidence(
+                report,
+                confirmation.source_evidence_ref,
+                digest=confirmation.source_text_digest,
+                path=path,
+                pointer="/confirmation/source_evidence_ref",
+            )
+            confirmation_evidence = report.evidence_registry.get(confirmation.source_evidence_ref)
+            if (
+                confirmation_evidence is None
+                or confirmation_evidence.digest != confirmation.source_text_digest
+                or (
+                    request.status == "applied"
+                    and (
+                        applied_decision is None
+                        or not any(
+                            item.evidence_ref == confirmation.source_evidence_ref
+                            and item.digest == confirmation.source_text_digest
+                            for item in applied_decision.evidence_snapshot
+                        )
+                    )
+                )
+            ):
+                report.diagnostics.append(
+                    Diagnostic(
+                        code="ACC_DOMAIN_CONFIRMATION_EVIDENCE_MISMATCH",
+                        severity="error",
+                        message="UserConfirmation must bind an exact Evidence snapshot digest.",
+                        path=path,
+                        pointer="/confirmation/source_evidence_ref",
+                    )
+                )
 
 
 def _validate_v2_sidecar_closure(report: ValidationReport) -> None:
@@ -715,6 +1305,43 @@ def validate_project(project_root: str | Path = ".") -> ValidationReport:
         duplicate_code="ACC_UI_INTERACTION_CONTRACT_DUPLICATE",
         diagnostics=report.diagnostics,
         relative_paths=report.interaction_contract_paths,
+    )
+    _load_evidence_registry(root, report)
+    domain_map_path = "domain-map.yaml"
+    domain_map_declared = (root / domain_map_path).exists() or (root / domain_map_path).is_symlink()
+    if domain_map_declared:
+        report.domain_map_path = domain_map_path
+        report.domain_map = _load_model(
+            root,
+            domain_map_path,
+            DomainMap,
+            report.diagnostics,
+        )
+    candidate_ledger_path = "capability-candidates.yaml"
+    candidate_ledger_declared = (root / candidate_ledger_path).exists() or (
+        root / candidate_ledger_path
+    ).is_symlink()
+    if candidate_ledger_declared:
+        report.capability_candidate_ledger_path = candidate_ledger_path
+        report.capability_candidate_ledger = _load_model(
+            root,
+            candidate_ledger_path,
+            CapabilityCandidateLedger,
+            report.diagnostics,
+        )
+    _load_domain_decisions(root, report)
+    report.domain_change_requests = _load_collection(
+        root,
+        "domain-change-requests",
+        DomainChangeRequest,
+        "ACC_DOMAIN_CHANGE_REQUEST_DUPLICATE",
+        report.diagnostics,
+        report.domain_change_request_paths,
+    )
+    _validate_domain_sidecar_closure(
+        report,
+        domain_map_declared=domain_map_declared,
+        candidate_ledger_declared=candidate_ledger_declared,
     )
     _validate_v2_sidecar_closure(report)
     _validate_interaction_sidecar_closure(report)

@@ -24,6 +24,7 @@ from acc_core.domains.models import (
     UserDecision,
     VerificationLevel,
     aggregate_reference_digest,
+    capability_candidate_ledger_digest,
     domain_decision_digest,
 )
 
@@ -51,5 +52,6 @@ __all__ = [
     "UserDecision",
     "VerificationLevel",
     "aggregate_reference_digest",
+    "capability_candidate_ledger_digest",
     "domain_decision_digest",
 ]

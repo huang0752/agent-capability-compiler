@@ -12,6 +12,7 @@ from acc_core.domains import (
     DomainDecision,
     DomainMap,
     aggregate_reference_digest,
+    capability_candidate_ledger_digest,
     domain_decision_digest,
 )
 
@@ -249,6 +250,15 @@ def test_candidate_domain_may_remain_unclassified_without_a_second_disposition_t
     assert candidate.domain_id is None
     assert not hasattr(candidate, "user_disposition")
     assert candidate.verification_level == "action_discovered"
+
+
+def test_candidate_ledger_digest_uses_one_typed_canonical_helper() -> None:
+    ledger = CapabilityCandidateLedger.model_validate(_candidate_ledger())
+
+    assert capability_candidate_ledger_digest(ledger) == capability_candidate_ledger_digest(
+        ledger.model_dump(mode="json", by_alias=True)
+    )
+    assert capability_candidate_ledger_digest(ledger).startswith("sha256:")
 
 
 def test_candidate_claim_axes_are_fixed_and_statuses_are_typed() -> None:

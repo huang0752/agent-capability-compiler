@@ -20,7 +20,14 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import ClassVar
 
 import yaml
+from pydantic import BaseModel, ValidationError
 
+from acc_core.domains import (
+    CapabilityCandidateLedger,
+    DomainChangeRequest,
+    DomainDecision,
+    DomainMap,
+)
 from acc_core.io import (
     DEFAULT_MAX_FILE_BYTES,
     ProjectFileTooLargeError,
@@ -37,6 +44,8 @@ FIXED_ZIP_TIME = (1980, 1, 1, 0, 0, 0)
 _DOCUMENT_DIRECTORIES = (
     "capabilities",
     "capability-quality",
+    "domain-change-requests",
+    "domain-decisions",
     "evals",
     "evidence",
     "interaction-contracts",
@@ -44,10 +53,20 @@ _DOCUMENT_DIRECTORIES = (
     "policies",
     "source-contracts",
 )
-_FIXED_PROJECT_DOCUMENTS = ("ui-interaction-inventory.yaml",)
+_FIXED_PROJECT_DOCUMENTS = (
+    "capability-candidates.yaml",
+    "domain-map.yaml",
+    "ui-interaction-inventory.yaml",
+)
 _DOCUMENT_SUFFIXES = {".json", ".yaml", ".yml"}
 _REQUIRED_ENTRIES = {"manifest.json", "pack.lock", "project.yaml"}
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
+_DOMAIN_DOCUMENT_MODELS: dict[str, type[BaseModel]] = {
+    "capability-candidates.yaml": CapabilityCandidateLedger,
+    "domain-map.yaml": DomainMap,
+    "domain-change-requests": DomainChangeRequest,
+    "domain-decisions": DomainDecision,
+}
 
 
 class CapabilityPackError(Exception):
@@ -246,6 +265,21 @@ def _read_project_member(root: Path, relative_path: str, max_file_bytes: int) ->
         raise PackFormatError(str(exc), path=relative_path) from exc
 
 
+def _validate_domain_document(relative_path: str, contents: bytes) -> None:
+    document_key = relative_path.split("/", maxsplit=1)[0]
+    model = _DOMAIN_DOCUMENT_MODELS.get(document_key)
+    if model is None:
+        return
+    try:
+        document = yaml.safe_load(contents.decode("utf-8"))
+        model.model_validate(document)
+    except (UnicodeDecodeError, yaml.YAMLError, ValidationError):
+        raise PackFormatError(
+            "domain sidecar is not a valid current-format document",
+            path=relative_path,
+        ) from None
+
+
 def _collect_project_payloads(root: Path, max_file_bytes: int) -> dict[str, bytes]:
     if root.is_symlink():
         raise PackSymlinkError("project root cannot be a symbolic link", path=".")
@@ -261,13 +295,13 @@ def _collect_project_payloads(root: Path, max_file_bytes: int) -> dict[str, byte
         payloads[relative_path] = _read_project_member(root, relative_path, max_file_bytes)
     for directory in _document_directories(manifest.format_version):
         directory_path = root / directory
-        if not directory_path.exists():
-            continue
         if directory_path.is_symlink():
             raise PackSymlinkError(
                 f"project directory cannot be a symbolic link: {directory}",
                 path=directory,
             )
+        if not directory_path.exists():
+            continue
         if not directory_path.is_dir():
             raise PackUnknownEntryError(
                 f"expected an allowlisted project directory: {directory}",
@@ -293,6 +327,8 @@ def _collect_project_payloads(root: Path, max_file_bytes: int) -> dict[str, byte
                     path=relative_path,
                 )
             payloads[relative_path] = _read_project_member(root, relative_path, max_file_bytes)
+    for relative_path, contents in payloads.items():
+        _validate_domain_document(relative_path, contents)
     return payloads
 
 

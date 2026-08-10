@@ -56,7 +56,11 @@ def test_project_v2_requires_an_explicit_quality_profile() -> None:
 def test_schema_exports_use_only_canonical_current_names() -> None:
     assert set(MODEL_SCHEMAS) == {
         "capability",
+        "capability-candidates",
         "capability-quality",
+        "domain-change-request",
+        "domain-decision",
+        "domain-map",
         "eval",
         "evidence",
         "interaction-contract",

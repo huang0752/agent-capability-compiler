@@ -1,0 +1,346 @@
+{
+  "$defs": {
+    "ChangedEvidenceRef": {
+      "additionalProperties": false,
+      "properties": {
+        "change": {
+          "enum": [
+            "added",
+            "modified",
+            "removed"
+          ],
+          "title": "Change",
+          "type": "string"
+        },
+        "evidence_ref": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Evidence Ref",
+          "type": "string"
+        },
+        "new_digest": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "New Digest"
+        },
+        "old_digest": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Old Digest"
+        }
+      },
+      "required": [
+        "evidence_ref",
+        "change",
+        "old_digest",
+        "new_digest"
+      ],
+      "title": "ChangedEvidenceRef",
+      "type": "object"
+    },
+    "DomainDecisionRef": {
+      "additionalProperties": false,
+      "properties": {
+        "decision_digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Decision Digest",
+          "type": "string"
+        },
+        "domain_id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Domain Id",
+          "type": "string"
+        },
+        "revision": {
+          "exclusiveMinimum": 0,
+          "title": "Revision",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "domain_id",
+        "revision",
+        "decision_digest"
+      ],
+      "title": "DomainDecisionRef",
+      "type": "object"
+    },
+    "DomainStatus": {
+      "enum": [
+        "not_started",
+        "in_progress",
+        "awaiting_user",
+        "validation_failed",
+        "ready_for_review",
+        "completed",
+        "stale"
+      ],
+      "type": "string"
+    },
+    "UserConfirmation": {
+      "additionalProperties": false,
+      "properties": {
+        "authority": {
+          "enum": [
+            "authenticated_user",
+            "delegated_reviewer"
+          ],
+          "title": "Authority",
+          "type": "string"
+        },
+        "confirmation_summary": {
+          "maxLength": 16384,
+          "minLength": 1,
+          "title": "Confirmation Summary",
+          "type": "string"
+        },
+        "confirmed_at": {
+          "maxLength": 40,
+          "minLength": 20,
+          "title": "Confirmed At",
+          "type": "string"
+        },
+        "confirmed_decision_digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Confirmed Decision Digest",
+          "type": "string"
+        },
+        "confirmer_ref": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Confirmer Ref",
+          "type": "string"
+        },
+        "decisions": {
+          "items": {
+            "$ref": "#/$defs/UserDecision"
+          },
+          "minItems": 1,
+          "title": "Decisions",
+          "type": "array"
+        },
+        "source_evidence_ref": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Source Evidence Ref",
+          "type": "string"
+        },
+        "source_text_digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Source Text Digest",
+          "type": "string"
+        }
+      },
+      "required": [
+        "confirmer_ref",
+        "authority",
+        "confirmation_summary",
+        "source_evidence_ref",
+        "source_text_digest",
+        "confirmed_at",
+        "confirmed_decision_digest",
+        "decisions"
+      ],
+      "title": "UserConfirmation",
+      "type": "object"
+    },
+    "UserDecision": {
+      "additionalProperties": false,
+      "properties": {
+        "decision": {
+          "enum": [
+            "confirmed",
+            "accepted",
+            "deferred",
+            "rejected",
+            "blocked",
+            "approved"
+          ],
+          "title": "Decision",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "domain_policy",
+            "candidate_disposition",
+            "domain_completion",
+            "change_request"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "rationale": {
+          "maxLength": 16384,
+          "minLength": 1,
+          "title": "Rationale",
+          "type": "string"
+        },
+        "subject_ref": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Subject Ref",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "subject_ref",
+        "decision",
+        "rationale"
+      ],
+      "title": "UserDecision",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "affected_candidate_ids": {
+      "items": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": "Affected Candidate Ids",
+      "type": "array"
+    },
+    "affected_capability_ids": {
+      "items": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": "Affected Capability Ids",
+      "type": "array"
+    },
+    "applied_decision_ref": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DomainDecisionRef"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "changed_evidence": {
+      "items": {
+        "$ref": "#/$defs/ChangedEvidenceRef"
+      },
+      "minItems": 1,
+      "title": "Changed Evidence",
+      "type": "array"
+    },
+    "confirmation": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/UserConfirmation"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "created_at": {
+      "maxLength": 40,
+      "minLength": 20,
+      "title": "Created At",
+      "type": "string"
+    },
+    "deployment_effect": {
+      "enum": [
+        "disable_affected_capabilities",
+        "audit_warning"
+      ],
+      "title": "Deployment Effect",
+      "type": "string"
+    },
+    "domain_id": {
+      "maxLength": 512,
+      "minLength": 1,
+      "title": "Domain Id",
+      "type": "string"
+    },
+    "id": {
+      "maxLength": 512,
+      "minLength": 1,
+      "title": "Id",
+      "type": "string"
+    },
+    "impact_class": {
+      "enum": [
+        "security_relevant",
+        "descriptive_only"
+      ],
+      "title": "Impact Class",
+      "type": "string"
+    },
+    "impact_summary": {
+      "maxLength": 16384,
+      "minLength": 1,
+      "title": "Impact Summary",
+      "type": "string"
+    },
+    "previous_decision": {
+      "$ref": "#/$defs/DomainDecisionRef"
+    },
+    "recommended_decision_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "title": "Recommended Decision Digest",
+      "type": "string"
+    },
+    "recommended_domain_status": {
+      "$ref": "#/$defs/DomainStatus"
+    },
+    "schema_version": {
+      "const": "2",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "proposed",
+        "confirmed",
+        "applied",
+        "superseded"
+      ],
+      "title": "Status",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "id",
+    "domain_id",
+    "status",
+    "created_at",
+    "previous_decision",
+    "affected_candidate_ids",
+    "affected_capability_ids",
+    "changed_evidence",
+    "impact_class",
+    "recommended_domain_status",
+    "recommended_decision_digest",
+    "deployment_effect",
+    "impact_summary",
+    "confirmation",
+    "applied_decision_ref"
+  ],
+  "title": "DomainChangeRequest",
+  "type": "object"
+}

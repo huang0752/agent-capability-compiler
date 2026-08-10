@@ -351,6 +351,19 @@ class CapabilityCandidateLedger(DomainModel):
         return self
 
 
+def capability_candidate_ledger_digest(
+    value: CapabilityCandidateLedger | Mapping[str, Any],
+) -> str:
+    """Digest the complete typed candidate ledger using canonical JSON."""
+
+    ledger = (
+        value
+        if isinstance(value, CapabilityCandidateLedger)
+        else CapabilityCandidateLedger.model_validate(value)
+    )
+    return _canonical_digest(ledger)
+
+
 class DomainPolicy(DomainModel):
     """Business choices only; source permissions are intentionally not representable."""
 

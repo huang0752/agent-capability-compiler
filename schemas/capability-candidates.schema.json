@@ -1,0 +1,333 @@
+{
+  "$defs": {
+    "AuthorizationBoundaryClaim": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence_refs": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "unknown",
+            "upstream_authoritative",
+            "contradicted",
+            "stale"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "AuthorizationBoundaryClaim",
+      "type": "object"
+    },
+    "CandidateClaims": {
+      "additionalProperties": false,
+      "properties": {
+        "approval": {
+          "$ref": "#/$defs/FactClaim"
+        },
+        "authorization_boundary": {
+          "$ref": "#/$defs/AuthorizationBoundaryClaim"
+        },
+        "conflict_control": {
+          "$ref": "#/$defs/FactClaim"
+        },
+        "context_isolation": {
+          "$ref": "#/$defs/ContextIsolationClaim"
+        },
+        "effect": {
+          "$ref": "#/$defs/FactClaim"
+        },
+        "idempotency": {
+          "$ref": "#/$defs/FactClaim"
+        },
+        "identity_binding": {
+          "$ref": "#/$defs/IdentityBindingClaim"
+        },
+        "lifecycle": {
+          "$ref": "#/$defs/FactClaim"
+        },
+        "outcome_resolution": {
+          "$ref": "#/$defs/FactClaim"
+        },
+        "retry": {
+          "$ref": "#/$defs/FactClaim"
+        },
+        "reversibility": {
+          "$ref": "#/$defs/FactClaim"
+        },
+        "risk": {
+          "$ref": "#/$defs/FactClaim"
+        },
+        "schema": {
+          "$ref": "#/$defs/FactClaim"
+        }
+      },
+      "required": [
+        "schema",
+        "effect",
+        "risk",
+        "reversibility",
+        "approval",
+        "retry",
+        "conflict_control",
+        "idempotency",
+        "outcome_resolution",
+        "lifecycle",
+        "authorization_boundary",
+        "identity_binding",
+        "context_isolation"
+      ],
+      "title": "CandidateClaims",
+      "type": "object"
+    },
+    "CapabilityCandidate": {
+      "additionalProperties": false,
+      "properties": {
+        "business_intent": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Business Intent",
+          "type": "string"
+        },
+        "claims": {
+          "$ref": "#/$defs/CandidateClaims"
+        },
+        "domain_id": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Domain Id"
+        },
+        "effect_claim": {
+          "enum": [
+            "unknown",
+            "read",
+            "create",
+            "update",
+            "delete",
+            "transition",
+            "execute"
+          ],
+          "title": "Effect Claim",
+          "type": "string"
+        },
+        "gaps": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Gaps",
+          "type": "array"
+        },
+        "id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "ineligibility_claim": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FactClaim"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "interaction_ids": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Interaction Ids",
+          "type": "array"
+        },
+        "kind_claim": {
+          "enum": [
+            "unknown",
+            "read",
+            "action"
+          ],
+          "title": "Kind Claim",
+          "type": "string"
+        },
+        "route_ids": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Route Ids",
+          "type": "array"
+        },
+        "verification_level": {
+          "$ref": "#/$defs/VerificationLevel"
+        }
+      },
+      "required": [
+        "id",
+        "domain_id",
+        "business_intent",
+        "route_ids",
+        "interaction_ids",
+        "kind_claim",
+        "effect_claim",
+        "claims",
+        "verification_level",
+        "gaps"
+      ],
+      "title": "CapabilityCandidate",
+      "type": "object"
+    },
+    "ContextIsolationClaim": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence_refs": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "unknown",
+            "missing",
+            "candidate",
+            "context_isolation_proven",
+            "contradicted",
+            "stale"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "ContextIsolationClaim",
+      "type": "object"
+    },
+    "FactClaim": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence_refs": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "status": {
+          "$ref": "#/$defs/FactClaimStatus"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "FactClaim",
+      "type": "object"
+    },
+    "FactClaimStatus": {
+      "enum": [
+        "unknown",
+        "missing",
+        "candidate",
+        "proven",
+        "contradicted",
+        "stale"
+      ],
+      "type": "string"
+    },
+    "IdentityBindingClaim": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence_refs": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "status": {
+          "enum": [
+            "unknown",
+            "missing",
+            "candidate",
+            "identity_binding_proven",
+            "contradicted",
+            "stale"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "title": "IdentityBindingClaim",
+      "type": "object"
+    },
+    "VerificationLevel": {
+      "enum": [
+        "discovered",
+        "action_discovered",
+        "semantics_evidenced",
+        "contract_ready",
+        "offline_verified",
+        "sandbox_verified",
+        "source_connected_verified"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "candidates": {
+      "items": {
+        "$ref": "#/$defs/CapabilityCandidate"
+      },
+      "title": "Candidates",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "2",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "candidates"
+  ],
+  "title": "CapabilityCandidateLedger",
+  "type": "object"
+}

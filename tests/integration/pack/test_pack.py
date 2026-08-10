@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from acc_core.domains import aggregate_reference_digest
 from acc_core.packaging import (
     PackChecksumMismatchError,
     PackDuplicateEntryError,
@@ -99,6 +100,141 @@ def _add_interaction_documents(project: Path, *, submission: str = "send") -> No
             "result_consumption": [],
             "required_scenarios": ["get-customer.success"],
             "omissions": [],
+        },
+    )
+
+
+def _add_domain_documents(project: Path, *, rationale: str = "Accepted.") -> None:
+    _write_yaml(
+        project / "domain-map.yaml",
+        {
+            "schema_version": "2",
+            "domains": [
+                {
+                    "id": "customers",
+                    "title": "Customers",
+                    "status": "in_progress",
+                    "candidate_ids": ["get_customer"],
+                    "route_ids": ["GET /customers/{customer_id}"],
+                    "interaction_ids": ["customers.detail"],
+                    "dependency_domain_ids": [],
+                    "evidence_refs": ["customer-route"],
+                    "active_decision_ref": None,
+                }
+            ],
+            "unclassified_candidate_ids": [],
+            "preferred_order": ["customers"],
+        },
+    )
+    _write_yaml(
+        project / "capability-candidates.yaml",
+        {
+            "schema_version": "2",
+            "candidates": [
+                {
+                    "id": "get_customer",
+                    "domain_id": "customers",
+                    "business_intent": "get_customer",
+                    "route_ids": ["GET /customers/{customer_id}"],
+                    "interaction_ids": ["customers.detail"],
+                    "kind_claim": "read",
+                    "effect_claim": "read",
+                    "claims": {
+                        axis: {"status": "unknown", "evidence_refs": []}
+                        for axis in (
+                            "schema",
+                            "effect",
+                            "risk",
+                            "reversibility",
+                            "approval",
+                            "retry",
+                            "conflict_control",
+                            "idempotency",
+                            "outcome_resolution",
+                            "lifecycle",
+                        )
+                    }
+                    | {
+                        "authorization_boundary": {
+                            "status": "unknown",
+                            "evidence_refs": [],
+                        },
+                        "identity_binding": {"status": "unknown", "evidence_refs": []},
+                        "context_isolation": {"status": "unknown", "evidence_refs": []},
+                    },
+                    "verification_level": "discovered",
+                    "gaps": [],
+                    "ineligibility_claim": None,
+                }
+            ],
+        },
+    )
+    candidate_ids = ["get_customer"]
+    dependencies: list[dict[str, object]] = []
+    evidence: list[dict[str, object]] = []
+    _write_yaml(
+        project / "domain-decisions" / "customers.yaml",
+        {
+            "schema_version": "2",
+            "domain_id": "customers",
+            "revision": 1,
+            "status": "ready_for_review",
+            "policy": {
+                "goals": ["get_customer"],
+                "allowed_effects": ["read"],
+                "maximum_risk": "low",
+                "approval_required_for": [],
+                "excluded_intents": [],
+            },
+            "candidate_dispositions": [
+                {
+                    "candidate_id": "get_customer",
+                    "disposition": "accepted",
+                    "materialized_capability_ids": ["get_customer"],
+                    "rationale": rationale,
+                }
+            ],
+            "candidate_snapshot_ids": candidate_ids,
+            "candidate_snapshot_digest": aggregate_reference_digest(candidate_ids),
+            "candidate_ledger_digest": "sha256:" + "a" * 64,
+            "unresolved_questions": [],
+            "dependency_decisions": dependencies,
+            "evidence_snapshot": evidence,
+            "dependency_snapshot_digest": aggregate_reference_digest(dependencies),
+            "evidence_digest": aggregate_reference_digest(evidence),
+            "user_confirmation": None,
+        },
+    )
+    _write_yaml(
+        project / "domain-change-requests" / "customers-2.yaml",
+        {
+            "schema_version": "2",
+            "id": "customers-2",
+            "domain_id": "customers",
+            "status": "proposed",
+            "created_at": "2026-08-10T00:00:00Z",
+            "previous_decision": {
+                "domain_id": "customers",
+                "revision": 1,
+                "decision_digest": "sha256:" + "b" * 64,
+            },
+            "affected_candidate_ids": ["get_customer"],
+            "affected_capability_ids": ["get_customer"],
+            "changed_evidence": [
+                {
+                    "evidence_ref": "customer-route",
+                    "change": "modified",
+                    "old_digest": "sha256:" + "c" * 64,
+                    "new_digest": "sha256:" + "d" * 64,
+                }
+            ],
+            "impact_class": "security_relevant",
+            "recommended_domain_status": "stale",
+            "recommended_decision_digest": "sha256:" + "e" * 64,
+            "deployment_effect": "disable_affected_capabilities",
+            "impact_summary": "Customer route evidence changed.",
+            "confirmation": None,
+            "applied_decision_ref": None,
         },
     )
 
@@ -235,6 +371,149 @@ def test_pack_digest_changes_when_interaction_semantics_change(tmp_path: Path) -
     second = build_pack(project, tmp_path / "interaction-second.accpkg")
 
     assert first.sha256 != second.sha256
+
+
+def test_build_pack_attests_domain_sidecars_deterministically(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    _add_domain_documents(project)
+    revision = yaml.safe_load(
+        (project / "domain-decisions" / "customers.yaml").read_text(encoding="utf-8")
+    )
+    revision["revision"] = 2
+    _write_yaml(project / "domain-decisions" / "customers.0002.yaml", revision)
+    first_path = tmp_path / "first-domains.accpkg"
+    second_path = tmp_path / "second-domains.accpkg"
+
+    first = build_pack(project, first_path)
+    second = build_pack(project, second_path)
+
+    assert first.sha256 == second.sha256
+    assert first_path.read_bytes() == second_path.read_bytes()
+    with zipfile.ZipFile(first_path) as archive:
+        names = archive.namelist()
+        expected_domain_paths = {
+            "capability-candidates.yaml",
+            "domain-change-requests/customers-2.yaml",
+            "domain-decisions/customers.0002.yaml",
+            "domain-decisions/customers.yaml",
+            "domain-map.yaml",
+        }
+        assert expected_domain_paths <= set(names)
+        lock = json.loads(archive.read("pack.lock"))
+        assert [record["path"] for record in lock["files"]] == sorted(set(names) - {"pack.lock"})
+    verify_pack(first_path)
+
+    _add_domain_documents(project, rationale="Deferred pending review.")
+    changed = build_pack(project, tmp_path / "changed-domains.accpkg")
+    assert changed.sha256 != first.sha256
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    ["domain-map.yaml", "domain-decisions/customers.yaml"],
+)
+def test_build_pack_applies_file_bounds_to_domain_sidecars(
+    tmp_path: Path,
+    relative_path: str,
+) -> None:
+    project = _make_project(tmp_path)
+    _add_domain_documents(project)
+    max_file_bytes = max(
+        path.stat().st_size
+        for path in project.rglob("*")
+        if path.is_file() and not path.is_symlink()
+    )
+    (project / relative_path).write_text("x" * (max_file_bytes + 1), encoding="utf-8")
+
+    with pytest.raises(PackFileTooLargeError) as caught:
+        build_pack(
+            project,
+            tmp_path / "oversized-domain.accpkg",
+            max_file_bytes=max_file_bytes,
+        )
+
+    assert caught.value.path == relative_path
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "contents"),
+    [
+        ("domain-decisions/nested/customers.yaml", "schema_version: '2'\n"),
+        ("domain-change-requests/notes.txt", "not a domain change request\n"),
+    ],
+)
+def test_build_pack_rejects_unsafe_domain_collection_members(
+    tmp_path: Path,
+    relative_path: str,
+    contents: str,
+) -> None:
+    project = _make_project(tmp_path)
+    path = project / relative_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(contents, encoding="utf-8")
+
+    with pytest.raises(PackUnknownEntryError) as caught:
+        build_pack(project, tmp_path / "unsafe-domain.accpkg")
+
+    assert caught.value.path == "/".join(relative_path.split("/")[:2])
+
+
+def test_build_pack_rejects_domain_collection_symlinks(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    outside = tmp_path / "outside-domain.yaml"
+    outside.write_text("secret: true\n", encoding="utf-8")
+    directory = project / "domain-decisions"
+    directory.mkdir()
+    (directory / "linked.yaml").symlink_to(outside)
+
+    with pytest.raises(PackSymlinkError) as caught:
+        build_pack(project, tmp_path / "linked-domain.accpkg")
+
+    assert caught.value.path == "domain-decisions/linked.yaml"
+
+
+def test_build_pack_rejects_broken_domain_collection_directory_symlink(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    (project / "domain-decisions").symlink_to(tmp_path / "missing-domain-decisions")
+
+    with pytest.raises(PackSymlinkError) as caught:
+        build_pack(project, tmp_path / "broken-domain-directory.accpkg")
+
+    assert caught.value.path == "domain-decisions"
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "domain-map.yaml",
+        "capability-candidates.yaml",
+        "domain-decisions/customers.yaml",
+        "domain-change-requests/customers-2.yaml",
+    ],
+)
+def test_build_pack_strictly_validates_each_domain_sidecar_without_leaking_input(
+    tmp_path: Path,
+    relative_path: str,
+) -> None:
+    project = _make_project(tmp_path)
+    _add_domain_documents(project)
+    path = project / relative_path
+    document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if relative_path == "domain-map.yaml":
+        document["schema_version"] = "1"
+    elif relative_path == "capability-candidates.yaml":
+        document["raw_source_text"] = "RAW-DOMAIN-SENTINEL"
+    else:
+        document["status"] = "completed" if "decisions" in relative_path else "confirmed"
+        confirmation_field = "user_confirmation" if "decisions" in relative_path else "confirmation"
+        document[confirmation_field] = {"source_text": "RAW-DOMAIN-SENTINEL"}
+    _write_yaml(path, document)
+
+    with pytest.raises(PackFormatError) as caught:
+        build_pack(project, tmp_path / "invalid-domain.accpkg")
+
+    assert caught.value.path == relative_path
+    assert "RAW-DOMAIN-SENTINEL" not in str(caught.value)
 
 
 def test_build_pack_rejects_nested_interaction_contract_paths(tmp_path: Path) -> None:

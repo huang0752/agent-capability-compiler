@@ -1,0 +1,173 @@
+{
+  "$defs": {
+    "DomainDecisionRef": {
+      "additionalProperties": false,
+      "properties": {
+        "decision_digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Decision Digest",
+          "type": "string"
+        },
+        "domain_id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Domain Id",
+          "type": "string"
+        },
+        "revision": {
+          "exclusiveMinimum": 0,
+          "title": "Revision",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "domain_id",
+        "revision",
+        "decision_digest"
+      ],
+      "title": "DomainDecisionRef",
+      "type": "object"
+    },
+    "DomainEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "active_decision_ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DomainDecisionRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "candidate_ids": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Candidate Ids",
+          "type": "array"
+        },
+        "dependency_domain_ids": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Dependency Domain Ids",
+          "type": "array"
+        },
+        "evidence_refs": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "interaction_ids": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Interaction Ids",
+          "type": "array"
+        },
+        "route_ids": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Route Ids",
+          "type": "array"
+        },
+        "status": {
+          "$ref": "#/$defs/DomainStatus"
+        },
+        "title": {
+          "maxLength": 16384,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "status",
+        "candidate_ids",
+        "route_ids",
+        "interaction_ids",
+        "dependency_domain_ids",
+        "evidence_refs",
+        "active_decision_ref"
+      ],
+      "title": "DomainEntry",
+      "type": "object"
+    },
+    "DomainStatus": {
+      "enum": [
+        "not_started",
+        "in_progress",
+        "awaiting_user",
+        "validation_failed",
+        "ready_for_review",
+        "completed",
+        "stale"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "domains": {
+      "items": {
+        "$ref": "#/$defs/DomainEntry"
+      },
+      "title": "Domains",
+      "type": "array"
+    },
+    "preferred_order": {
+      "items": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": "Preferred Order",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "2",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "unclassified_candidate_ids": {
+      "items": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": "Unclassified Candidate Ids",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "domains",
+    "unclassified_candidate_ids"
+  ],
+  "title": "DomainMap",
+  "type": "object"
+}
