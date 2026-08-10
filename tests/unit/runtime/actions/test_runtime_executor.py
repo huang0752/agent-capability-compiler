@@ -12,6 +12,7 @@ from acc_core.compiler.actions import (
     prove_action_capability,
 )
 from acc_core.contracts import ActionSemantics
+from acc_core.models import Policy
 from acc_core.models.v2 import (
     ActionCapabilityV2,
     ActionOperationV2,
@@ -383,6 +384,7 @@ def _server_serialized_ir() -> dict[str, Any]:
         capability,
         operations,
         action_semantics={"orders.update": semantics},
+        policy=Policy.model_validate(ir["policies"]["orders-write"]),
     )
     assert proof.ok
     ir["capabilities"]["orders.change"]["action_proof"] = {
@@ -399,6 +401,106 @@ def _server_serialized_ir() -> dict[str, Any]:
         "orders.get",
         "orders.update",
     ]
+    return ir
+
+
+def _bound_status_query_ir(
+    bindings: list[dict[str, str]],
+    *,
+    include_region: bool = True,
+    include_selectors: bool = False,
+) -> dict[str, Any]:
+    ir = _server_serialized_ir()
+    status_document = cast(dict[str, Any], ir["operations"]["orders.get"])
+    status_properties: dict[str, object] = {
+        "job_id": {"type": "string"},
+        "tenant_id": {"type": "string"},
+    }
+    required = ["job_id", "tenant_id"]
+    if include_region:
+        status_properties["region"] = {"type": "string"}
+        required.append("region")
+    status_document["input_schema"] = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": status_properties,
+        "required": required,
+    }
+    status_output = cast(dict[str, Any], status_document["output_schema"])
+    status_output_properties = cast(dict[str, object], status_output["properties"])
+    status_output_properties["routing"] = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {"region": {"type": "string"}},
+        "required": ["region"],
+    }
+    cast(list[str], status_output["required"]).append("routing")
+    cast(list[str], status_output["required"]).append("internal")
+    if include_selectors:
+        status_output_properties["selectors"] = {
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1,
+        }
+        cast(list[str], status_output["required"]).append("selectors")
+    status_http = cast(dict[str, Any], status_document["http"])
+    status_http["path_parameters"] = {"order_id": "job_id"}
+    status_http["query_parameters"] = {"tenant": "tenant_id"}
+    if include_region:
+        status_http["query_parameters"]["region"] = "region"
+
+    capability_document = cast(dict[str, Any], ir["capabilities"]["orders.change"]["definition"])
+    output_schema = cast(dict[str, Any], capability_document["output_schema"])
+    output_properties = cast(dict[str, object], output_schema["properties"])
+    output_properties["routing"] = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {"region": {"type": "string"}},
+        "required": ["region"],
+    }
+    cast(list[str], output_schema["required"]).append("routing")
+    if include_selectors:
+        output_properties["selectors"] = {
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1,
+        }
+        cast(list[str], output_schema["required"]).append("selectors")
+    policy_document = cast(dict[str, Any], ir["policies"]["orders-write"])
+    cast(list[str], policy_document["readable_fields"]).extend(["routing", "selectors"])
+
+    capability = ActionCapabilityV2.model_validate(capability_document)
+    operations: dict[str, OperationV2] = {
+        "orders.get": ReadOperationV2.model_validate(status_document),
+        "orders.update": ActionOperationV2.model_validate(ir["operations"]["orders.update"]),
+    }
+    mutation = operations["orders.update"]
+    assert isinstance(mutation, ActionOperationV2)
+    prior_attestation = cast(
+        dict[str, Any],
+        ir["capabilities"]["orders.change"]["action_proof"]["operation_semantics"]["orders.update"],
+    )
+    semantics_document = cast(dict[str, Any], prior_attestation["summary"])
+    outcome = cast(dict[str, Any], semantics_document["outcome_resolution"])
+    outcome["request_bindings"] = bindings
+    semantics = ActionSemantics.model_validate(semantics_document)
+    proof = prove_action_capability(
+        capability,
+        operations,
+        action_semantics={"orders.update": semantics},
+        policy=Policy.model_validate(ir["policies"]["orders-write"]),
+    )
+    assert proof.ok
+    ir["capabilities"]["orders.change"]["action_proof"] = {
+        "approval_required": proof.approval_required,
+        "effects": list(proof.effects),
+        "maximum_risk": proof.maximum_risk,
+        "mutation_operation_ids": list(proof.mutation_operation_ids),
+        "operation_semantics": {
+            "orders.update": compile_action_semantics_attestation(mutation, semantics)
+        },
+        "required_scopes": list(proof.required_scopes),
+    }
     return ir
 
 
@@ -444,13 +546,17 @@ class _Provider(ActionOperationProvider):
         if self.read_error_on_call == len(self.read_calls):
             raise RuntimeError("private-status-query-failure")
         status = self.read_statuses[min(len(self.read_calls) - 1, len(self.read_statuses) - 1)]
+        resource_id = arguments.get("order_id", arguments.get("job_id"))
+        value: dict[str, JsonValue] = {
+            "order_id": resource_id,
+            "status": status,
+            "version": 3,
+            "internal": "provider-private",
+        }
+        if "region" in arguments:
+            value["routing"] = {"region": arguments["region"]}
         return ActionReadResult(
-            value={
-                "order_id": arguments["order_id"],
-                "status": status,
-                "version": 3,
-                "internal": "provider-private",
-            },
+            value=value,
             response_headers={"ETag": "etag-v3"},
         )
 
@@ -544,6 +650,215 @@ async def test_server_serialized_commit_mutates_once_then_reads_declared_status(
     assert len(provider.action_calls) == 1
     assert provider.action_calls[0][-1] is None
     assert [call[0].id for call in provider.read_calls] == ["orders.get"]
+
+
+@pytest.mark.asyncio
+async def test_status_query_uses_explicit_renamed_and_public_preview_bindings() -> None:
+    ir = _bound_status_query_ir(
+        [
+            {
+                "target": "job_id",
+                "source": "capability_input",
+                "source_pointer": "/order_id",
+            },
+            {
+                "target": "region",
+                "source": "prepared_preview",
+                "source_pointer": "/routing/region",
+            },
+        ]
+    )
+    provider = _Provider(read_statuses=["approved"])
+    executor = RuntimeActionWorkflowExecutor(ir, provider=provider)
+    capability = ActionCapabilityV2.model_validate(_capability_document())
+    capability = capability.model_copy(
+        update={"output_schema": ir["capabilities"]["orders.change"]["definition"]["output_schema"]}
+    )
+    execution = ActionCommitExecution(
+        input_value={"order_id": "order-1"},
+        preview_value={
+            "order_id": "order-1",
+            "status": "pending",
+            "version": 3,
+            "routing": {"region": "cn-east"},
+        },
+        concurrency_token=None,
+        idempotency_key=SecretValue("runtime-idempotency"),
+    )
+
+    result = await executor.commit(capability, execution, _principal())
+
+    assert cast(dict[str, JsonValue], result)["status"] == "approved"
+    assert provider.read_calls[0][1] == {
+        "job_id": "order-1",
+        "region": "cn-east",
+        "tenant_id": "tenant-a",
+    }
+
+
+@pytest.mark.asyncio
+async def test_status_query_missing_preview_binding_fails_closed_without_data_leak() -> None:
+    ir = _bound_status_query_ir(
+        [
+            {
+                "target": "job_id",
+                "source": "capability_input",
+                "source_pointer": "/order_id",
+            },
+            {
+                "target": "region",
+                "source": "prepared_preview",
+                "source_pointer": "/routing/region",
+            },
+        ]
+    )
+    provider = _Provider(read_statuses=["approved"])
+    executor = RuntimeActionWorkflowExecutor(ir, provider=provider)
+    capability = ActionCapabilityV2.model_validate(
+        ir["capabilities"]["orders.change"]["definition"]
+    )
+    private = "private-preview-selector"
+    execution = ActionCommitExecution(
+        input_value={"order_id": "order-1"},
+        preview_value={
+            "order_id": "order-1",
+            "status": "pending",
+            "version": 3,
+            "untrusted": private,
+        },
+        concurrency_token=None,
+        idempotency_key=SecretValue("runtime-idempotency"),
+    )
+
+    with pytest.raises(ActionRuntimeConfigurationError) as captured:
+        await executor.commit(capability, execution, _principal())
+
+    assert private not in str(captured.value)
+    assert provider.read_calls == []
+
+
+@pytest.mark.asyncio
+async def test_status_query_cannot_bind_policy_denied_preview_fields() -> None:
+    ir = _bound_status_query_ir(
+        [
+            {
+                "target": "job_id",
+                "source": "capability_input",
+                "source_pointer": "/order_id",
+            },
+            {
+                "target": "region",
+                "source": "prepared_preview",
+                "source_pointer": "/routing/region",
+            },
+        ]
+    )
+    proof_document = cast(dict[str, Any], ir["capabilities"]["orders.change"]["action_proof"])
+    attestations = cast(dict[str, Any], proof_document["operation_semantics"])
+    attestation = cast(dict[str, Any], attestations["orders.update"])
+    summary = cast(dict[str, Any], attestation["summary"])
+    outcome = cast(dict[str, Any], summary["outcome_resolution"])
+    bindings = cast(list[dict[str, Any]], outcome["request_bindings"])
+    bindings[1]["source_pointer"] = "/internal"
+    mutation = ActionOperationV2.model_validate(ir["operations"]["orders.update"])
+    attestations["orders.update"] = compile_action_semantics_attestation(
+        mutation,
+        ActionSemantics.model_validate(summary),
+    )
+    provider = _Provider(read_statuses=["approved"])
+    executor = RuntimeActionWorkflowExecutor(ir, provider=provider)
+    capability = ActionCapabilityV2.model_validate(
+        ir["capabilities"]["orders.change"]["definition"]
+    )
+    private = "private-preview-selector"
+    execution = ActionCommitExecution(
+        input_value={"order_id": "order-1"},
+        preview_value={
+            "order_id": "order-1",
+            "status": "pending",
+            "version": 3,
+            "routing": {"region": "cn-east"},
+            "internal": private,
+        },
+        concurrency_token=None,
+        idempotency_key=SecretValue("runtime-idempotency"),
+    )
+
+    with pytest.raises(ActionRuntimeConfigurationError) as captured:
+        await executor.commit(capability, execution, _principal())
+
+    assert private not in str(captured.value)
+    assert provider.read_calls == []
+    assert provider.action_calls == []
+
+
+@pytest.mark.asyncio
+async def test_status_query_array_pointer_fails_closed_when_element_is_missing() -> None:
+    ir = _bound_status_query_ir(
+        [
+            {
+                "target": "job_id",
+                "source": "capability_input",
+                "source_pointer": "/order_id",
+            },
+            {
+                "target": "region",
+                "source": "prepared_preview",
+                "source_pointer": "/selectors/0",
+            },
+        ],
+        include_selectors=True,
+    )
+    provider = _Provider(read_statuses=["approved"])
+    executor = RuntimeActionWorkflowExecutor(ir, provider=provider)
+    capability = ActionCapabilityV2.model_validate(
+        ir["capabilities"]["orders.change"]["definition"]
+    )
+    execution = ActionCommitExecution(
+        input_value={"order_id": "order-1"},
+        preview_value={
+            "order_id": "order-1",
+            "status": "pending",
+            "version": 3,
+            "selectors": [],
+        },
+        concurrency_token=None,
+        idempotency_key=SecretValue("runtime-idempotency"),
+    )
+
+    with pytest.raises(ActionRuntimeConfigurationError):
+        await executor.commit(capability, execution, _principal())
+
+    assert provider.read_calls == []
+
+
+def test_status_query_binding_attestation_tamper_fails_before_provider_call() -> None:
+    ir = _bound_status_query_ir(
+        [
+            {
+                "target": "job_id",
+                "source": "capability_input",
+                "source_pointer": "/order_id",
+            },
+            {
+                "target": "region",
+                "source": "prepared_preview",
+                "source_pointer": "/routing/region",
+            },
+        ]
+    )
+    attestation = ir["capabilities"]["orders.change"]["action_proof"]["operation_semantics"][
+        "orders.update"
+    ]
+    attestation["summary"]["outcome_resolution"]["request_bindings"][0]["source_pointer"] = "/other"
+    provider = _Provider()
+    executor = RuntimeActionWorkflowExecutor(ir, provider=provider)
+
+    with pytest.raises(ActionRuntimeConfigurationError):
+        executor.verified_definition("orders.change")
+
+    assert provider.read_calls == []
+    assert provider.action_calls == []
 
 
 def _server_serialized_coordinator(

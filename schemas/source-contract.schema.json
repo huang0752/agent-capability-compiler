@@ -649,6 +649,13 @@
           "minLength": 1,
           "title": "Operation Id",
           "type": "string"
+        },
+        "request_bindings": {
+          "items": {
+            "$ref": "#/$defs/StatusQueryRequestBindingV2"
+          },
+          "title": "Request Bindings",
+          "type": "array"
         }
       },
       "required": [
@@ -656,6 +663,37 @@
         "operation_id"
       ],
       "title": "StatusQueryOutcomeResolutionV2",
+      "type": "object"
+    },
+    "StatusQueryRequestBindingV2": {
+      "additionalProperties": false,
+      "description": "Map one sealed Action value into a declared status-query input.",
+      "properties": {
+        "source": {
+          "enum": [
+            "capability_input",
+            "prepared_preview"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "source_pointer": {
+          "minLength": 1,
+          "title": "Source Pointer",
+          "type": "string"
+        },
+        "target": {
+          "minLength": 1,
+          "title": "Target",
+          "type": "string"
+        }
+      },
+      "required": [
+        "target",
+        "source",
+        "source_pointer"
+      ],
+      "title": "StatusQueryRequestBindingV2",
       "type": "object"
     },
     "SynchronousOutcomeResolutionV2": {

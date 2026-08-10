@@ -12,6 +12,7 @@ from acc_core.compiler import ir as compiler_ir
 from acc_core.compiler.actions import ActionProof, prove_action_capability
 from acc_core.contracts import ActionSemantics, SourceContract
 from acc_core.diagnostics import Diagnostic
+from acc_core.models import Policy
 from acc_core.models.v2 import (
     ActionCapabilityV2,
     ActionOperationV2,
@@ -157,6 +158,26 @@ def _capability(
 
 def _codes(report: ActionProof) -> set[str]:
     return {item.code for item in report.diagnostics}
+
+
+def _policy(
+    *,
+    readable_fields: list[str] | None = None,
+    denied_fields: list[str] | None = None,
+    redaction_rules: list[dict[str, str]] | None = None,
+) -> Policy:
+    return Policy.model_validate(
+        {
+            "schema_version": "2",
+            "id": "orders-write",
+            "required_scopes": [],
+            "tenant_mode": "none",
+            "tenant_field": None,
+            "readable_fields": readable_fields or ["data", "routing"],
+            "denied_fields": denied_fields or [],
+            "redaction_rules": redaction_rules or [],
+        }
+    )
 
 
 def _server_serialized_semantics(operation: ActionOperationV2) -> ActionSemantics:
@@ -352,7 +373,7 @@ def test_ir_includes_server_serialized_preview_and_status_dependencies() -> None
         operations={"jobs.status": status, "jobs.cancel": mutation},
         source_contracts={"jobs.cancel": contract},
         operation_bindings={"jobs.status": set(), "jobs.cancel": set()},
-        policies={"orders-write"},
+        policies={"orders-write": _policy()},
         evals={"orders-change-success": "orders.change"},
         diagnostics=diagnostics,
     )
@@ -638,3 +659,369 @@ def test_delete_risk_is_not_inferred_from_http_method_but_still_requires_approva
 def test_future_multi_mutation_modes_fail_closed_until_implemented(mode: str) -> None:
     report = prove_action_capability(_capability(execution_mode=mode), _valid_operations())
     assert "ACC_COMPILE_ACTION_EXECUTION_MODE_UNSUPPORTED" in _codes(report)
+
+
+def _with_operation_schemas(
+    operation: ReadOperationV2 | ActionOperationV2,
+    *,
+    input_schema: dict[str, object],
+    output_schema: dict[str, object] | None = None,
+    context_bindings: dict[str, str] | None = None,
+) -> ReadOperationV2 | ActionOperationV2:
+    document = operation.model_dump(mode="json", by_alias=True)
+    document["input_schema"] = input_schema
+    if output_schema is not None:
+        document["output_schema"] = output_schema
+    document["context_bindings"] = context_bindings or {}
+    http = cast(dict[str, Any], document["http"])
+    properties = cast(dict[str, object], input_schema.get("properties", {}))
+    http["path"] = "/jobs/status"
+    http["path_parameters"] = {}
+    http["query_parameters"] = {name: name for name in properties}
+    return (
+        ReadOperationV2.model_validate(document)
+        if isinstance(operation, ReadOperationV2)
+        else ActionOperationV2.model_validate(document)
+    )
+
+
+def _status_binding_fixture(
+    bindings: list[dict[str, str]],
+    *,
+    status_input_schema: dict[str, object] | None = None,
+    context_bindings: dict[str, str] | None = None,
+) -> tuple[ActionCapabilityV2, dict[str, OperationV2], ActionSemantics]:
+    mutation = _server_serialized_operation()
+    preview_schema: dict[str, object] = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "data": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {"status": {"type": "string"}},
+                "required": ["status"],
+            },
+            "routing": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {"region": {"type": "string"}},
+                "required": ["region"],
+            },
+        },
+        "required": ["data", "routing"],
+    }
+    status = _with_operation_schemas(
+        _operation("jobs.status", effect="read"),
+        input_schema=status_input_schema
+        or {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "job_id": {"type": "string"},
+                "region": {"type": "string"},
+            },
+            "required": ["job_id", "region"],
+        },
+        output_schema=preview_schema,
+        context_bindings=context_bindings,
+    )
+    capability_document = _capability(
+        preview=[
+            {
+                "id": "jobs_status",
+                "call": {
+                    "operation": "jobs.status",
+                    "arguments": {
+                        "job_id": "$.input.item_id",
+                        "region": "$.input.requested_region",
+                    },
+                },
+            },
+            {"emit": {"value": "$.steps.jobs_status"}},
+        ],
+        commit=[_call("jobs.cancel"), {"emit": {"value": None}}],
+    ).model_dump(mode="json", by_alias=True)
+    capability_document["input_schema"] = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "item_id": {"type": "string"},
+            "requested_region": {"type": "string"},
+        },
+        "required": ["item_id", "requested_region"],
+    }
+    capability_document["output_schema"] = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {"result": {"type": "string"}},
+        "required": ["result"],
+    }
+    capability = ActionCapabilityV2.model_validate(capability_document)
+    semantics_document = _server_serialized_semantics(mutation).model_dump(mode="json")
+    outcome = cast(dict[str, object], semantics_document["outcome_resolution"])
+    outcome["request_bindings"] = bindings
+    semantics = ActionSemantics.model_validate(semantics_document)
+    return capability, {"jobs.status": status, "jobs.cancel": mutation}, semantics
+
+
+def test_status_query_explicit_bindings_support_renamed_and_preview_derived_inputs() -> None:
+    capability, operations, semantics = _status_binding_fixture(
+        [
+            {
+                "target": "job_id",
+                "source": "capability_input",
+                "source_pointer": "/item_id",
+            },
+            {
+                "target": "region",
+                "source": "prepared_preview",
+                "source_pointer": "/routing/region",
+            },
+        ]
+    )
+
+    proof = prove_action_capability(
+        capability,
+        operations,
+        action_semantics={"jobs.cancel": semantics},
+        policy=_policy(),
+    )
+
+    assert proof.ok
+    attestation = action_compiler.compile_action_semantics_attestation(
+        cast(ActionOperationV2, operations["jobs.cancel"]),
+        semantics,
+    )
+    summary = cast(dict[str, Any], attestation["summary"])
+    outcome = cast(dict[str, Any], summary["outcome_resolution"])
+    assert outcome["request_bindings"][0]["source_pointer"] == "/item_id"
+
+
+def test_status_query_binding_proof_is_not_limited_to_server_serialized_actions() -> None:
+    mutation = _operation("orders.update", effect="update")
+    assert isinstance(mutation, ActionOperationV2)
+    semantics_document: dict[str, Any] = {
+        "method": mutation.http.method,
+        **mutation.http.safety.model_dump(mode="json"),
+        "outcome_resolution": {
+            "mode": "status_query",
+            "operation_id": "orders.get",
+        },
+        "evidence": mutation.evidence[0].model_dump(mode="json"),
+        "authority": "implementation",
+    }
+    semantics = ActionSemantics.model_validate(semantics_document)
+
+    proof = prove_action_capability(
+        _capability(),
+        {
+            "orders.get": _operation("orders.get", effect="read"),
+            "orders.update": mutation,
+        },
+        action_semantics={"orders.update": semantics},
+    )
+
+    assert proof.ok
+    assert proof.strategy_operation_ids == ("orders.get",)
+
+
+def test_status_query_rejects_optional_binding_sources_even_for_optional_targets() -> None:
+    capability, operations, semantics = _status_binding_fixture(
+        [
+            {
+                "target": "job_id",
+                "source": "capability_input",
+                "source_pointer": "/item_id",
+            },
+            {
+                "target": "region",
+                "source": "capability_input",
+                "source_pointer": "/requested_region",
+            },
+        ],
+        status_input_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "job_id": {"type": "string"},
+                "region": {"type": "string"},
+            },
+            "required": ["job_id"],
+        },
+    )
+    capability_document = capability.model_dump(mode="json", by_alias=True)
+    input_schema = cast(dict[str, Any], capability_document["input_schema"])
+    input_schema["required"] = ["item_id"]
+    capability = ActionCapabilityV2.model_validate(capability_document)
+
+    proof = prove_action_capability(
+        capability,
+        operations,
+        action_semantics={"jobs.cancel": semantics},
+        policy=_policy(),
+    )
+
+    assert "ACC_COMPILE_ACTION_STATUS_QUERY_BINDING_SOURCE_INVALID" in _codes(proof)
+    assert not proof.ok
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        None,
+        _policy(readable_fields=["data"], denied_fields=["routing"]),
+        _policy(
+            redaction_rules=[
+                {"path": "routing.region", "strategy": "remove"},
+            ]
+        ),
+        _policy(
+            redaction_rules=[
+                {"path": "routing.region", "strategy": "mask"},
+            ]
+        ),
+        _policy(
+            redaction_rules=[
+                {"path": "routing.region", "strategy": "hash"},
+            ]
+        ),
+    ],
+)
+def test_prepared_preview_binding_requires_unmodified_policy_disclosure(
+    policy: Policy | None,
+) -> None:
+    capability, operations, semantics = _status_binding_fixture(
+        [
+            {
+                "target": "job_id",
+                "source": "capability_input",
+                "source_pointer": "/item_id",
+            },
+            {
+                "target": "region",
+                "source": "prepared_preview",
+                "source_pointer": "/routing/region",
+            },
+        ]
+    )
+
+    proof = prove_action_capability(
+        capability,
+        operations,
+        action_semantics={"jobs.cancel": semantics},
+        policy=policy,
+    )
+
+    assert "ACC_COMPILE_ACTION_STATUS_QUERY_PREVIEW_NOT_PUBLIC" in _codes(proof)
+    assert not proof.ok
+
+
+@pytest.mark.parametrize(
+    ("bindings", "status_input_schema", "context_bindings", "code"),
+    [
+        (
+            [
+                {
+                    "target": "missing",
+                    "source": "capability_input",
+                    "source_pointer": "/item_id",
+                }
+            ],
+            None,
+            None,
+            "ACC_COMPILE_ACTION_STATUS_QUERY_BINDING_TARGET_INVALID",
+        ),
+        (
+            [
+                {
+                    "target": "tenant_id",
+                    "source": "capability_input",
+                    "source_pointer": "/item_id",
+                }
+            ],
+            {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {"tenant_id": {"type": "string"}},
+                "required": ["tenant_id"],
+            },
+            {"tenant_id": "tenant_context.tenant_id"},
+            "ACC_COMPILE_ACTION_STATUS_QUERY_BINDING_CONTEXT_FORBIDDEN",
+        ),
+        (
+            [
+                {
+                    "target": "job_id",
+                    "source": "capability_input",
+                    "source_pointer": "/unknown",
+                },
+                {
+                    "target": "region",
+                    "source": "prepared_preview",
+                    "source_pointer": "/routing/region",
+                },
+            ],
+            None,
+            None,
+            "ACC_COMPILE_ACTION_STATUS_QUERY_BINDING_SOURCE_INVALID",
+        ),
+        (
+            [
+                {
+                    "target": "job_id",
+                    "source": "capability_input",
+                    "source_pointer": "/item_id",
+                },
+                {
+                    "target": "region",
+                    "source": "capability_input",
+                    "source_pointer": "/item_id",
+                },
+            ],
+            {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "job_id": {"type": "string"},
+                    "region": {"type": "integer"},
+                },
+                "required": ["job_id", "region"],
+            },
+            None,
+            "ACC_COMPILE_ACTION_STATUS_QUERY_BINDING_SCHEMA_UNPROVEN",
+        ),
+        (
+            [
+                {
+                    "target": "job_id",
+                    "source": "capability_input",
+                    "source_pointer": "/item_id",
+                }
+            ],
+            None,
+            None,
+            "ACC_COMPILE_ACTION_STATUS_QUERY_REQUIRED_INPUT_UNBOUND",
+        ),
+    ],
+)
+def test_status_query_bindings_fail_closed_when_not_constructible(
+    bindings: list[dict[str, str]],
+    status_input_schema: dict[str, object] | None,
+    context_bindings: dict[str, str] | None,
+    code: str,
+) -> None:
+    capability, operations, semantics = _status_binding_fixture(
+        bindings,
+        status_input_schema=status_input_schema,
+        context_bindings=context_bindings,
+    )
+
+    proof = prove_action_capability(
+        capability,
+        operations,
+        action_semantics={"jobs.cancel": semantics},
+    )
+
+    assert code in _codes(proof)
+    assert not proof.ok

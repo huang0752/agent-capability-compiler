@@ -32,6 +32,7 @@ from acc_core.models import (
     ParallelStep,
     PasswordBearerAuthConfig,
     PickStep,
+    Policy,
     ReadCapabilityV2,
     RedactStep,
     StrictModel,
@@ -654,7 +655,7 @@ def _compile_action_capability(
     operations: dict[str, object],
     source_contracts: dict[str, SourceContract],
     operation_bindings: dict[str, set[str]],
-    policies: set[str],
+    policies: dict[str, Policy],
     evals: dict[str, str],
     diagnostics: list[Diagnostic],
 ) -> tuple[set[str], dict[str, JsonValue]]:
@@ -697,6 +698,7 @@ def _compile_action_capability(
         cast(dict[str, Any], operations),
         path=path,
         action_semantics=semantics_by_operation,
+        policy=policies.get(capability.policy),
     )
     diagnostics.extend(proof.diagnostics)
     dependencies: set[str] = set()
@@ -851,7 +853,7 @@ def compile_project(project_root: str | Path = ".") -> CompilationReport:
                 operations=cast(dict[str, object], validation.operations),
                 source_contracts=validation.source_contracts,
                 operation_bindings=operation_bindings,
-                policies=policy_ids,
+                policies=validation.policies,
                 evals=eval_targets,
                 diagnostics=diagnostics,
             )

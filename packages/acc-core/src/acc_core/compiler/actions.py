@@ -12,14 +12,25 @@ from typing import Literal, cast
 from pydantic import JsonValue, ValidationError
 
 from acc_core.contracts import ActionSemantics
+from acc_core.contracts.schema_relation import SchemaRelation, compare_operation_output
 from acc_core.diagnostics import Diagnostic
-from acc_core.models import BranchStep, CallStep, ForeachStep, ParallelStep, WorkflowStep
+from acc_core.models import (
+    BranchStep,
+    CallStep,
+    EmitStep,
+    ForeachStep,
+    JsonObject,
+    ParallelStep,
+    Policy,
+    WorkflowStep,
+)
 from acc_core.models.actions import (
     Effect,
     Risk,
     ServerSerializedStatePredicateV2,
     StateIdempotencyV2,
     StatusQueryOutcomeResolutionV2,
+    StatusQueryRequestBindingV2,
 )
 from acc_core.models.v2 import (
     ActionCapabilityV2,
@@ -38,6 +49,9 @@ _PREPARED_REFERENCE = re.compile(r"^\$\.prepared\.(?:input|preview)(?:\.[A-Za-z_
 _DIRECT_INPUT_REFERENCE = re.compile(r"^\$\.input(?:\.[A-Za-z_][A-Za-z0-9_-]*)*$")
 _FRESH_STEP_REFERENCE = re.compile(
     r"^\$\.steps\.[A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z_][A-Za-z0-9_-]*)*$"
+)
+_NON_ASSERTING_REF_SIBLINGS = frozenset(
+    {"$comment", "$id", "$schema", "default", "deprecated", "description", "title"}
 )
 
 
@@ -141,6 +155,266 @@ def _diagnostic(
             pointer=pointer,
         )
     )
+
+
+def _pointer_tokens(pointer: str) -> tuple[str, ...]:
+    return tuple(token.replace("~1", "/").replace("~0", "~") for token in pointer[1:].split("/"))
+
+
+def _dereference_schema(root: JsonObject, schema: object) -> JsonObject | None:
+    current = schema
+    seen: set[str] = set()
+    while isinstance(current, dict) and "$ref" in current:
+        reference = current.get("$ref")
+        if (
+            not isinstance(reference, str)
+            or not reference.startswith("#/")
+            or reference in seen
+            or set(current) - {"$ref"} - _NON_ASSERTING_REF_SIBLINGS
+        ):
+            return None
+        seen.add(reference)
+        resolved: object = root
+        for token in _pointer_tokens(reference[1:]):
+            if not isinstance(resolved, dict) or token not in resolved:
+                return None
+            resolved = resolved[token]
+        current = resolved
+    return cast(JsonObject, current) if isinstance(current, dict) else None
+
+
+def _schema_at_data_pointer(schema: JsonObject, pointer: str) -> JsonObject | None:
+    current: object = schema
+    for token in _pointer_tokens(pointer):
+        current = _dereference_schema(schema, current)
+        if current is None:
+            return None
+        if current.get("type") == "array":
+            if not token.isdecimal() or (len(token) > 1 and token.startswith("0")):
+                return None
+            items = current.get("items")
+            if not isinstance(items, dict):
+                return None
+            current = items
+            continue
+        properties = current.get("properties")
+        if not isinstance(properties, dict) or not isinstance(properties.get(token), dict):
+            return None
+        current = properties[token]
+    return _dereference_schema(schema, current)
+
+
+def _schema_pointer_is_guaranteed(schema: JsonObject, pointer: str) -> bool:
+    current: object = schema
+    for token in _pointer_tokens(pointer):
+        current = _dereference_schema(schema, current)
+        if current is None:
+            return False
+        if current.get("type") == "array":
+            if not token.isdecimal() or (len(token) > 1 and token.startswith("0")):
+                return False
+            minimum = current.get("minItems")
+            if not isinstance(minimum, int) or isinstance(minimum, bool) or minimum <= int(token):
+                return False
+            items = current.get("items")
+            if not isinstance(items, dict):
+                return False
+            current = items
+            continue
+        properties = current.get("properties")
+        required = current.get("required")
+        if (
+            not isinstance(properties, dict)
+            or not isinstance(properties.get(token), dict)
+            or not isinstance(required, list)
+            or token not in required
+        ):
+            return False
+        current = properties[token]
+    return _dereference_schema(schema, current) is not None
+
+
+def _escaped_pointer_token(value: str) -> str:
+    return value.replace("~", "~0").replace("/", "~1")
+
+
+def _policy_path_tokens(value: str) -> tuple[str, ...]:
+    if value.startswith("$."):
+        value = value[2:]
+    if value.startswith("/"):
+        return _pointer_tokens(value)
+    return tuple(token for token in value.split(".") if token)
+
+
+def _paths_overlap(left: tuple[str, ...], right: tuple[str, ...]) -> bool:
+    common = min(len(left), len(right))
+    return left[:common] == right[:common]
+
+
+def _policy_discloses_unmodified(policy: Policy, pointer: str) -> bool:
+    source = _pointer_tokens(pointer)
+    readable = tuple(_policy_path_tokens(path) for path in policy.readable_fields)
+    if not any(len(rule) <= len(source) and source[: len(rule)] == rule for rule in readable):
+        return False
+    denied = tuple(_policy_path_tokens(path) for path in policy.denied_fields)
+    redacted = tuple(_policy_path_tokens(rule.path) for rule in policy.redaction_rules)
+    return not any(_paths_overlap(source, rule) for rule in (*denied, *redacted))
+
+
+def _preview_result_schema(
+    capability: ActionCapabilityV2,
+    operations: Mapping[str, OperationV2],
+) -> JsonObject | None:
+    final_step = capability.preview_workflow[-1]
+    if not isinstance(final_step, EmitStep) or not isinstance(final_step.emit.value, str):
+        return None
+    reference = final_step.emit.value
+    if not reference.startswith("$.steps."):
+        return None
+    tokens = reference.removeprefix("$.steps.").split(".")
+    if not tokens or any(not token for token in tokens):
+        return None
+    step_id, *value_tokens = tokens
+    producers = [
+        step
+        for step in capability.preview_workflow
+        if isinstance(step, CallStep) and step.id == step_id
+    ]
+    if len(producers) != 1:
+        return None
+    operation = operations.get(producers[0].call.operation)
+    if not isinstance(operation, ReadOperationV2):
+        return None
+    if not value_tokens:
+        return operation.output_schema
+    pointer = "/" + "/".join(_escaped_pointer_token(token) for token in value_tokens)
+    if not _schema_pointer_is_guaranteed(operation.output_schema, pointer):
+        return None
+    return _schema_at_data_pointer(operation.output_schema, pointer)
+
+
+def _prove_status_query_bindings(
+    capability: ActionCapabilityV2,
+    operation: ReadOperationV2,
+    outcome: StatusQueryOutcomeResolutionV2,
+    preview_schema: JsonObject | None,
+    policy: Policy | None,
+    diagnostics: list[Diagnostic],
+    *,
+    path: str,
+) -> None:
+    properties = operation.input_schema.get("properties")
+    required_value = operation.input_schema.get("required", [])
+    if not isinstance(properties, dict) or not isinstance(required_value, list):
+        _diagnostic(
+            diagnostics,
+            code="ACC_COMPILE_ACTION_STATUS_QUERY_BINDING_TARGET_INVALID",
+            message="Status query bindings require a declared object input schema.",
+            path=path,
+            pointer="/commit_workflow",
+        )
+        return
+    required = {
+        item
+        for item in required_value
+        if isinstance(item, str) and item not in operation.context_bindings
+    }
+    explicit = bool(outcome.request_bindings)
+    bindings = list(outcome.request_bindings)
+    if not explicit:
+        bindings = [
+            StatusQueryRequestBindingV2(
+                target=target,
+                source="capability_input",
+                source_pointer=f"/{_escaped_pointer_token(target)}",
+            )
+            for target in sorted(required)
+        ]
+
+    constructed: set[str] = set()
+    for index, binding in enumerate(bindings):
+        binding_pointer = f"/commit_workflow/status_query/request_bindings/{index}"
+        target_schema = properties.get(binding.target)
+        if not isinstance(target_schema, dict):
+            _diagnostic(
+                diagnostics,
+                code="ACC_COMPILE_ACTION_STATUS_QUERY_BINDING_TARGET_INVALID",
+                message="A status query binding target must be a declared input field.",
+                path=path,
+                pointer=f"{binding_pointer}/target",
+            )
+            continue
+        if binding.target in operation.context_bindings:
+            _diagnostic(
+                diagnostics,
+                code="ACC_COMPILE_ACTION_STATUS_QUERY_BINDING_CONTEXT_FORBIDDEN",
+                message="Status query bindings cannot override Runtime-owned context inputs.",
+                path=path,
+                pointer=f"{binding_pointer}/target",
+            )
+            continue
+        source_root = (
+            capability.input_schema if binding.source == "capability_input" else preview_schema
+        )
+        if binding.source == "prepared_preview" and (
+            policy is None
+            or policy.id != capability.policy
+            or not _policy_discloses_unmodified(policy, binding.source_pointer)
+        ):
+            _diagnostic(
+                diagnostics,
+                code="ACC_COMPILE_ACTION_STATUS_QUERY_PREVIEW_NOT_PUBLIC",
+                message=(
+                    "A prepared-preview status selector must survive its Capability policy "
+                    "without denial or redaction."
+                ),
+                path=path,
+                pointer=f"{binding_pointer}/source_pointer",
+            )
+            continue
+        if source_root is None:
+            _diagnostic(
+                diagnostics,
+                code="ACC_COMPILE_ACTION_STATUS_QUERY_BINDING_SOURCE_INVALID",
+                message="A prepared-preview binding requires a statically proven public preview.",
+                path=path,
+                pointer=f"{binding_pointer}/source_pointer",
+            )
+            continue
+        source_schema = _schema_at_data_pointer(source_root, binding.source_pointer)
+        if source_schema is None or not _schema_pointer_is_guaranteed(
+            source_root, binding.source_pointer
+        ):
+            _diagnostic(
+                diagnostics,
+                code="ACC_COMPILE_ACTION_STATUS_QUERY_BINDING_SOURCE_INVALID",
+                message="A status query binding source must be present in its sealed schema.",
+                path=path,
+                pointer=f"{binding_pointer}/source_pointer",
+            )
+            continue
+        if (
+            compare_operation_output(source_schema, target_schema).relation
+            is not SchemaRelation.PROVEN
+        ):
+            _diagnostic(
+                diagnostics,
+                code="ACC_COMPILE_ACTION_STATUS_QUERY_BINDING_SCHEMA_UNPROVEN",
+                message="A status query binding source is not proven compatible with its target.",
+                path=path,
+                pointer=binding_pointer,
+            )
+            continue
+        constructed.add(binding.target)
+
+    for target in sorted(required - constructed):
+        _diagnostic(
+            diagnostics,
+            code="ACC_COMPILE_ACTION_STATUS_QUERY_REQUIRED_INPUT_UNBOUND",
+            message="Every required status query input must be constructible from sealed values.",
+            path=path,
+            pointer=f"/commit_workflow/status_query/required/{_escaped_pointer_token(target)}",
+        )
 
 
 def _call_sites(
@@ -273,6 +547,7 @@ def prove_action_capability(
     *,
     path: str | None = None,
     action_semantics: Mapping[str, ActionSemantics] | None = None,
+    policy: Policy | None = None,
 ) -> ActionProof:
     """Prove one Action Capability without reading files or mutating compiler state."""
 
@@ -409,8 +684,34 @@ def prove_action_capability(
     strategy_operation_ids: set[str] = set()
     semantics_by_operation = action_semantics or {}
     preview_operation_ids = {site.operation_id for site in preview_sites}
+    preview_schema = _preview_result_schema(capability, operations)
     for operation in mutation_operations:
         safety = operation.http.safety
+        semantics = semantics_by_operation.get(operation.id)
+        outcome = semantics.outcome_resolution if semantics is not None else None
+        status_query_valid = False
+        if isinstance(outcome, StatusQueryOutcomeResolutionV2):
+            status_operation = operations.get(outcome.operation_id)
+            if not isinstance(status_operation, ReadOperationV2):
+                _diagnostic(
+                    diagnostics,
+                    code="ACC_COMPILE_ACTION_STATUS_QUERY_INVALID",
+                    message="A status query outcome must reference a declared read Operation.",
+                    path=diagnostic_path,
+                    pointer="/commit_workflow",
+                )
+            else:
+                _prove_status_query_bindings(
+                    capability,
+                    status_operation,
+                    outcome,
+                    preview_schema,
+                    policy,
+                    diagnostics,
+                    path=diagnostic_path,
+                )
+                strategy_operation_ids.add(outcome.operation_id)
+                status_query_valid = True
         if safety.effect in {"create", "execute"} and safety.idempotency.mode != "source_key":
             _diagnostic(
                 diagnostics,
@@ -431,7 +732,6 @@ def prove_action_capability(
                 pointer="/commit_workflow",
             )
         if isinstance(safety.concurrency, ServerSerializedStatePredicateV2):
-            semantics = semantics_by_operation.get(operation.id)
             if safety.effect not in {"delete", "transition"}:
                 _diagnostic(
                     diagnostics,
@@ -497,11 +797,7 @@ def prove_action_capability(
                     path=diagnostic_path,
                     pointer="/commit_workflow",
                 )
-            outcome = semantics.outcome_resolution if semantics is not None else None
-            if not isinstance(outcome, StatusQueryOutcomeResolutionV2) or not isinstance(
-                operations.get(outcome.operation_id if outcome is not None else ""),
-                ReadOperationV2,
-            ):
+            if not status_query_valid:
                 _diagnostic(
                     diagnostics,
                     code="ACC_COMPILE_ACTION_STATUS_QUERY_REQUIRED",
@@ -509,8 +805,6 @@ def prove_action_capability(
                     path=diagnostic_path,
                     pointer="/commit_workflow",
                 )
-            else:
-                strategy_operation_ids.add(outcome.operation_id)
 
     safety_requires_approval = _derived_approval_required(mutation_operations)
     approval_required = capability.action.approval.mode == "required" or safety_requires_approval

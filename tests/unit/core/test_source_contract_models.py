@@ -192,6 +192,97 @@ def test_server_serialized_action_semantics_requires_exact_field_provenance() ->
         SourceContract.model_validate(missing)
 
 
+def test_status_query_request_bindings_are_typed_and_canonical() -> None:
+    document = _contract_document()
+    semantics = _server_serialized_semantics()
+    outcome = semantics["outcome_resolution"]
+    assert isinstance(outcome, dict)
+    outcome["request_bindings"] = [
+        {
+            "target": "job_id",
+            "source": "capability_input",
+            "source_pointer": "/item_id",
+        },
+        {
+            "target": "region",
+            "source": "prepared_preview",
+            "source_pointer": "/routing/region",
+        },
+    ]
+    document["action_semantics"] = semantics
+
+    contract = SourceContract.model_validate(document)
+
+    assert contract.action_semantics is not None
+    typed_outcome = contract.action_semantics.outcome_resolution
+    assert typed_outcome is not None
+    assert typed_outcome.mode == "status_query"
+    assert [binding.target for binding in typed_outcome.request_bindings] == [
+        "job_id",
+        "region",
+    ]
+
+
+@pytest.mark.parametrize(
+    "bindings, message",
+    [
+        (
+            [
+                {
+                    "target": "region",
+                    "source": "prepared_preview",
+                    "source_pointer": "/routing/region",
+                },
+                {
+                    "target": "job_id",
+                    "source": "capability_input",
+                    "source_pointer": "/item_id",
+                },
+            ],
+            "sorted",
+        ),
+        (
+            [
+                {
+                    "target": "job_id",
+                    "source": "capability_input",
+                    "source_pointer": "/item_id",
+                },
+                {
+                    "target": "job_id",
+                    "source": "prepared_preview",
+                    "source_pointer": "/job/id",
+                },
+            ],
+            "unique",
+        ),
+        (
+            [
+                {
+                    "target": "job_id",
+                    "source": "capability_input",
+                    "source_pointer": "/items/~2/id",
+                }
+            ],
+            "RFC 6901",
+        ),
+    ],
+)
+def test_status_query_request_bindings_reject_ambiguous_or_invalid_documents(
+    bindings: list[dict[str, str]],
+    message: str,
+) -> None:
+    document = _contract_document()
+    semantics = _server_serialized_semantics()
+    outcome = semantics["outcome_resolution"]
+    assert isinstance(outcome, dict)
+    outcome["request_bindings"] = bindings
+    document["action_semantics"] = semantics
+
+    with pytest.raises(ValidationError, match=message):
+        SourceContract.model_validate(document)
+
+
 @pytest.mark.parametrize("authority", ["contract", "implementation", "test", "observation"])
 def test_source_contract_accepts_all_provenance_authority_levels(authority: str) -> None:
     document = _contract_document()

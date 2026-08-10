@@ -24,6 +24,7 @@ from acc_core.models.actions import (
     ServerSerializedStatePredicateV2,
     StateIdempotencyV2,
     StatusQueryOutcomeResolutionV2,
+    StatusQueryRequestBindingV2,
 )
 from acc_core.models.v2 import (
     ActionCapabilityV2,
@@ -292,6 +293,10 @@ class RuntimeActionWorkflowExecutor:
             idempotency_key=execution.idempotency_key,
             concurrency_token=execution.concurrency_token,
         )
+        public_prepared_preview = PolicyEnforcer().filter_output(
+            loaded.policy,
+            execution.preview_value,
+        )
         prepared: JsonValue = {
             "prepared": {
                 "input": copy.deepcopy(execution.input_value),
@@ -321,6 +326,7 @@ class RuntimeActionWorkflowExecutor:
                 loaded,
                 semantics,
                 execution.input_value,
+                public_prepared_preview,
                 principal_context,
                 self._provider,
             )
@@ -399,10 +405,13 @@ class RuntimeActionWorkflowExecutor:
                 semantics_by_operation[operation_id] = ActionSemantics.model_validate(
                     attestation_mapping.get("summary")
                 )
+            policies = _mapping(self._ir.get("policies"))
+            policy = Policy.model_validate(policies.get(stored.policy))
             proof = prove_action_capability(
                 stored,
                 operations,
                 action_semantics=semantics_by_operation,
+                policy=policy,
             )
             if not proof.ok:
                 raise ValueError
@@ -425,8 +434,6 @@ class RuntimeActionWorkflowExecutor:
             for operation_id in proof.mutation_operation_ids:
                 if operation_id not in semantics_by_operation:
                     raise ValueError
-            policies = _mapping(self._ir.get("policies"))
-            policy = Policy.model_validate(policies.get(stored.policy))
             return _LoadedAction(
                 capability=stored,
                 operations=operations,
@@ -579,6 +586,7 @@ async def _resolve_status_query(
     loaded: _LoadedAction,
     semantics: ActionSemantics,
     input_value: JsonValue,
+    preview_value: JsonValue,
     principal_context: PrincipalContext,
     provider: ActionOperationProvider,
 ) -> JsonValue:
@@ -588,12 +596,26 @@ async def _resolve_status_query(
     operation = loaded.operations.get(outcome.operation_id)
     if not isinstance(operation, ReadOperationV2) or not isinstance(input_value, Mapping):
         raise ActionRuntimeConfigurationError("Compiled Action status query is invalid")
-    properties = _mapping(operation.input_schema.get("properties"))
-    arguments: dict[str, JsonValue] = {
-        name: copy.deepcopy(input_value[name])
-        for name in properties
-        if name in input_value and name not in operation.context_bindings
-    }
+    required = _string_sequence(operation.input_schema.get("required", []))
+    bindings = list(outcome.request_bindings)
+    if not bindings:
+        bindings = [
+            StatusQueryRequestBindingV2(
+                target=target,
+                source="capability_input",
+                source_pointer=f"/{target.replace('~', '~0').replace('/', '~1')}",
+            )
+            for target in sorted(set(required) - set(operation.context_bindings))
+        ]
+    arguments: dict[str, JsonValue] = {}
+    for binding in bindings:
+        if binding.target in operation.context_bindings:
+            raise ActionRuntimeConfigurationError("Compiled Action status query is invalid")
+        source = input_value if binding.source == "capability_input" else preview_value
+        found, resolved = _resolve_json_pointer(source, binding.source_pointer)
+        if not found:
+            raise ActionRuntimeConfigurationError("Compiled Action status query is invalid")
+        arguments[binding.target] = resolved
     caller = _ActionOperationCaller(
         provider=provider,
         operations=loaded.operations,
@@ -660,7 +682,12 @@ def _resolve_json_pointer(value: JsonValue, pointer: str) -> tuple[bool, JsonVal
         token = raw_token.replace("~1", "/").replace("~0", "~")
         if isinstance(current, dict) and token in current:
             current = current[token]
-        elif isinstance(current, list) and token.isdigit() and int(token) < len(current):
+        elif (
+            isinstance(current, list)
+            and token.isdecimal()
+            and (token == "0" or not token.startswith("0"))
+            and int(token) < len(current)
+        ):
             current = current[int(token)]
         else:
             return False, None

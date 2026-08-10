@@ -249,11 +249,41 @@ class SynchronousOutcomeResolutionV2(StrictModel):
     mode: Literal["synchronous_result"]
 
 
+class StatusQueryRequestBindingV2(StrictModel):
+    """Map one sealed Action value into a declared status-query input."""
+
+    target: NonEmptyString
+    source: Literal["capability_input", "prepared_preview"]
+    source_pointer: NonEmptyString
+
+    @field_validator("source_pointer")
+    @classmethod
+    def validate_source_pointer(cls, value: str) -> str:
+        return _validate_json_pointer(value)
+
+
 class StatusQueryOutcomeResolutionV2(StrictModel):
     """Resolve a mutation outcome through one declared read Operation."""
 
     mode: Literal["status_query"]
     operation_id: NonEmptyString
+    request_bindings: list[StatusQueryRequestBindingV2] = Field(
+        default_factory=list,
+        exclude_if=lambda value: not value,
+    )
+
+    @field_validator("request_bindings")
+    @classmethod
+    def validate_request_bindings(
+        cls,
+        value: list[StatusQueryRequestBindingV2],
+    ) -> list[StatusQueryRequestBindingV2]:
+        targets = [binding.target for binding in value]
+        if len(targets) != len(set(targets)):
+            raise ValueError("status query binding targets must be unique")
+        if targets != sorted(targets):
+            raise ValueError("status query bindings must be sorted by target")
+        return value
 
 
 class UnknownOutcomeResolutionV2(StrictModel):
@@ -423,6 +453,7 @@ __all__ = [
     "SourceKeyIdempotencyV2",
     "StateIdempotencyV2",
     "StatusQueryOutcomeResolutionV2",
+    "StatusQueryRequestBindingV2",
     "SynchronousOutcomeResolutionV2",
     "UnknownOutcomeResolutionV2",
     "UnsupportedConcurrencyV2",
