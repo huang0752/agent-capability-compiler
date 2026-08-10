@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 
 import pytest
@@ -27,6 +28,15 @@ class ContextualRuntime:
                 "output_schema": {"type": "object"},
             }
         ]
+
+    def interaction_manifest(self) -> dict[str, JsonValue]:
+        return {
+            "schema_version": "2",
+            "digest": "a" * 64,
+            "inventory": {"status": "not_declared"},
+            "contracts": {},
+            "dependencies": [],
+        }
 
     async def call_with_context(
         self,
@@ -124,6 +134,18 @@ def test_principal_mcp_tools_do_not_add_identity_scope_or_credentials() -> None:
     assert "principal" not in serialized
     assert "scope" not in serialized
     assert "credential" not in serialized
+
+
+def test_principal_mcp_resource_is_public_and_does_not_resolve_identity() -> None:
+    resolver = Resolver()
+    adapter = PrincipalCapabilityMcpServer(ContextualRuntime(), resolver=resolver)
+
+    resources = adapter.list_resources()
+    contents = adapter.read_resource("acc://interactions/v2/manifest")
+
+    assert str(resources[0].uri) == "acc://interactions/v2/manifest"
+    assert json.loads(str(contents[0].content))["schema_version"] == "2"
+    assert resolver.calls == []
 
 
 @pytest.mark.asyncio

@@ -124,6 +124,14 @@ def _ir() -> dict[str, Any]:
     }
     return {
         "ir_version": "2",
+        "interaction_sha256": "17a5028f9592577c2c75ad5f20fe008559a4b4239ff54b4bea0a3a7907d0b3f4",
+        "interactions": {
+            "schema_version": "2",
+            "digest": "17a5028f9592577c2c75ad5f20fe008559a4b4239ff54b4bea0a3a7907d0b3f4",
+            "inventory": {"status": "not_declared"},
+            "contracts": {},
+            "dependencies": [],
+        },
         "project": {
             "schema_version": "2",
             "project": {"id": "crm", "version": "2.0.0"},

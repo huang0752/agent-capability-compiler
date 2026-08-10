@@ -21,6 +21,7 @@ def test_gateway_runtime_info_is_strict_public_attestation_metadata() -> None:
         pack_sha256="a" * 64,
         project_id="project-a",
         project_version="1.2.3",
+        interaction_sha256="c" * 64,
         tool_schema_sha256="b" * 64,
         transport="streamable_http",
     )
@@ -29,6 +30,7 @@ def test_gateway_runtime_info_is_strict_public_attestation_metadata() -> None:
         "pack_sha256": "a" * 64,
         "project_id": "project-a",
         "project_version": "1.2.3",
+        "interaction_sha256": "c" * 64,
         "tool_schema_sha256": "b" * 64,
         "transport": "streamable_http",
     }
@@ -47,6 +49,7 @@ def test_gateway_runtime_info_is_strict_public_attestation_metadata() -> None:
     [
         ("pack_sha256", "A" * 64),
         ("tool_schema_sha256", "b" * 63),
+        ("interaction_sha256", "c" * 63),
         ("project_id", " project-a"),
         ("project_version", ""),
         ("transport", "stdio"),
@@ -57,6 +60,7 @@ def test_gateway_runtime_info_rejects_noncanonical_values(field: str, value: str
         "pack_sha256": "a" * 64,
         "project_id": "project-a",
         "project_version": "1.2.3",
+        "interaction_sha256": "c" * 64,
         "tool_schema_sha256": "b" * 64,
         "transport": "streamable_http",
     }

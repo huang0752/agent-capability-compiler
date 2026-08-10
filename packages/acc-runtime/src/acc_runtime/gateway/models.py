@@ -164,6 +164,7 @@ class GatewayRuntimeInfo(_StrictModel):
     pack_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     project_id: str
     project_version: str
+    interaction_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     tool_schema_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     transport: Literal["streamable_http"]
 

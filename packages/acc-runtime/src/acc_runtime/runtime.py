@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
 import inspect
+import json
 import os
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
@@ -215,6 +217,8 @@ class GenericRuntime:
                 details={"reason": "ir_version_invalid"},
             )
         self.project = self._load_project()
+        self._interaction_manifest, self._public_defaults = _load_interactions(self.ir)
+        self.interaction_sha256 = cast(str, self._interaction_manifest["digest"])
         if principal_context is None:
             principal_context = _stdio_principal_context(
                 self.project,
@@ -234,6 +238,11 @@ class GenericRuntime:
         """Return the immutable Principal fixed at construction without permitting replacement."""
 
         return self._principal_context
+
+    def interaction_manifest(self) -> dict[str, JsonValue]:
+        """Return a defensive copy of the verified public interaction manifest."""
+
+        return copy.deepcopy(self._interaction_manifest)
 
     @classmethod
     def from_pack(
@@ -466,6 +475,10 @@ class GenericRuntime:
                 details={"reason": "principal_target_mismatch"},
             )
         capability = self._capability(capability_id)
+        effective_arguments = _apply_public_defaults(
+            arguments,
+            self._public_defaults.get(capability_id, ()),
+        )
         policy = self._policy(capability.policy)
         scope_only_policy = policy.model_copy(update={"tenant_mode": "none", "tenant_field": None})
         PolicyEnforcer().authorize(
@@ -492,7 +505,7 @@ class GenericRuntime:
         ).execute(
             self.ir,
             capability_id,
-            cast(JsonValue, copy.deepcopy(dict(arguments))),
+            cast(JsonValue, effective_arguments),
         )
         filtered = PolicyEnforcer().filter_output(policy, result)
         if next(Draft202012Validator(capability.output_schema).iter_errors(filtered), None):
@@ -607,6 +620,335 @@ def _load_project_document(value: object) -> ProjectV2:
         return ProjectV2.model_validate(value)
     except ValidationError:
         raise RuntimeConfigurationError("compiled project contract is invalid") from None
+
+
+_INTERACTION_CONTRACT_FIELDS = frozenset(
+    {
+        "action_lifecycle",
+        "capability_id",
+        "conditions",
+        "defaults",
+        "inherited_interactions",
+        "interaction_ids",
+        "omitted_interaction_ids",
+        "option_sources",
+        "overridden_interaction_ids",
+        "public_input_bindings",
+        "related_data",
+        "required_scenarios",
+        "result_consumption",
+        "sidecar_sha256",
+    }
+)
+_DECLARED_INVENTORY_FIELDS = frozenset(
+    {
+        "evidence_sha256",
+        "interaction_ids",
+        "scope_mode",
+        "sidecar_sha256",
+        "status",
+        "summary",
+        "surface_ids",
+    }
+)
+_INVENTORY_SUMMARY_FIELDS = frozenset({"interactions", "surfaces", "unresolved"})
+_NON_ASSERTING_REF_SIBLINGS = frozenset(
+    {
+        "$anchor",
+        "$comment",
+        "$defs",
+        "$id",
+        "$schema",
+        "default",
+        "deprecated",
+        "description",
+        "examples",
+        "readOnly",
+        "title",
+        "writeOnly",
+    }
+)
+
+
+def _canonical_interaction_digest(payload: Mapping[str, object]) -> str:
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _load_interactions(
+    ir: Mapping[str, Any],
+) -> tuple[
+    dict[str, JsonValue],
+    dict[str, tuple[tuple[tuple[str, ...], JsonValue], ...]],
+]:
+    """Verify the compiler-owned interaction envelope and safe default subset."""
+
+    try:
+        raw = ir.get("interactions")
+        root_digest = ir.get("interaction_sha256")
+        if not isinstance(raw, Mapping) or set(raw) != {
+            "schema_version",
+            "digest",
+            "inventory",
+            "contracts",
+            "dependencies",
+        }:
+            raise ValueError
+        if raw.get("schema_version") != "2":
+            raise ValueError
+        digest = raw.get("digest")
+        if (
+            not isinstance(digest, str)
+            or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)
+            or root_digest != digest
+        ):
+            raise ValueError
+        payload = {key: value for key, value in raw.items() if key != "digest"}
+        if _canonical_interaction_digest(payload) != digest:
+            raise ValueError
+        _validate_interaction_inventory(raw.get("inventory"))
+        dependencies = raw.get("dependencies")
+        if not isinstance(dependencies, list) or any(
+            not isinstance(edge, list)
+            or len(edge) != 2
+            or any(not isinstance(item, str) or not item for item in edge)
+            for edge in dependencies
+        ):
+            raise ValueError
+        capabilities = ir.get("capabilities")
+        if not isinstance(capabilities, Mapping) or any(
+            not isinstance(capability_id, str) or not capability_id
+            for capability_id in capabilities
+        ):
+            raise ValueError
+        known_capability_ids = frozenset(capabilities)
+        dependency_edges = [tuple(edge) for edge in dependencies]
+        if (
+            dependency_edges != sorted(dependency_edges)
+            or len(dependency_edges) != len(set(dependency_edges))
+            or any(
+                source not in known_capability_ids or target not in known_capability_ids
+                for source, target in dependency_edges
+            )
+        ):
+            raise ValueError
+        contracts = raw.get("contracts")
+        if not isinstance(contracts, Mapping):
+            raise ValueError
+        public_defaults: dict[str, tuple[tuple[tuple[str, ...], JsonValue], ...]] = {}
+        for capability_id, contract in contracts.items():
+            if (
+                not isinstance(capability_id, str)
+                or not capability_id
+                or not isinstance(contract, Mapping)
+                or set(contract) != _INTERACTION_CONTRACT_FIELDS
+                or contract.get("capability_id") != capability_id
+                or capability_id not in known_capability_ids
+            ):
+                raise ValueError
+            defaults = contract.get("defaults", [])
+            if not isinstance(defaults, list):
+                raise ValueError
+            parsed: list[tuple[tuple[str, ...], JsonValue]] = []
+            seen_targets: set[tuple[str, ...]] = set()
+            for default in defaults:
+                if not isinstance(default, Mapping) or set(default) != {
+                    "id",
+                    "source_kind",
+                    "target_pointer",
+                    "value",
+                }:
+                    raise ValueError
+                if (
+                    not isinstance(default.get("id"), str)
+                    or not default.get("id")
+                    or default.get("source_kind") != "literal"
+                    or not isinstance(default.get("target_pointer"), str)
+                ):
+                    raise ValueError
+                tokens = _json_pointer_tokens(cast(str, default["target_pointer"]))
+                if not tokens or tokens in seen_targets:
+                    raise ValueError
+                _validate_public_default_target(ir, capability_id, tokens)
+                value = cast(JsonValue, copy.deepcopy(default.get("value")))
+                _canonical_interaction_digest({"value": value})
+                parsed.append((tokens, value))
+                seen_targets.add(tokens)
+            public_defaults[capability_id] = tuple(parsed)
+        normalized = json.loads(
+            json.dumps(
+                dict(raw),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+        )
+        if not isinstance(normalized, dict):
+            raise ValueError
+        return cast(dict[str, JsonValue], normalized), public_defaults
+    except (TypeError, ValueError, OverflowError):
+        raise RuntimeConfigurationError(
+            "compiled interaction manifest is invalid",
+            details={"reason": "interaction_manifest_invalid"},
+        ) from None
+
+
+def _is_sha256(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _validate_sorted_unique_ids(value: object) -> list[str]:
+    if (
+        not isinstance(value, list)
+        or any(not isinstance(item, str) or not item for item in value)
+        or value != sorted(value)
+        or len(value) != len(set(value))
+    ):
+        raise ValueError
+    return value
+
+
+def _validate_interaction_inventory(value: object) -> None:
+    if not isinstance(value, Mapping):
+        raise ValueError
+    status = value.get("status")
+    if status == "not_declared":
+        if set(value) != {"status"}:
+            raise ValueError
+        return
+    if status != "declared" or set(value) != _DECLARED_INVENTORY_FIELDS:
+        raise ValueError
+    if (
+        not _is_sha256(value.get("evidence_sha256"))
+        or not _is_sha256(value.get("sidecar_sha256"))
+        or value.get("scope_mode") not in {"none", "discovered", "complete"}
+    ):
+        raise ValueError
+    interaction_ids = _validate_sorted_unique_ids(value.get("interaction_ids"))
+    surface_ids = _validate_sorted_unique_ids(value.get("surface_ids"))
+    summary = value.get("summary")
+    if (
+        not isinstance(summary, Mapping)
+        or set(summary) != _INVENTORY_SUMMARY_FIELDS
+        or any(
+            isinstance(summary.get(field), bool)
+            or not isinstance(summary.get(field), int)
+            or cast(int, summary[field]) < 0
+            for field in _INVENTORY_SUMMARY_FIELDS
+        )
+        or summary.get("interactions") != len(interaction_ids)
+        or summary.get("surfaces") != len(surface_ids)
+        or (
+            value.get("scope_mode") == "none"
+            and (interaction_ids or surface_ids or summary.get("unresolved") != 0)
+        )
+    ):
+        raise ValueError
+
+
+def _json_pointer_tokens(pointer: str) -> tuple[str, ...]:
+    if not pointer.startswith("/"):
+        raise ValueError
+    tokens: list[str] = []
+    for raw_token in pointer[1:].split("/"):
+        index = 0
+        while index < len(raw_token):
+            if raw_token[index] == "~" and (
+                index + 1 >= len(raw_token) or raw_token[index + 1] not in {"0", "1"}
+            ):
+                raise ValueError
+            index += 2 if raw_token[index] == "~" else 1
+        tokens.append(raw_token.replace("~1", "/").replace("~0", "~"))
+    if any(not token for token in tokens):
+        raise ValueError
+    return tuple(tokens)
+
+
+def _validate_public_default_target(
+    ir: Mapping[str, Any], capability_id: str, tokens: tuple[str, ...]
+) -> None:
+    capabilities = ir.get("capabilities")
+    compiled = capabilities.get(capability_id) if isinstance(capabilities, Mapping) else None
+    definition = compiled.get("definition") if isinstance(compiled, Mapping) else None
+    input_schema = definition.get("input_schema") if isinstance(definition, Mapping) else None
+    if not isinstance(input_schema, Mapping):
+        raise ValueError
+    root = input_schema
+    current: Mapping[str, object] = root
+    for token in tokens:
+        current = _resolve_local_schema_reference(root, current)
+        if current.get("type") == "array" or "items" in current:
+            raise ValueError
+        properties = current.get("properties")
+        child = properties.get(token) if isinstance(properties, Mapping) else None
+        if not isinstance(child, Mapping):
+            raise ValueError
+        current = cast(Mapping[str, object], child)
+    _resolve_local_schema_reference(root, current)
+
+
+def _resolve_local_schema_reference(
+    root: Mapping[str, object], schema: Mapping[str, object]
+) -> Mapping[str, object]:
+    current = schema
+    visited: set[str] = set()
+    for _ in range(64):
+        reference = current.get("$ref")
+        if reference is None:
+            return current
+        if (
+            not isinstance(reference, str)
+            or not reference.startswith("#/")
+            or reference in visited
+            or set(current) - {"$ref"} - _NON_ASSERTING_REF_SIBLINGS
+        ):
+            raise ValueError
+        visited.add(reference)
+        target: object = root
+        for token in _json_pointer_tokens(reference[1:]):
+            if not isinstance(target, Mapping) or token not in target:
+                raise ValueError
+            target = target[token]
+        if not isinstance(target, Mapping):
+            raise ValueError
+        current = cast(Mapping[str, object], target)
+    raise ValueError
+
+
+def _apply_public_defaults(
+    arguments: Mapping[str, JsonValue],
+    defaults: tuple[tuple[tuple[str, ...], JsonValue], ...],
+) -> dict[str, JsonValue]:
+    enriched = copy.deepcopy(dict(arguments))
+    for tokens, value in defaults:
+        current: dict[str, JsonValue] = enriched
+        for token in tokens[:-1]:
+            existing = current.get(token)
+            if token not in current:
+                child: dict[str, JsonValue] = {}
+                current[token] = child
+                current = child
+            elif isinstance(existing, dict):
+                current = existing
+            else:
+                current = {}
+                break
+        else:
+            if tokens[-1] not in current:
+                current[tokens[-1]] = copy.deepcopy(value)
+    return enriched
 
 
 def _load_operation(value: Mapping[str, object]) -> ReadOperationV2:

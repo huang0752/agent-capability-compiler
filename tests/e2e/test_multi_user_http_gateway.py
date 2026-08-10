@@ -529,6 +529,7 @@ async def test_baogao_jin_auth_shape_offline_candidate_isolates_a_b_c(
                 "pack_sha256",
                 "project_id",
                 "project_version",
+                "interaction_sha256",
                 "tool_schema_sha256",
                 "transport",
             }

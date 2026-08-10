@@ -12,6 +12,15 @@ from acc_runtime.mcp import CapabilityMcpServer
 
 
 class FakeRuntime:
+    def interaction_manifest(self) -> dict[str, JsonValue]:
+        return {
+            "schema_version": "2",
+            "digest": "a" * 64,
+            "inventory": {"status": "not_declared"},
+            "contracts": {},
+            "dependencies": [],
+        }
+
     def tools(self) -> list[dict[str, object]]:
         return [
             {
@@ -53,6 +62,23 @@ def test_mcp_lists_capabilities_as_tools_with_wrapped_output_schema() -> None:
         "required": ["result"],
         "properties": {"result": {"type": "object"}},
     }
+
+
+def test_mcp_exposes_interaction_manifest_as_one_read_only_resource() -> None:
+    adapter = CapabilityMcpServer(FakeRuntime())
+
+    resources = adapter.list_resources()
+    contents = adapter.read_resource("acc://interactions/v2/manifest")
+
+    assert len(resources) == 1
+    assert str(resources[0].uri) == "acc://interactions/v2/manifest"
+    assert resources[0].mimeType == "application/json"
+    assert len(contents) == 1
+    assert contents[0].mime_type == "application/json"
+    assert json.loads(str(contents[0].content)) == FakeRuntime().interaction_manifest()
+
+    with pytest.raises(ValueError, match="interaction resource is not available"):
+        adapter.read_resource("acc://interactions/v2/unknown")
 
 
 @pytest.mark.asyncio

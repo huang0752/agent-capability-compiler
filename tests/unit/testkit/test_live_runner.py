@@ -30,6 +30,7 @@ def _profile() -> LiveGatewayProfile:
             pack_sha256="a" * 64,
             project_id="project-a",
             project_version="1.0.0",
+            interaction_sha256="c" * 64,
             tool_schema_sha256="b" * 64,
         ),
         accounts=(
@@ -114,6 +115,7 @@ class _SessionClient:
             pack_sha256="a" * 64,
             project_id="project-a",
             project_version="1.0.0",
+            interaction_sha256="c" * 64,
             tool_schema_sha256="b" * 64,
             transport="streamable_http",
         )
@@ -294,6 +296,7 @@ async def test_attestation_mismatch_is_a_failed_required_step() -> None:
                 pack_sha256="c" * 64,
                 project_id="project-a",
                 project_version="1.0.0",
+                interaction_sha256="d" * 64,
                 tool_schema_sha256="b" * 64,
             )
         }

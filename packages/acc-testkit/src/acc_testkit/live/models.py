@@ -44,6 +44,7 @@ class LiveGatewayAttestation(_StrictModel):
     pack_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     project_id: str = Field(min_length=1)
     project_version: str = Field(min_length=1)
+    interaction_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     tool_schema_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 

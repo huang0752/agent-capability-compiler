@@ -385,6 +385,7 @@ def _attestation_matches(actual: GatewayRuntimeInfo, expected: LiveGatewayAttest
         actual.pack_sha256 == expected.pack_sha256
         and actual.project_id == expected.project_id
         and actual.project_version == expected.project_version
+        and actual.interaction_sha256 == expected.interaction_sha256
         and actual.tool_schema_sha256 == expected.tool_schema_sha256
         and actual.transport == "streamable_http"
     )

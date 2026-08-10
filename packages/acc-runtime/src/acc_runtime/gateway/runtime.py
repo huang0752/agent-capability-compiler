@@ -40,6 +40,8 @@ if TYPE_CHECKING:
 class _ContextualRuntime(Protocol):
     def tools(self) -> list[dict[str, object]]: ...
 
+    def interaction_manifest(self) -> dict[str, JsonValue]: ...
+
     async def call_with_context(
         self,
         capability_id: str,
@@ -63,6 +65,9 @@ class _ReauthCoordinatingRuntime:
 
     def tools(self) -> list[dict[str, object]]:
         return self._runtime.tools()
+
+    def interaction_manifest(self) -> dict[str, JsonValue]:
+        return self._runtime.interaction_manifest()
 
     async def call_with_context(
         self,
@@ -143,7 +148,7 @@ class GatewayRuntimeComposition:
         return self._runtime.tools()
 
     def runtime_info(self) -> GatewayRuntimeInfo:
-        """Return immutable, non-secret Pack and tool-schema attestation metadata."""
+        """Return immutable Pack, tool-schema, and interaction attestation metadata."""
 
         return self._runtime_info
 
@@ -252,6 +257,7 @@ def create_gateway_runtime(
         pack_sha256=loaded.verification.sha256,
         project_id=loaded.manifest.project_id,
         project_version=loaded.manifest.project_version,
+        interaction_sha256=runtime.interaction_sha256,
         tool_schema_sha256=_tool_schema_sha256(runtime.tools()),
         transport="streamable_http",
     )

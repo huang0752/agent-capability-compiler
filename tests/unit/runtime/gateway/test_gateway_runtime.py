@@ -42,6 +42,15 @@ class _Runtime:
     def tools(self) -> list[dict[str, object]]:
         return [{"name": "customer.get"}]
 
+    def interaction_manifest(self) -> dict[str, JsonValue]:
+        return {
+            "schema_version": "2",
+            "digest": "c" * 64,
+            "inventory": {"status": "not_declared"},
+            "contracts": {},
+            "dependencies": [],
+        }
+
     async def call_with_context(
         self,
         capability_id: str,
@@ -97,6 +106,7 @@ def test_gateway_composition_exposes_only_immutable_runtime_info() -> None:
         pack_sha256="a" * 64,
         project_id="project-a",
         project_version="1.2.3",
+        interaction_sha256="c" * 64,
         tool_schema_sha256="b" * 64,
         transport="streamable_http",
     )
@@ -145,11 +155,22 @@ def test_create_gateway_runtime_dispatches_a_v2_project_document(
     )
 
     class FakeGenericRuntime:
+        interaction_sha256 = "c" * 64
+
         def __init__(self, *args: object, **kwargs: object) -> None:
             del args, kwargs
 
         def tools(self) -> list[dict[str, object]]:
             return []
+
+        def interaction_manifest(self) -> dict[str, JsonValue]:
+            return {
+                "schema_version": "2",
+                "digest": self.interaction_sha256,
+                "inventory": {"status": "not_declared"},
+                "contracts": {},
+                "dependencies": [],
+            }
 
     monkeypatch.setattr(gateway_runtime_module, "load_pack", lambda path: loaded)
     monkeypatch.setattr(runtime_module, "GenericRuntime", FakeGenericRuntime)
@@ -163,6 +184,7 @@ def test_create_gateway_runtime_dispatches_a_v2_project_document(
 
     assert composition.runtime_info().project_id == "gateway-v2"
     assert composition.runtime_info().transport == "streamable_http"
+    assert composition.runtime_info().interaction_sha256 == "c" * 64
 
 
 @pytest.mark.asyncio

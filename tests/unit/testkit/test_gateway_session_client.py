@@ -34,6 +34,7 @@ async def test_gateway_session_client_logs_in_attests_builds_mcp_and_verifies_lo
                     "pack_sha256": "a" * 64,
                     "project_id": "project-a",
                     "project_version": "1.0.0",
+                    "interaction_sha256": "c" * 64,
                     "tool_schema_sha256": "b" * 64,
                     "transport": "streamable_http",
                 },

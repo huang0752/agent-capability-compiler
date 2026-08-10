@@ -13,8 +13,9 @@ from mcp import types
 from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.provider import AccessToken
 from mcp.server.lowlevel import NotificationOptions, Server
+from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.server.stdio import stdio_server
-from pydantic import JsonValue
+from pydantic import AnyUrl, JsonValue
 
 from acc_runtime.context import (
     PrincipalContext,
@@ -30,6 +31,8 @@ class McpRuntime(Protocol):
 
     def tools(self) -> list[dict[str, object]]: ...
 
+    def interaction_manifest(self) -> dict[str, JsonValue]: ...
+
     async def call(
         self,
         capability_id: str,
@@ -41,6 +44,8 @@ class ContextualMcpRuntime(Protocol):
     """Runtime surface for transports that resolve a Principal per request."""
 
     def tools(self) -> list[dict[str, object]]: ...
+
+    def interaction_manifest(self) -> dict[str, JsonValue]: ...
 
     async def call_with_context(
         self,
@@ -91,6 +96,7 @@ _GATEWAY_RESERVED_ARGUMENTS = frozenset(
 _GATEWAY_RESERVED_COMPACT_ARGUMENTS = {
     name.replace("_", ""): name for name in _GATEWAY_RESERVED_ARGUMENTS
 }
+_INTERACTION_MANIFEST_URI = "acc://interactions/v2/manifest"
 
 
 class CapabilityMcpServer:
@@ -103,6 +109,16 @@ class CapabilityMcpServer:
         """Translate stable runtime tool metadata to MCP tool definitions."""
 
         return _translate_tools(self.runtime.tools())
+
+    def list_resources(self) -> list[types.Resource]:
+        """Expose the compiler-attested interaction manifest as one read-only resource."""
+
+        return _interaction_resources()
+
+    def read_resource(self, uri: str | AnyUrl) -> list[ReadResourceContents]:
+        """Read only the fixed public interaction manifest URI."""
+
+        return _read_interaction_resource(uri, self.runtime.interaction_manifest())
 
     async def call_tool(
         self,
@@ -163,6 +179,14 @@ class CapabilityMcpServer:
         ) -> types.CallToolResult:
             return await self.call_tool(name, arguments)
 
+        @server.list_resources()  # type: ignore[no-untyped-call,untyped-decorator]
+        async def list_resources() -> list[types.Resource]:
+            return self.list_resources()
+
+        @server.read_resource()  # type: ignore[no-untyped-call,untyped-decorator]
+        async def read_resource(uri: AnyUrl) -> list[ReadResourceContents]:
+            return self.read_resource(uri)
+
         return server
 
     async def run_stdio(self) -> None:
@@ -190,6 +214,16 @@ class PrincipalCapabilityMcpServer:
         """Reuse the stable public tool projection without adding identity inputs."""
 
         return _translate_tools(self.runtime.tools(), reject_reserved_arguments=True)
+
+    def list_resources(self) -> list[types.Resource]:
+        """Expose the same deployment manifest without resolving a Principal."""
+
+        return _interaction_resources()
+
+    def read_resource(self, uri: str | AnyUrl) -> list[ReadResourceContents]:
+        """Read the public deployment manifest without touching session identity."""
+
+        return _read_interaction_resource(uri, self.runtime.interaction_manifest())
 
     async def call_tool(
         self,
@@ -269,7 +303,43 @@ class PrincipalCapabilityMcpServer:
         ) -> types.CallToolResult:
             return await self.call_tool(name, arguments, access_token=get_access_token())
 
+        @server.list_resources()  # type: ignore[no-untyped-call,untyped-decorator]
+        async def list_resources() -> list[types.Resource]:
+            return self.list_resources()
+
+        @server.read_resource()  # type: ignore[no-untyped-call,untyped-decorator]
+        async def read_resource(uri: AnyUrl) -> list[ReadResourceContents]:
+            return self.read_resource(uri)
+
         return server
+
+
+def _interaction_resources() -> list[types.Resource]:
+    return [
+        types.Resource(
+            name="acc-interaction-manifest-v2",
+            title="ACC Interaction Manifest",
+            uri=AnyUrl(_INTERACTION_MANIFEST_URI),
+            description="Compiler-attested public interaction semantics.",
+            mimeType="application/json",
+        )
+    ]
+
+
+def _read_interaction_resource(
+    uri: str | AnyUrl,
+    manifest: Mapping[str, JsonValue],
+) -> list[ReadResourceContents]:
+    if str(uri) != _INTERACTION_MANIFEST_URI:
+        raise ValueError("interaction resource is not available")
+    text = json.dumps(
+        manifest,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    return [ReadResourceContents(content=text, mime_type="application/json")]
 
 
 def _translate_tools(

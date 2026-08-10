@@ -33,6 +33,7 @@ _RUNTIME_INFO = GatewayRuntimeInfo(
     pack_sha256="a" * 64,
     project_id="project-a",
     project_version="1.2.3",
+    interaction_sha256="c" * 64,
     tool_schema_sha256="b" * 64,
     transport="streamable_http",
 )
@@ -90,6 +91,15 @@ class CancelledSessionService(FakeSessionService):
 
 
 class ContextRuntime:
+    def interaction_manifest(self) -> dict[str, JsonValue]:
+        return {
+            "schema_version": "2",
+            "digest": "c" * 64,
+            "inventory": {"status": "not_declared"},
+            "contracts": {},
+            "dependencies": [],
+        }
+
     def tools(self) -> list[dict[str, object]]:
         return [
             {
