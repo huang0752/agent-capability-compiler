@@ -126,6 +126,28 @@ def _principal() -> PrincipalContext:
     )
 
 
+def _server_serialized_operation() -> ActionOperationV2:
+    document = _action_operation().model_dump(mode="json")
+    document["http"]["safety"] = {
+        "effect": "transition",
+        "risk": "medium",
+        "reversibility": "reversible",
+        "retry": {"mode": "never"},
+        "idempotency": {
+            "mode": "state_idempotent",
+            "state_pointer": "/status",
+            "terminal_values": ["approved"],
+        },
+        "concurrency": {
+            "mode": "server_serialized_state_predicate",
+            "read_operation_id": "orders.get",
+            "state_pointer": "/status",
+            "allowed_values": ["pending"],
+        },
+    }
+    return ActionOperationV2.model_validate(document)
+
+
 def _provider(client: httpx.AsyncClient) -> HttpProvider:
     provider = HttpProvider(
         base_url_ref="ORDERS_URL",
@@ -209,6 +231,30 @@ async def test_action_runtime_controls_can_be_injected_into_nested_body() -> Non
     }
     assert "idempotency-key" not in captured.headers
     assert "if-match" not in captured.headers
+
+
+@pytest.mark.asyncio
+async def test_server_serialized_action_injects_no_fake_token_or_idempotency_key() -> None:
+    captured: httpx.Request | None = None
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal captured
+        captured = request
+        return httpx.Response(200, json={"order_id": "one", "status": "approved"})
+
+    async with _client(handler) as client:
+        await _provider(client).call_action(
+            _server_serialized_operation(),
+            {"order_id": "one", "status": "approved"},
+            _principal(),
+            idempotency_key=SecretValue("runtime-key"),
+            concurrency_token=None,
+        )
+
+    assert captured is not None
+    assert "idempotency-key" not in captured.headers
+    assert "if-match" not in captured.headers
+    assert b"runtime-key" not in captured.content
 
 
 @pytest.mark.asyncio
@@ -306,6 +352,40 @@ async def test_action_uses_exact_success_status_and_never_replays_401() -> None:
             )
     assert captured.value.code == "ACC_RUNTIME_AUTH_UNAUTHORIZED"
     assert calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "code"),
+    [
+        (403, "ACC_RUNTIME_HTTP_FORBIDDEN"),
+        (404, "ACC_RUNTIME_HTTP_NOT_FOUND"),
+    ],
+)
+async def test_action_source_permission_and_visibility_errors_are_stable(
+    status: int,
+    code: str,
+) -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(status, text="private-source-response")
+
+    async with _client(handler) as client:
+        with pytest.raises(ACCRuntimeError) as captured:
+            await _provider(client).call_action(
+                _server_serialized_operation(),
+                {"order_id": "one", "status": "approved"},
+                _principal(),
+                idempotency_key=SecretValue("runtime-key"),
+                concurrency_token=None,
+            )
+
+    assert captured.value.code == code
+    assert calls == 1
+    assert "private-source-response" not in repr(captured.value.to_dict())
 
 
 @pytest.mark.asyncio

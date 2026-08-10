@@ -77,6 +77,9 @@ class ActionPreviewExecution:
 
     value: JsonValue = field(repr=False)
     concurrency_token: JsonValue = field(default=None, repr=False)
+    concurrency_token_required: bool | None = field(default=None, repr=False)
+    idempotent_terminal: bool = field(default=False, repr=False)
+    idempotent_result: JsonValue = field(default=None, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +90,8 @@ class ActionCommitExecution:
     preview_value: JsonValue = field(repr=False)
     concurrency_token: JsonValue = field(repr=False)
     idempotency_key: SecretValue = field(repr=False)
+    idempotent_terminal: bool = field(default=False, repr=False)
+    idempotent_result: JsonValue = field(default=None, repr=False)
 
 
 @runtime_checkable
@@ -314,10 +319,20 @@ class ActionCoordinator:
             preview.concurrency_token,
             error_type=ActionPreviewInvalidError,
         )
-        if (
-            set(definition.proof.effects) & {"update", "delete", "transition"}
-            and safe_token is None
-        ):
+        if not isinstance(preview.idempotent_terminal, bool):
+            raise ActionPreviewInvalidError("Action preview result is invalid")
+        safe_idempotent_result = _canonical_copy(
+            preview.idempotent_result,
+            error_type=ActionPreviewInvalidError,
+        )
+        if not preview.idempotent_terminal and safe_idempotent_result is not None:
+            raise ActionPreviewInvalidError("Action preview result is invalid")
+        token_required = preview.concurrency_token_required
+        if token_required is None:
+            token_required = bool(
+                set(definition.proof.effects) & {"update", "delete", "transition"}
+            )
+        if token_required and safe_token is None:
             raise ActionPreviewInvalidError(
                 "Action preview did not capture a required concurrency token"
             )
@@ -327,6 +342,8 @@ class ActionCoordinator:
             "preview": safe_preview,
             "concurrency_token": safe_token,
             "idempotency_key": idempotency_key.get_secret_value(),
+            "idempotent_terminal": preview.idempotent_terminal,
+            "idempotent_result": safe_idempotent_result,
         }
         creation = await self._store.create(
             capability_id=definition.capability.id,
@@ -479,7 +496,13 @@ class ActionCoordinator:
             expected=PreparedActionStatus.APPROVED,
             target=PreparedActionStatus.COMMITTING,
         )
-        preview_value, token, idempotency_key = _unseal_preview(committing.preview_value)
+        (
+            preview_value,
+            token,
+            idempotency_key,
+            idempotent_terminal,
+            idempotent_result,
+        ) = _unseal_preview(committing.preview_value)
         execution = ActionCommitExecution(
             input_value=_canonical_copy(
                 committing.input_value, error_type=ActionStateConflictError
@@ -487,6 +510,8 @@ class ActionCoordinator:
             preview_value=preview_value,
             concurrency_token=token,
             idempotency_key=SecretValue(idempotency_key),
+            idempotent_terminal=idempotent_terminal,
+            idempotent_result=idempotent_result,
         )
         try:
             raw_result = await self._executor.commit(
@@ -681,16 +706,26 @@ def _canonical_copy(
         raise error_type("Action value is not canonical JSON") from None
 
 
-def _unseal_preview(value: JsonValue) -> tuple[JsonValue, JsonValue, str]:
+def _unseal_preview(
+    value: JsonValue,
+) -> tuple[JsonValue, JsonValue, str, bool, JsonValue]:
     if not isinstance(value, dict) or value.get("version") != _SEALED_VERSION:
         raise ActionStateConflictError("Prepared Action state is invalid")
     idempotency_key = value.get("idempotency_key")
     if not isinstance(idempotency_key, str) or not idempotency_key:
         raise ActionStateConflictError("Prepared Action state is invalid")
+    idempotent_terminal = value.get("idempotent_terminal", False)
+    if not isinstance(idempotent_terminal, bool):
+        raise ActionStateConflictError("Prepared Action state is invalid")
+    idempotent_result = copy.deepcopy(value.get("idempotent_result"))
+    if not idempotent_terminal and idempotent_result is not None:
+        raise ActionStateConflictError("Prepared Action state is invalid")
     return (
         copy.deepcopy(value.get("preview")),
         copy.deepcopy(value.get("concurrency_token")),
         idempotency_key,
+        idempotent_terminal,
+        idempotent_result,
     )
 
 

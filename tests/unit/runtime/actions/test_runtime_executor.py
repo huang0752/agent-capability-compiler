@@ -21,6 +21,8 @@ from acc_core.models.v2 import (
 from acc_runtime.actions.approval import InMemoryApprovalAuthority
 from acc_runtime.actions.audit import ActionAuditEvent, ActionAuditSink
 from acc_runtime.actions.coordinator import ActionCommitExecution
+from acc_runtime.actions.errors import ActionStateConflictError
+from acc_runtime.actions.models import PreparedActionStatus
 from acc_runtime.actions.runtime import (
     ActionRuntimeDependencies,
     create_runtime_action_coordinator,
@@ -317,6 +319,89 @@ def _ir() -> dict[str, Any]:
     }
 
 
+def _server_serialized_ir() -> dict[str, Any]:
+    ir = _ir()
+    mutation_document = ir["operations"]["orders.update"]
+    mutation_document["http"]["safety"] = {
+        "effect": "transition",
+        "risk": "medium",
+        "reversibility": "reversible",
+        "retry": {"mode": "never"},
+        "idempotency": {
+            "mode": "state_idempotent",
+            "state_pointer": "/status",
+            "terminal_values": ["approved"],
+        },
+        "concurrency": {
+            "mode": "server_serialized_state_predicate",
+            "read_operation_id": "orders.get",
+            "state_pointer": "/status",
+            "allowed_values": ["pending"],
+        },
+    }
+    capability = ActionCapabilityV2.model_validate(
+        ir["capabilities"]["orders.change"]["definition"]
+    )
+    operations: dict[str, OperationV2] = {
+        "orders.get": ReadOperationV2.model_validate(ir["operations"]["orders.get"]),
+        "orders.update": ActionOperationV2.model_validate(mutation_document),
+    }
+    mutation = operations["orders.update"]
+    assert isinstance(mutation, ActionOperationV2)
+    evidence = mutation.evidence[0].model_dump(mode="json")
+    fields = [
+        "conflict_control",
+        "effect",
+        "idempotency",
+        "outcome_resolution",
+        "reversibility",
+        "retry",
+        "risk",
+    ]
+    semantics = ActionSemantics.model_validate(
+        {
+            "method": mutation.http.method,
+            **mutation.http.safety.model_dump(mode="json"),
+            "outcome_resolution": {
+                "mode": "status_query",
+                "operation_id": "orders.get",
+            },
+            "evidence": evidence,
+            "authority": "implementation",
+            "provenance": [
+                {
+                    "field": field,
+                    "evidence": evidence,
+                    "evidence_pointer": f"/action/{field}",
+                    "authority": "implementation",
+                }
+                for field in fields
+            ],
+        }
+    )
+    proof = prove_action_capability(
+        capability,
+        operations,
+        action_semantics={"orders.update": semantics},
+    )
+    assert proof.ok
+    ir["capabilities"]["orders.change"]["action_proof"] = {
+        "approval_required": proof.approval_required,
+        "effects": list(proof.effects),
+        "maximum_risk": proof.maximum_risk,
+        "mutation_operation_ids": list(proof.mutation_operation_ids),
+        "operation_semantics": {
+            "orders.update": compile_action_semantics_attestation(mutation, semantics)
+        },
+        "required_scopes": list(proof.required_scopes),
+    }
+    ir["capabilities"]["orders.change"]["operation_dependencies"] = [
+        "orders.get",
+        "orders.update",
+    ]
+    return ir
+
+
 def _principal(*, scopes: set[str] | None = None) -> PrincipalContext:
     granted = {"orders.read", "orders.write"} if scopes is None else scopes
     return PrincipalContext(
@@ -333,6 +418,9 @@ def _principal(*, scopes: set[str] | None = None) -> PrincipalContext:
 
 @dataclass
 class _Provider(ActionOperationProvider):
+    read_statuses: list[str] = field(default_factory=lambda: ["pending"])
+    action_error: BaseException | None = None
+    read_error_on_call: int | None = None
     read_calls: list[tuple[ReadOperationV2, dict[str, JsonValue], PrincipalContext]] = field(
         default_factory=list
     )
@@ -353,10 +441,13 @@ class _Provider(ActionOperationProvider):
         principal_context: PrincipalContext,
     ) -> ActionReadResult:
         self.read_calls.append((operation, dict(arguments), principal_context))
+        if self.read_error_on_call == len(self.read_calls):
+            raise RuntimeError("private-status-query-failure")
+        status = self.read_statuses[min(len(self.read_calls) - 1, len(self.read_statuses) - 1)]
         return ActionReadResult(
             value={
                 "order_id": arguments["order_id"],
-                "status": "pending",
+                "status": status,
                 "version": 3,
                 "internal": "provider-private",
             },
@@ -381,12 +472,216 @@ class _Provider(ActionOperationProvider):
                 concurrency_token,
             )
         )
+        if self.action_error is not None:
+            raise self.action_error
         return {
             "order_id": arguments["order_id"],
             "status": "approved",
             "version": 4,
             "internal": "provider-private",
         }
+
+
+@pytest.mark.asyncio
+async def test_server_serialized_preview_checks_allowed_state_without_fake_token() -> None:
+    provider = _Provider(read_statuses=["pending"])
+    executor = RuntimeActionWorkflowExecutor(_server_serialized_ir(), provider=provider)
+    capability = ActionCapabilityV2.model_validate(_capability_document())
+
+    preview = await executor.preview(capability, {"order_id": "order-1"}, _principal())
+
+    preview_value = cast(dict[str, JsonValue], preview.value)
+    assert preview_value["status"] == "pending"
+    assert preview.concurrency_token is None
+
+
+@pytest.mark.asyncio
+async def test_server_serialized_preview_rejects_state_outside_allowed_values() -> None:
+    provider = _Provider(read_statuses=["failed"])
+    executor = RuntimeActionWorkflowExecutor(_server_serialized_ir(), provider=provider)
+    capability = ActionCapabilityV2.model_validate(_capability_document())
+
+    with pytest.raises(ActionStateConflictError, match="state"):
+        await executor.preview(capability, {"order_id": "order-1"}, _principal())
+
+    assert provider.action_calls == []
+
+
+@pytest.mark.asyncio
+async def test_server_serialized_runtime_requires_attested_status_dependency() -> None:
+    malformed = _server_serialized_ir()
+    malformed["capabilities"]["orders.change"]["operation_dependencies"] = ["orders.update"]
+    provider = _Provider()
+    executor = RuntimeActionWorkflowExecutor(malformed, provider=provider)
+
+    with pytest.raises(ActionRuntimeConfigurationError):
+        await executor.preview(
+            ActionCapabilityV2.model_validate(_capability_document()),
+            {"order_id": "order-1"},
+            _principal(),
+        )
+
+    assert provider.read_calls == []
+    assert provider.action_calls == []
+
+
+@pytest.mark.asyncio
+async def test_server_serialized_commit_mutates_once_then_reads_declared_status() -> None:
+    provider = _Provider(read_statuses=["approved"])
+    executor = RuntimeActionWorkflowExecutor(_server_serialized_ir(), provider=provider)
+    capability = ActionCapabilityV2.model_validate(_capability_document())
+    execution = ActionCommitExecution(
+        input_value={"order_id": "order-1"},
+        preview_value={"order_id": "order-1", "status": "pending", "version": 3},
+        concurrency_token=None,
+        idempotency_key=SecretValue("runtime-idempotency"),
+    )
+
+    result = await executor.commit(capability, execution, _principal())
+
+    result_value = cast(dict[str, JsonValue], result)
+    assert result_value["status"] == "approved"
+    assert len(provider.action_calls) == 1
+    assert provider.action_calls[0][-1] is None
+    assert [call[0].id for call in provider.read_calls] == ["orders.get"]
+
+
+def _server_serialized_coordinator(
+    provider: _Provider,
+) -> tuple[Any, InMemoryApprovalAuthority]:
+    authority = InMemoryApprovalAuthority(development_only=True)
+    coordinator = create_runtime_action_coordinator(
+        _server_serialized_ir(),
+        pack_digest="sha256:" + "a" * 64,
+        provider=provider,
+        dependencies=ActionRuntimeDependencies(
+            deployment_policy=DeploymentPolicy(
+                allowed_effects=frozenset({"read", "transition"}),
+                max_risk="medium",
+                capability_allowlist=frozenset({"orders.change"}),
+                require_durable_action_store=False,
+                action_audit_mode="best_effort",
+            ),
+            store=InMemoryActionStore(development_only=True),
+            approval_authority=authority,
+            audit_sink=_ActionAudit(),
+            audit_salt=b"server-serialized-audit-salt",
+        ),
+    )
+    return coordinator, authority
+
+
+@pytest.mark.asyncio
+async def test_server_serialized_coordinator_needs_no_token_and_persists_unknown_once() -> None:
+    private = "private-server-serialized-failure"
+    provider = _Provider(read_statuses=["pending"], action_error=RuntimeError(private))
+    coordinator, authority = _server_serialized_coordinator(provider)
+    principal = _principal()
+    prepared = await coordinator.prepare(
+        "orders.change",
+        {"order_id": "order-1"},
+        principal,
+    )
+    assert prepared.status is PreparedActionStatus.PREPARED
+    binding = await coordinator.approval_binding_for_trusted_host(
+        prepared.action_handle,
+        principal,
+    )
+    approval = await authority.issue_for_testing(binding, expires_in_seconds=60)
+    await coordinator.approve(prepared.action_handle, approval, principal)
+
+    with pytest.raises(ActionStateConflictError) as captured:
+        await coordinator.commit(prepared.action_handle, principal)
+
+    assert private not in str(captured.value)
+    assert (await coordinator.status(prepared.action_handle, principal)).status is (
+        PreparedActionStatus.OUTCOME_UNKNOWN
+    )
+    with pytest.raises(ActionStateConflictError):
+        await coordinator.commit(prepared.action_handle, principal)
+    assert len(provider.action_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_server_serialized_nonterminal_status_is_unknown_and_never_replayed() -> None:
+    provider = _Provider(read_statuses=["pending", "pending"])
+    coordinator, authority = _server_serialized_coordinator(provider)
+    principal = _principal()
+    prepared = await coordinator.prepare(
+        "orders.change",
+        {"order_id": "order-1"},
+        principal,
+    )
+    binding = await coordinator.approval_binding_for_trusted_host(
+        prepared.action_handle,
+        principal,
+    )
+    approval = await authority.issue_for_testing(binding, expires_in_seconds=60)
+    await coordinator.approve(prepared.action_handle, approval, principal)
+
+    with pytest.raises(ActionStateConflictError):
+        await coordinator.commit(prepared.action_handle, principal)
+
+    assert (await coordinator.status(prepared.action_handle, principal)).status is (
+        PreparedActionStatus.OUTCOME_UNKNOWN
+    )
+    with pytest.raises(ActionStateConflictError):
+        await coordinator.commit(prepared.action_handle, principal)
+    assert len(provider.action_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_server_serialized_terminal_preview_is_idempotent_without_mutation() -> None:
+    provider = _Provider(read_statuses=["approved"])
+    coordinator, authority = _server_serialized_coordinator(provider)
+    principal = _principal()
+    prepared = await coordinator.prepare(
+        "orders.change",
+        {"order_id": "order-1"},
+        principal,
+    )
+    binding = await coordinator.approval_binding_for_trusted_host(
+        prepared.action_handle,
+        principal,
+    )
+    approval = await authority.issue_for_testing(binding, expires_in_seconds=60)
+    await coordinator.approve(prepared.action_handle, approval, principal)
+
+    committed = await coordinator.commit(prepared.action_handle, principal)
+    replayed = await coordinator.commit(prepared.action_handle, principal)
+
+    assert committed.status is PreparedActionStatus.SUCCEEDED
+    assert replayed.replayed is True
+    assert provider.action_calls == []
+    assert len(provider.read_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_server_serialized_status_query_failure_is_unknown_without_replay() -> None:
+    provider = _Provider(read_statuses=["pending"], read_error_on_call=2)
+    coordinator, authority = _server_serialized_coordinator(provider)
+    principal = _principal()
+    prepared = await coordinator.prepare(
+        "orders.change",
+        {"order_id": "order-1"},
+        principal,
+    )
+    binding = await coordinator.approval_binding_for_trusted_host(
+        prepared.action_handle,
+        principal,
+    )
+    approval = await authority.issue_for_testing(binding, expires_in_seconds=60)
+    await coordinator.approve(prepared.action_handle, approval, principal)
+
+    with pytest.raises(ActionStateConflictError):
+        await coordinator.commit(prepared.action_handle, principal)
+    with pytest.raises(ActionStateConflictError):
+        await coordinator.commit(prepared.action_handle, principal)
+
+    assert (await coordinator.status(prepared.action_handle, principal)).status is (
+        PreparedActionStatus.OUTCOME_UNKNOWN
+    )
+    assert len(provider.action_calls) == 1
 
 
 @pytest.mark.asyncio

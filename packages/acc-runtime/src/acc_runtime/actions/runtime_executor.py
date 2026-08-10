@@ -16,8 +16,15 @@ from acc_core.compiler.actions import (
     prove_action_capability,
     verify_action_semantics_attestation,
 )
+from acc_core.contracts import ActionSemantics
 from acc_core.models import Policy, WorkflowStep
-from acc_core.models.actions import BodyTokenSourceV2, ResponseHeaderTokenSourceV2
+from acc_core.models.actions import (
+    BodyTokenSourceV2,
+    ResponseHeaderTokenSourceV2,
+    ServerSerializedStatePredicateV2,
+    StateIdempotencyV2,
+    StatusQueryOutcomeResolutionV2,
+)
 from acc_core.models.v2 import (
     ActionCapabilityV2,
     ActionOperationV2,
@@ -30,6 +37,8 @@ from acc_runtime.actions.coordinator import (
     ActionPreviewExecution,
     CompiledActionDefinition,
 )
+from acc_runtime.actions.errors import ActionStateConflictError
+from acc_runtime.actions.models import canonical_json_bytes
 from acc_runtime.context import PrincipalContext, resolve_context_binding
 from acc_runtime.credentials import SecretValue
 from acc_runtime.errors import RuntimeError as AccRuntimeError
@@ -82,6 +91,7 @@ class _LoadedAction:
     mutation_operation_ids: tuple[str, ...]
     policy: Policy
     project: ProjectV2
+    semantics: Mapping[str, ActionSemantics]
 
 
 class _ActionOperationCaller:
@@ -107,6 +117,7 @@ class _ActionOperationCaller:
         self._concurrency_token = copy.deepcopy(concurrency_token)
         self._enforcer = PolicyEnforcer()
         self.response_headers: list[dict[str, str]] = []
+        self.action_operation_ids: list[str] = []
 
     async def call(
         self,
@@ -187,6 +198,7 @@ class _ActionOperationCaller:
             raise ActionRuntimeConfigurationError(
                 "A required optimistic concurrency token is unavailable"
             )
+        self.action_operation_ids.append(definition.id)
         return await self._provider.call_action(
             definition,
             cast(Mapping[str, JsonValue], copy.deepcopy(enriched)),
@@ -236,11 +248,15 @@ class RuntimeActionWorkflowExecutor:
             loaded.capability.id,
             cast(JsonValue, copy.deepcopy(dict(arguments))),
         )
+        idempotent_terminal = _validate_server_serialized_preview(loaded, raw_preview)
         token = _capture_concurrency_token(loaded, raw_preview, caller.response_headers)
         public_preview = PolicyEnforcer().filter_output(loaded.policy, raw_preview)
         return ActionPreviewExecution(
             value=public_preview,
             concurrency_token=token,
+            concurrency_token_required=_requires_optimistic_token(loaded),
+            idempotent_terminal=idempotent_terminal,
+            idempotent_result=public_preview if idempotent_terminal else None,
         )
 
     async def commit(
@@ -252,6 +268,20 @@ class RuntimeActionWorkflowExecutor:
         loaded = self._load(capability, principal_context)
         if not isinstance(execution, ActionCommitExecution):
             raise TypeError("execution must be ActionCommitExecution")
+        if execution.idempotent_terminal:
+            result = copy.deepcopy(execution.idempotent_result)
+            if not _is_terminal_result(loaded, result):
+                raise ActionRuntimeConfigurationError(
+                    "Prepared Action idempotent result is invalid"
+                )
+            if next(
+                Draft202012Validator(loaded.capability.output_schema).iter_errors(result),
+                None,
+            ):
+                raise ActionRuntimeConfigurationError(
+                    "Prepared Action idempotent result is invalid"
+                )
+            return result
         caller = _ActionOperationCaller(
             provider=self._provider,
             operations=loaded.operations,
@@ -281,6 +311,19 @@ class RuntimeActionWorkflowExecutor:
             loaded.capability.id,
             prepared,
         )
+        if len(caller.action_operation_ids) != 1:
+            raise ActionRuntimeConfigurationError("Compiled Action mutation execution is invalid")
+        semantics = loaded.semantics.get(caller.action_operation_ids[0])
+        if semantics is not None and isinstance(
+            semantics.outcome_resolution, StatusQueryOutcomeResolutionV2
+        ):
+            raw_result = await _resolve_status_query(
+                loaded,
+                semantics,
+                execution.input_value,
+                principal_context,
+                self._provider,
+            )
         public_result = PolicyEnforcer().filter_output(loaded.policy, raw_result)
         if next(
             Draft202012Validator(loaded.capability.output_schema).iter_errors(public_result),
@@ -343,10 +386,26 @@ class RuntimeActionWorkflowExecutor:
             stored = ActionCapabilityV2.model_validate(compiled.get("definition"))
             if stored.id != capability_id:
                 raise ValueError
-            proof = prove_action_capability(stored, operations)
+            compiled_proof = _mapping(compiled.get("action_proof"))
+            compiled_semantics = _mapping(compiled_proof.get("operation_semantics"))
+            semantics_by_operation: dict[str, ActionSemantics] = {}
+            for operation_id, attestation in compiled_semantics.items():
+                mutation_operation = operations.get(operation_id)
+                if not isinstance(mutation_operation, ActionOperationV2) or not (
+                    verify_action_semantics_attestation(mutation_operation, attestation)
+                ):
+                    raise ValueError
+                attestation_mapping = _mapping(attestation)
+                semantics_by_operation[operation_id] = ActionSemantics.model_validate(
+                    attestation_mapping.get("summary")
+                )
+            proof = prove_action_capability(
+                stored,
+                operations,
+                action_semantics=semantics_by_operation,
+            )
             if not proof.ok:
                 raise ValueError
-            compiled_proof = _mapping(compiled.get("action_proof"))
             expected_proof: dict[str, Any] = {
                 "approval_required": proof.approval_required,
                 "effects": list(proof.effects),
@@ -358,17 +417,13 @@ class RuntimeActionWorkflowExecutor:
                 raise ValueError
             if any(compiled_proof.get(key) != value for key, value in expected_proof.items()):
                 raise ValueError
-            compiled_semantics = _mapping(compiled_proof.get("operation_semantics"))
             if set(compiled_semantics) != set(proof.mutation_operation_ids):
                 raise ValueError
+            dependencies = set(_string_sequence(compiled.get("operation_dependencies")))
+            if not set(proof.strategy_operation_ids) <= dependencies:
+                raise ValueError
             for operation_id in proof.mutation_operation_ids:
-                mutation_operation = operations.get(operation_id)
-                if not isinstance(mutation_operation, ActionOperationV2) or not (
-                    verify_action_semantics_attestation(
-                        mutation_operation,
-                        compiled_semantics.get(operation_id),
-                    )
-                ):
+                if operation_id not in semantics_by_operation:
                     raise ValueError
             policies = _mapping(self._ir.get("policies"))
             policy = Policy.model_validate(policies.get(stored.policy))
@@ -379,6 +434,7 @@ class RuntimeActionWorkflowExecutor:
                 mutation_operation_ids=proof.mutation_operation_ids,
                 policy=policy,
                 project=project,
+                semantics=semantics_by_operation,
             )
         except (TypeError, ValueError, ValidationError):
             raise ActionRuntimeConfigurationError(
@@ -390,6 +446,12 @@ def _mapping(value: object) -> Mapping[str, Any]:
     if not isinstance(value, Mapping) or not all(isinstance(key, str) for key in value):
         raise ValueError
     return cast(Mapping[str, Any], value)
+
+
+def _string_sequence(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError
+    return tuple(value)
 
 
 def _workflow_ir(
@@ -441,6 +503,119 @@ def _rewrite_prepared(value: Any) -> Any:
     return copy.deepcopy(value)
 
 
+def _requires_optimistic_token(loaded: _LoadedAction) -> bool:
+    return any(
+        isinstance(loaded.operations[operation_id], ActionOperationV2)
+        and loaded.operations[operation_id].http.safety.concurrency.mode == "required"
+        for operation_id in loaded.mutation_operation_ids
+    )
+
+
+def _validate_server_serialized_preview(
+    loaded: _LoadedAction,
+    preview: JsonValue,
+) -> bool:
+    classifications: list[str] = []
+    non_state_operations = 0
+    for operation_id in loaded.mutation_operation_ids:
+        operation = loaded.operations[operation_id]
+        if not isinstance(operation, ActionOperationV2) or not isinstance(
+            operation.http.safety.concurrency,
+            ServerSerializedStatePredicateV2,
+        ):
+            non_state_operations += 1
+            continue
+        strategy = operation.http.safety.concurrency
+        found, state = _resolve_json_pointer(preview, strategy.state_pointer)
+        allowed = {canonical_json_bytes(value) for value in strategy.allowed_values}
+        idempotency = operation.http.safety.idempotency
+        if not isinstance(idempotency, StateIdempotencyV2) or not found:
+            raise ActionStateConflictError(
+                "Action preview state does not permit the requested transition"
+            )
+        encoded = canonical_json_bytes(state)
+        terminal_values = {canonical_json_bytes(value) for value in idempotency.terminal_values}
+        if encoded in terminal_values:
+            classifications.append("terminal")
+        elif encoded in allowed:
+            classifications.append("allowed")
+        else:
+            raise ActionStateConflictError(
+                "Action preview state does not permit the requested transition"
+            )
+    if not classifications:
+        return False
+    if len(set(classifications)) != 1:
+        raise ActionStateConflictError(
+            "Action preview state does not permit the requested transition"
+        )
+    is_terminal = classifications[0] == "terminal"
+    if is_terminal and non_state_operations:
+        raise ActionStateConflictError(
+            "Action preview state does not permit the requested transition"
+        )
+    return is_terminal
+
+
+def _is_terminal_result(loaded: _LoadedAction, value: JsonValue) -> bool:
+    strategy_count = 0
+    for operation_id in loaded.mutation_operation_ids:
+        operation = loaded.operations[operation_id]
+        if not isinstance(operation, ActionOperationV2) or not isinstance(
+            operation.http.safety.idempotency,
+            StateIdempotencyV2,
+        ):
+            continue
+        strategy_count += 1
+        strategy = operation.http.safety.idempotency
+        found, state = _resolve_json_pointer(value, strategy.state_pointer)
+        terminal = {canonical_json_bytes(item) for item in strategy.terminal_values}
+        if not found or canonical_json_bytes(state) not in terminal:
+            return False
+    return strategy_count == len(loaded.mutation_operation_ids)
+
+
+async def _resolve_status_query(
+    loaded: _LoadedAction,
+    semantics: ActionSemantics,
+    input_value: JsonValue,
+    principal_context: PrincipalContext,
+    provider: ActionOperationProvider,
+) -> JsonValue:
+    outcome = semantics.outcome_resolution
+    if not isinstance(outcome, StatusQueryOutcomeResolutionV2):
+        raise ActionRuntimeConfigurationError("Compiled Action status query is invalid")
+    operation = loaded.operations.get(outcome.operation_id)
+    if not isinstance(operation, ReadOperationV2) or not isinstance(input_value, Mapping):
+        raise ActionRuntimeConfigurationError("Compiled Action status query is invalid")
+    properties = _mapping(operation.input_schema.get("properties"))
+    arguments: dict[str, JsonValue] = {
+        name: copy.deepcopy(input_value[name])
+        for name in properties
+        if name in input_value and name not in operation.context_bindings
+    }
+    caller = _ActionOperationCaller(
+        provider=provider,
+        operations=loaded.operations,
+        policy=loaded.policy,
+        principal_context=principal_context,
+        allowed_context_bindings=loaded.project.provider.context_binding_allowlist,
+        phase="status",
+    )
+    value = await caller.call(
+        operation.model_dump(mode="json", by_alias=True),
+        arguments,
+    )
+    idempotency = semantics.idempotency
+    if not isinstance(idempotency, StateIdempotencyV2):
+        raise ActionRuntimeConfigurationError("Compiled Action status query is invalid")
+    found, state = _resolve_json_pointer(value, idempotency.state_pointer)
+    terminal = {canonical_json_bytes(item) for item in idempotency.terminal_values}
+    if not found or canonical_json_bytes(state) not in terminal:
+        raise ActionStateConflictError("Action commit outcome is unknown")
+    return PolicyEnforcer().filter_output(loaded.policy, value)
+
+
 def _capture_concurrency_token(
     loaded: _LoadedAction,
     preview: JsonValue,
@@ -475,6 +650,11 @@ def _capture_concurrency_token(
 
 
 def _json_pointer(value: JsonValue, pointer: str) -> JsonValue:
+    found, resolved = _resolve_json_pointer(value, pointer)
+    return resolved if found else None
+
+
+def _resolve_json_pointer(value: JsonValue, pointer: str) -> tuple[bool, JsonValue]:
     current: JsonValue = value
     for raw_token in pointer.split("/")[1:]:
         token = raw_token.replace("~1", "/").replace("~0", "~")
@@ -483,8 +663,8 @@ def _json_pointer(value: JsonValue, pointer: str) -> JsonValue:
         elif isinstance(current, list) and token.isdigit() and int(token) < len(current):
             current = current[int(token)]
         else:
-            return None
-    return copy.deepcopy(current)
+            return False, None
+    return True, copy.deepcopy(current)
 
 
 def _validated_headers(value: Mapping[str, str]) -> dict[str, str]:
