@@ -263,3 +263,63 @@ def test_nested_models_forbid_unknown_fields() -> None:
 
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         UIInteractionInventory.model_validate(document)
+
+
+def _nested_condition_expression(max_depth: int) -> dict[str, object]:
+    expression: dict[str, object] = {
+        "operator": "present",
+        "operand": {"kind": "literal", "value": "INVENTORY_SECRET"},
+    }
+    for _ in range(max_depth - 2):
+        expression = {"operator": "not", "operand": expression}
+    return expression
+
+
+def test_inventory_rejects_condition_depth_without_echoing_literals() -> None:
+    document = _complete_inventory_document()
+    document["interactions"][0]["conditions"] = [
+        {
+            "id": "too-deep",
+            "target": "visible",
+            "target_pointer": "/customer_id",
+            "expression": _nested_condition_expression(65),
+            "evidence": _evidence(),
+        }
+    ]
+
+    with pytest.raises(ValidationError) as captured:
+        UIInteractionInventory.model_validate(document)
+
+    message = str(captured.value)
+    assert "condition expression exceeds maximum depth" in message
+    assert "INVENTORY_SECRET" not in message
+    assert "input_value" not in message
+
+
+def test_inventory_rejects_condition_node_budget_without_echoing_input() -> None:
+    document = _complete_inventory_document()
+    document["interactions"][0]["conditions"] = [
+        {
+            "id": "too-wide",
+            "target": "enabled",
+            "target_pointer": "/customer_id",
+            "expression": {
+                "operator": "all",
+                "operands": [
+                    {
+                        "operator": "present",
+                        "operand": {"kind": "reference", "pointer": "/customer_id"},
+                    }
+                    for _ in range(2_048)
+                ],
+            },
+            "evidence": _evidence(),
+        }
+    ]
+
+    with pytest.raises(ValidationError) as captured:
+        UIInteractionInventory.model_validate(document)
+
+    message = str(captured.value)
+    assert "condition expression exceeds maximum node count" in message
+    assert "input_value" not in message

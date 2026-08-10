@@ -327,6 +327,203 @@ def _add_action(project: Path) -> None:
     )
 
 
+def _write_action_interaction_sidecars(project: Path, *, lifecycle: bool) -> None:
+    interaction_evidence = _evidence()
+    phase_evidence = {
+        phase: {**_evidence(), "source_id": f"orders-lifecycle-{phase}"}
+        for phase in ("approve", "commit", "prepare", "status")
+    }
+    inventory_evidence_sources = ["orders-openapi"]
+    if lifecycle:
+        inventory_evidence_sources.extend(
+            sorted(item["source_id"] for item in phase_evidence.values())
+        )
+        inventory_evidence_sources.sort()
+    _write(
+        project / "scope-inventory.yaml",
+        {
+            "schema_version": "2",
+            "scope": {"mode": "pilot", "selected_domains": ["orders"]},
+            "domains": [{"id": "orders", "status": "selected"}],
+            "routes": [
+                {
+                    "id": "GET /orders/{order_id}",
+                    "domain": "orders",
+                    "method": "GET",
+                    "kind": "read",
+                    "effect": "read",
+                    "path": "/orders/{order_id}",
+                    "evidence_sources": ["orders-openapi"],
+                    "usage_evidence_sources": ["orders-openapi"],
+                    "interaction_ids": ["orders.inspect"],
+                    "eligibility": "eligible",
+                    "disposition": "planned",
+                    "operation_id": "orders.get",
+                    "capability_ids": ["orders.inspect"],
+                },
+                {
+                    "id": "POST /orders/{order_id}/approve",
+                    "domain": "orders",
+                    "method": "POST",
+                    "kind": "action",
+                    "effect": "transition",
+                    "path": "/orders/{order_id}/approve",
+                    "evidence_sources": ["orders-openapi"],
+                    "usage_evidence_sources": ["orders-openapi"],
+                    "interaction_ids": ["orders.approve"],
+                    "eligibility": "eligible",
+                    "disposition": "planned",
+                    "operation_id": "orders.approve",
+                    "capability_ids": ["orders.approve"],
+                },
+            ],
+            "summary": {
+                "discovered_routes": 2,
+                "eligible_routes": 2,
+                "planned": 2,
+                "composed": 0,
+                "excluded": 0,
+                "blocked_on_evidence": 0,
+                "out_of_scope": 0,
+                "unresolved": 0,
+            },
+        },
+    )
+    interactions = []
+    for index, (interaction_id, route_id) in enumerate(
+        (
+            ("orders.approve", "POST /orders/{order_id}/approve"),
+            ("orders.inspect", "GET /orders/{order_id}"),
+        )
+    ):
+        interactions.append(
+            {
+                "id": interaction_id,
+                "surface_id": "orders",
+                "business_intent": interaction_id,
+                "trigger": {"kind": "confirm" if index == 0 else "select"},
+                "route_ids": [route_id],
+                "call_order": "sequential",
+                "input_bindings": [],
+                "defaults": [],
+                "option_sources": [],
+                "conditions": [],
+                "related_data": [],
+                "result_consumption": [],
+                "states": [],
+                "evidence_claims": [
+                    {
+                        "target_pointer": f"/interactions/{index}",
+                        "evidence": interaction_evidence,
+                        "evidence_pointer": f"/paths/{index}",
+                        "authority": "contract",
+                    },
+                    *(
+                        [
+                            {
+                                "target_pointer": f"/interactions/{index}/lifecycle/{phase}",
+                                "evidence": phase_evidence[phase],
+                                "evidence_pointer": f"/lifecycle/{phase}",
+                                "authority": "contract",
+                            }
+                            for phase in ("approve", "commit", "prepare", "status")
+                        ]
+                        if lifecycle and interaction_id == "orders.approve"
+                        else []
+                    ),
+                ],
+                "unknowns": [],
+            }
+        )
+    _write(
+        project / "ui-interaction-inventory.yaml",
+        {
+            "schema_version": "2",
+            "scope": {
+                "mode": "complete",
+                "evidence_sources": inventory_evidence_sources,
+            },
+            "surfaces": [
+                {
+                    "id": "orders",
+                    "kind": "page",
+                    "route_or_entry": "/orders",
+                    "business_purpose": "Inspect and approve orders",
+                    "evidence_sources": inventory_evidence_sources,
+                }
+            ],
+            "interactions": interactions,
+            "summary": {"surfaces": 1, "interactions": 2, "unresolved": 0},
+        },
+    )
+    for capability_id, interaction_id in (
+        ("orders.approve", "orders.approve"),
+        ("orders.inspect", "orders.inspect"),
+    ):
+        contract: dict[str, object] = {
+            "schema_version": "2",
+            "capability_id": capability_id,
+            "interaction_ids": [interaction_id],
+            "public_input_bindings": [],
+            "trusted_input_bindings": [],
+            "defaults": [],
+            "option_sources": [],
+            "conditions": [],
+            "related_data": [],
+            "result_consumption": [],
+            "required_scenarios": [f"{interaction_id}.success"],
+            "omissions": [],
+        }
+        if capability_id == "orders.approve" and lifecycle:
+            contract["action_lifecycle"] = {
+                "interaction_id": interaction_id,
+                "prepare": {
+                    "target_pointer": "/interactions/0/lifecycle/prepare",
+                    "evidence": phase_evidence["prepare"],
+                },
+                "approve": {
+                    "target_pointer": "/interactions/0/lifecycle/approve",
+                    "evidence": phase_evidence["approve"],
+                },
+                "commit": {
+                    "target_pointer": "/interactions/0/lifecycle/commit",
+                    "evidence": phase_evidence["commit"],
+                },
+                "status": {
+                    "target_pointer": "/interactions/0/lifecycle/status",
+                    "evidence": phase_evidence["status"],
+                },
+            }
+        _write(project / "interaction-contracts" / f"{capability_id}.yaml", contract)
+
+
+def test_unproven_action_interaction_lifecycle_blocks_validation_and_compile(
+    tmp_path: Path,
+) -> None:
+    project = _v2_project(tmp_path)
+    _add_action(project)
+    _write_action_interaction_sidecars(project, lifecycle=False)
+
+    validation = validate_project(project)
+    compilation = compile_project(project)
+
+    assert "ACC_UI_ACTION_LIFECYCLE_REQUIRED" in {item.code for item in validation.diagnostics}
+    assert compilation.ir is None
+    assert "ACC_UI_ACTION_LIFECYCLE_REQUIRED" in {item.code for item in compilation.diagnostics}
+
+
+def test_proven_action_interaction_lifecycle_reaches_compiler(tmp_path: Path) -> None:
+    project = _v2_project(tmp_path)
+    _add_action(project)
+    _write_action_interaction_sidecars(project, lifecycle=True)
+
+    validation = validate_project(project)
+    compilation = compile_project(project)
+
+    assert "ACC_UI_ACTION_LIFECYCLE_REQUIRED" not in {item.code for item in validation.diagnostics}
+    assert compilation.ir is not None, compilation.diagnostics
+
+
 def test_validate_project_loads_a_closed_v2_quality_project(tmp_path: Path) -> None:
     report = validate_project(_v2_project(tmp_path))
 

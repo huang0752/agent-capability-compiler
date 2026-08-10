@@ -190,6 +190,58 @@ def test_compiler_rejects_legacy_project_before_emitting_ir(tmp_path: Path) -> N
     assert "ACC_FORMAT_VERSION_UNSUPPORTED" in {item.code for item in report.diagnostics}
 
 
+def test_compiler_emits_independent_interaction_digest_for_current_ir(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    _write_yaml(
+        project / "scope-inventory.yaml",
+        {
+            "schema_version": "2",
+            "scope": {"mode": "pilot", "selected_domains": ["crm"]},
+            "domains": [{"id": "crm", "status": "selected"}],
+            "routes": [],
+            "summary": {
+                "discovered_routes": 0,
+                "eligible_routes": 0,
+                "planned": 0,
+                "composed": 0,
+                "excluded": 0,
+                "blocked_on_evidence": 0,
+                "out_of_scope": 0,
+                "unresolved": 0,
+            },
+        },
+    )
+    _write_yaml(
+        project / "ui-interaction-inventory.yaml",
+        {
+            "schema_version": "2",
+            "scope": {
+                "mode": "none",
+                "evidence_sources": ["frontend-tree"],
+                "rationale": "This project has no applicable interactive client surface.",
+            },
+            "surfaces": [],
+            "interactions": [],
+            "summary": {"surfaces": 0, "interactions": 0, "unresolved": 0},
+        },
+    )
+
+    report = compile_project(project)
+
+    assert report.ir is not None, report.diagnostics
+    interactions = cast(dict[str, Any], report.ir["interactions"])
+    assert report.ir["interaction_sha256"] == interactions["digest"]
+    assert interactions["inventory"]["scope_mode"] == "none"
+    assert interactions["inventory"]["interaction_ids"] == []
+    assert set(interactions) == {
+        "schema_version",
+        "contracts",
+        "dependencies",
+        "digest",
+        "inventory",
+    }
+
+
 def _write_capability(project: Path, capability: dict[str, Any]) -> None:
     _write_yaml(project / "capabilities" / "get_customer.yaml", capability)
 

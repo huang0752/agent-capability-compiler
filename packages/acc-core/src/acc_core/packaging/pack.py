@@ -39,10 +39,12 @@ _DOCUMENT_DIRECTORIES = (
     "capability-quality",
     "evals",
     "evidence",
+    "interaction-contracts",
     "operations",
     "policies",
     "source-contracts",
 )
+_FIXED_PROJECT_DOCUMENTS = ("ui-interaction-inventory.yaml",)
 _DOCUMENT_SUFFIXES = {".json", ".yaml", ".yml"}
 _REQUIRED_ENTRIES = {"manifest.json", "pack.lock", "project.yaml"}
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
@@ -202,6 +204,8 @@ def _is_allowed_entry(path: str, *, format_version: int | None = None) -> bool:
         return True
     if path == "compiled/ir.json":
         return True
+    if path in _FIXED_PROJECT_DOCUMENTS:
+        return True
     parts = path.split("/")
     return (
         len(parts) == 2
@@ -250,6 +254,11 @@ def _collect_project_payloads(root: Path, max_file_bytes: int) -> dict[str, byte
 
     payloads = {"project.yaml": _read_project_member(root, "project.yaml", max_file_bytes)}
     manifest = _project_manifest(payloads["project.yaml"])
+    for relative_path in _FIXED_PROJECT_DOCUMENTS:
+        source = root / relative_path
+        if not source.exists() and not source.is_symlink():
+            continue
+        payloads[relative_path] = _read_project_member(root, relative_path, max_file_bytes)
     for directory in _document_directories(manifest.format_version):
         directory_path = root / directory
         if not directory_path.exists():

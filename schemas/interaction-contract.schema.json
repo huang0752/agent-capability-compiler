@@ -1,5 +1,56 @@
 {
   "$defs": {
+    "ActionLifecycleBinding": {
+      "additionalProperties": false,
+      "description": "Evidence-bound UI mediation of the runtime-owned Action lifecycle.",
+      "properties": {
+        "approve": {
+          "$ref": "#/$defs/ActionLifecyclePhaseBinding"
+        },
+        "commit": {
+          "$ref": "#/$defs/ActionLifecyclePhaseBinding"
+        },
+        "interaction_id": {
+          "minLength": 1,
+          "title": "Interaction Id",
+          "type": "string"
+        },
+        "prepare": {
+          "$ref": "#/$defs/ActionLifecyclePhaseBinding"
+        },
+        "status": {
+          "$ref": "#/$defs/ActionLifecyclePhaseBinding"
+        }
+      },
+      "required": [
+        "interaction_id",
+        "prepare",
+        "approve",
+        "commit",
+        "status"
+      ],
+      "title": "ActionLifecycleBinding",
+      "type": "object"
+    },
+    "ActionLifecyclePhaseBinding": {
+      "additionalProperties": false,
+      "description": "One phase-specific claim target and its immutable source evidence.",
+      "properties": {
+        "evidence": {
+          "$ref": "#/$defs/Evidence"
+        },
+        "target_pointer": {
+          "title": "Target Pointer",
+          "type": "string"
+        }
+      },
+      "required": [
+        "target_pointer",
+        "evidence"
+      ],
+      "title": "ActionLifecyclePhaseBinding",
+      "type": "object"
+    },
     "AllExpression": {
       "additionalProperties": false,
       "description": "Require every nested safe expression to hold.",
@@ -1196,6 +1247,17 @@
   "additionalProperties": false,
   "description": "Adopt evidenced source interactions for one Agent-facing Capability.",
   "properties": {
+    "action_lifecycle": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ActionLifecycleBinding"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "capability_id": {
       "minLength": 1,
       "title": "Capability Id",

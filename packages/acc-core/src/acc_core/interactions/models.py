@@ -53,7 +53,7 @@ def _validation_field_name(info: ValidationInfo) -> str:
 class InteractionModel(StrictModel):
     """Frozen base for interaction documents and every nested value object."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
 
 
 class InteractionScope(InteractionModel):
@@ -437,6 +437,8 @@ class UIInteraction(InteractionModel):
 
     @model_validator(mode="after")
     def validate_internal_references(self) -> Self:
+        for condition in self.conditions:
+            validate_condition_complexity(condition.expression)
         condition_ids = {condition.id for condition in self.conditions}
         state_ids = {state.id for state in self.states}
         for state in self.states:
@@ -496,6 +498,35 @@ class UIInteractionInventory(InteractionModel):
         return self
 
 
+class ActionLifecyclePhaseBinding(InteractionModel):
+    """One phase-specific claim target and its immutable source evidence."""
+
+    target_pointer: JsonPointer
+    evidence: Evidence
+
+
+class ActionLifecycleBinding(InteractionModel):
+    """Evidence-bound UI mediation of the runtime-owned Action lifecycle."""
+
+    interaction_id: NonEmptyString
+    prepare: ActionLifecyclePhaseBinding
+    approve: ActionLifecyclePhaseBinding
+    commit: ActionLifecyclePhaseBinding
+    status: ActionLifecyclePhaseBinding
+
+    @model_validator(mode="after")
+    def validate_distinct_phase_targets(self) -> Self:
+        targets = {
+            self.prepare.target_pointer,
+            self.approve.target_pointer,
+            self.commit.target_pointer,
+            self.status.target_pointer,
+        }
+        if len(targets) != 4:
+            raise ValueError("action lifecycle phase target pointers must be unique")
+        return self
+
+
 class CapabilityInteractionContract(InteractionModel):
     """Adopt evidenced source interactions for one Agent-facing Capability."""
 
@@ -514,6 +545,7 @@ class CapabilityInteractionContract(InteractionModel):
     required_scenarios: list[NonEmptyString]
     overrides: list[InteractionOverride] = Field(default_factory=list)
     omissions: list[InteractionOmission]
+    action_lifecycle: ActionLifecycleBinding | None = None
 
     @field_validator("interaction_ids", "required_scenarios")
     @classmethod
@@ -557,6 +589,20 @@ class CapabilityInteractionContract(InteractionModel):
         if len(binding_targets) != len(set(binding_targets)):
             raise ValueError("input binding target pointers must be unique")
 
+        default_targets = [default.target_pointer for default in self.defaults]
+        if len(default_targets) != len(set(default_targets)):
+            raise ValueError("default target pointers must be unique")
+
+        option_targets = [source.target_pointer for source in self.option_sources]
+        if len(option_targets) != len(set(option_targets)):
+            raise ValueError("option source target pointers must be unique")
+
+        condition_targets = [
+            (condition.target, condition.target_pointer) for condition in self.conditions
+        ]
+        if len(condition_targets) != len(set(condition_targets)):
+            raise ValueError("condition targets must be unique")
+
         declared_inputs = set(binding_targets)
         declared_inputs.update(default.target_pointer for default in self.defaults)
         declared_inputs.update(source.target_pointer for source in self.option_sources)
@@ -576,10 +622,17 @@ class CapabilityInteractionContract(InteractionModel):
             raise ValueError("an interaction cannot be both adopted and omitted")
         if any(override.interaction_id not in adopted for override in self.overrides):
             raise ValueError("an override must reference an adopted interaction")
+        if (
+            self.action_lifecycle is not None
+            and self.action_lifecycle.interaction_id not in adopted
+        ):
+            raise ValueError("action lifecycle must reference an adopted interaction")
         return self
 
 
 __all__ = [
+    "ActionLifecycleBinding",
+    "ActionLifecyclePhaseBinding",
     "CapabilityInteractionContract",
     "InputBinding",
     "InputMapping",

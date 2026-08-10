@@ -73,6 +73,36 @@ def _make_project(root: Path) -> Path:
     return project
 
 
+def _add_interaction_documents(project: Path, *, submission: str = "send") -> None:
+    _write_yaml(
+        project / "ui-interaction-inventory.yaml",
+        {
+            "schema_version": "2",
+            "scope": {"mode": "discovered", "evidence_sources": ["frontend-tree"]},
+            "surfaces": [],
+            "interactions": [],
+            "summary": {"surfaces": 0, "interactions": 0, "unresolved": 0},
+        },
+    )
+    _write_yaml(
+        project / "interaction-contracts" / "get_customer.yaml",
+        {
+            "schema_version": "2",
+            "capability_id": "get_customer",
+            "interaction_ids": [],
+            "public_input_bindings": [],
+            "trusted_input_bindings": [],
+            "defaults": [{"target_pointer": "/locale", "submission": submission}],
+            "option_sources": [],
+            "conditions": [],
+            "related_data": [],
+            "result_consumption": [],
+            "required_scenarios": ["get-customer.success"],
+            "omissions": [],
+        },
+    )
+
+
 def _zip_info(name: str, *, mode: int = stat.S_IFREG | 0o644) -> zipfile.ZipInfo:
     info = zipfile.ZipInfo(name, FIXED_ZIP_TIME)
     info.create_system = 3
@@ -162,6 +192,80 @@ def test_build_pack_is_byte_reproducible_and_lock_covers_every_payload(tmp_path:
         "project": {"id": "example-crm", "version": "2.0.0"},
     }
     assert load_pack_manifest(first_path) == verification.manifest
+
+
+def test_build_pack_attests_interaction_sidecars_deterministically(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    _add_interaction_documents(project)
+    compiled_ir = {
+        "ir_version": "2",
+        "interaction_sha256": "a" * 64,
+        "interactions": {
+            "schema_version": "2",
+            "digest": "a" * 64,
+            "inventory": {"status": "declared"},
+            "contracts": {},
+            "dependencies": [],
+        },
+    }
+    first_path = tmp_path / "first-interactions.accpkg"
+    second_path = tmp_path / "second-interactions.accpkg"
+
+    first = build_pack(project, first_path, compiled_ir=compiled_ir)
+    second = build_pack(project, second_path, compiled_ir=compiled_ir)
+
+    assert first.sha256 == second.sha256
+    with zipfile.ZipFile(first_path) as archive:
+        names = archive.namelist()
+        assert "ui-interaction-inventory.yaml" in names
+        assert "interaction-contracts/get_customer.yaml" in names
+        lock = json.loads(archive.read("pack.lock"))
+        locked_paths = {record["path"] for record in lock["files"]}
+        assert "ui-interaction-inventory.yaml" in locked_paths
+        assert "interaction-contracts/get_customer.yaml" in locked_paths
+    verify_pack(first_path)
+
+
+def test_pack_digest_changes_when_interaction_semantics_change(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    _add_interaction_documents(project, submission="send")
+    first = build_pack(project, tmp_path / "interaction-first.accpkg")
+
+    _add_interaction_documents(project, submission="send_if_changed")
+    second = build_pack(project, tmp_path / "interaction-second.accpkg")
+
+    assert first.sha256 != second.sha256
+
+
+def test_build_pack_rejects_nested_interaction_contract_paths(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    _add_interaction_documents(project)
+    _write_yaml(
+        project / "interaction-contracts" / "nested" / "contract.yaml",
+        {"schema_version": "2"},
+    )
+
+    with pytest.raises(PackUnknownEntryError) as caught:
+        build_pack(project, tmp_path / "nested-interactions.accpkg")
+
+    assert caught.value.path == "interaction-contracts/nested"
+
+
+def test_build_pack_applies_file_bounds_to_interaction_inventory(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    max_file_bytes = (project / "project.yaml").stat().st_size
+    (project / "ui-interaction-inventory.yaml").write_text(
+        "x" * (max_file_bytes + 1), encoding="utf-8"
+    )
+
+    with pytest.raises(PackFileTooLargeError) as caught:
+        build_pack(
+            project,
+            tmp_path / "oversized-interactions.accpkg",
+            max_file_bytes=max_file_bytes,
+        )
+
+    assert caught.value.path == "ui-interaction-inventory.yaml"
 
 
 def test_build_pack_accepts_only_ir_json_from_a_compiled_directory(tmp_path: Path) -> None:

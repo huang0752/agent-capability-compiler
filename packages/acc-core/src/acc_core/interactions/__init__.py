@@ -15,6 +15,8 @@ from acc_core.interactions.expressions import (
     validate_condition_complexity,
 )
 from acc_core.interactions.models import (
+    ActionLifecycleBinding,
+    ActionLifecyclePhaseBinding,
     CapabilityInteractionContract,
     InputBinding,
     InputMapping,
@@ -39,10 +41,16 @@ from acc_core.interactions.models import (
     UIInteractionInventory,
     UISurface,
 )
+from acc_core.interactions.validate import (
+    InteractionValidationReport,
+    analyze_interaction_fidelity,
+)
 
 __all__ = [
     "MAX_CONDITION_DEPTH",
     "MAX_CONDITION_NODES",
+    "ActionLifecycleBinding",
+    "ActionLifecyclePhaseBinding",
     "AllExpression",
     "AnyExpression",
     "CapabilityInteractionContract",
@@ -61,6 +69,7 @@ __all__ = [
     "InteractionSummary",
     "InteractionTrigger",
     "InteractionTriggerKind",
+    "InteractionValidationReport",
     "LiteralOperand",
     "NotExpression",
     "OptionCache",
@@ -75,5 +84,6 @@ __all__ = [
     "UIInteraction",
     "UIInteractionInventory",
     "UISurface",
+    "analyze_interaction_fidelity",
     "validate_condition_complexity",
 ]

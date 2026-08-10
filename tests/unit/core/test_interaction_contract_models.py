@@ -309,6 +309,118 @@ def test_contract_rejects_duplicate_input_targets() -> None:
         CapabilityInteractionContract.model_validate(document)
 
 
+def test_contract_rejects_duplicate_targets_inside_each_semantic_authority() -> None:
+    document = _contract_document()
+    default = {
+        "id": "a-default",
+        "target_pointer": "/customer_id",
+        "source_kind": "literal",
+        "value": "one",
+        "authority": "implementation",
+        "precedence": "caller_over_default",
+        "submission": "send",
+        "override_policy": "caller_allowed",
+        "evidence": _evidence(),
+    }
+    duplicate = deepcopy(default)
+    duplicate["id"] = "b-default"
+    document["defaults"] = [default, duplicate]
+
+    with pytest.raises(ValidationError, match="default target pointers must be unique"):
+        CapabilityInteractionContract.model_validate(document)
+
+    document = _contract_document()
+    condition = deepcopy(document["conditions"][0])
+    condition["id"] = "second-enabled-condition"
+    document["conditions"].append(condition)
+    with pytest.raises(ValidationError, match="condition targets must be unique"):
+        CapabilityInteractionContract.model_validate(document)
+
+    document = _contract_document()
+    option = {
+        "id": "a-options",
+        "target_pointer": "/customer_id",
+        "source_kind": "operation",
+        "producer_id": "crm.list_customers",
+        "request_bindings": [],
+        "items_pointer": "/items",
+        "value_pointer": "/id",
+        "label_pointer": "/name",
+        "cascade_dependencies": [],
+        "search": {"mode": "none"},
+        "pagination": {"mode": "none"},
+        "cache": {"mode": "none"},
+        "freshness": "request",
+        "empty_behavior": "empty_options",
+        "error_behavior": "fail_closed",
+        "evidence": _evidence(),
+    }
+    duplicate_option = deepcopy(option)
+    duplicate_option["id"] = "b-options"
+    document["option_sources"] = [option, duplicate_option]
+    with pytest.raises(ValidationError, match="option source target pointers must be unique"):
+        CapabilityInteractionContract.model_validate(document)
+
+
+def test_different_condition_targets_can_apply_to_the_same_field() -> None:
+    document = _contract_document()
+    required = deepcopy(document["conditions"][0])
+    required["id"] = "customer-required"
+    required["target"] = "required"
+    document["conditions"].append(required)
+    document["conditions"] = sorted(document["conditions"], key=lambda item: item["id"])
+
+    contract = CapabilityInteractionContract.model_validate(document)
+
+    assert {condition.target for condition in contract.conditions} == {"required", "enabled"}
+
+
+def test_action_lifecycle_binding_is_typed_evidence_bound_and_adopted() -> None:
+    document = _contract_document()
+    document["action_lifecycle"] = {
+        "interaction_id": "customers.select",
+        "prepare": {
+            "target_pointer": "/interactions/0/lifecycle/prepare",
+            "evidence": _evidence("prepare"),
+        },
+        "approve": {
+            "target_pointer": "/interactions/0/lifecycle/approve",
+            "evidence": _evidence("approve"),
+        },
+        "commit": {
+            "target_pointer": "/interactions/0/lifecycle/commit",
+            "evidence": _evidence("commit"),
+        },
+        "status": {
+            "target_pointer": "/interactions/0/lifecycle/status",
+            "evidence": _evidence("status"),
+        },
+    }
+
+    contract = CapabilityInteractionContract.model_validate(document)
+    assert contract.action_lifecycle is not None
+    assert contract.action_lifecycle.commit.evidence.source_id == "commit"
+
+    document["action_lifecycle"]["interaction_id"] = "customers.missing"
+    with pytest.raises(ValidationError, match="adopted interaction"):
+        CapabilityInteractionContract.model_validate(document)
+
+    document = _contract_document()
+    phase = {
+        "target_pointer": "/interactions/0/lifecycle/shared",
+        "evidence": _evidence(),
+    }
+    document["action_lifecycle"] = {
+        "interaction_id": "customers.select",
+        "prepare": phase,
+        "approve": phase,
+        "commit": phase,
+        "status": phase,
+    }
+    with pytest.raises(ValidationError, match="phase target pointers must be unique"):
+        CapabilityInteractionContract.model_validate(document)
+
+
 def _nested_condition_expression(max_depth: int) -> dict[str, object]:
     expression: dict[str, object] = {
         "operator": "present",

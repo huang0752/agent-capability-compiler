@@ -193,7 +193,7 @@ def _write_ui_inventory(project: Path, *, mode: str = "discovered") -> None:
     else:
         document = {
             "schema_version": "2",
-            "scope": {"mode": mode, "evidence_sources": ["frontend-tree"]},
+            "scope": {"mode": mode, "evidence_sources": ["customer-page"]},
             "surfaces": [
                 {
                     "id": "customers",
@@ -218,13 +218,64 @@ def _write_ui_inventory(project: Path, *, mode: str = "discovered") -> None:
                     "related_data": [],
                     "result_consumption": [],
                     "states": [],
-                    "evidence_claims": [],
+                    "evidence_claims": [
+                        {
+                            "target_pointer": "/interactions/0",
+                            "evidence": _interaction_evidence(),
+                            "evidence_pointer": "/customers/initial-load",
+                            "authority": "implementation",
+                        }
+                    ],
                     "unknowns": [],
                 }
             ],
             "summary": {"surfaces": 1, "interactions": 1, "unresolved": 0},
         }
     _write_yaml(project / "ui-interaction-inventory.yaml", document)
+    _write_scope_inventory(project, include_route=mode != "none")
+
+
+def _write_scope_inventory(project: Path, *, include_route: bool = True) -> None:
+    routes = (
+        [
+            {
+                "id": "GET /customers/{customer_id}",
+                "domain": "crm",
+                "method": "GET",
+                "kind": "read",
+                "effect": "read",
+                "path": "/customers/{customer_id}",
+                "evidence_sources": ["crm-backend"],
+                "usage_evidence_sources": ["customer-page"],
+                "interaction_ids": ["customers.initial-load"],
+                "eligibility": "eligible",
+                "disposition": "planned",
+                "operation_id": "crm.get_customer",
+                "capability_ids": ["get_customer"],
+            }
+        ]
+        if include_route
+        else []
+    )
+    _write_yaml(
+        project / "scope-inventory.yaml",
+        {
+            "schema_version": "2",
+            "scope": {"mode": "pilot", "selected_domains": ["crm"]},
+            "domains": [{"id": "crm", "status": "selected"}],
+            "routes": routes,
+            "summary": {
+                "discovered_routes": len(routes),
+                "eligible_routes": len(routes),
+                "planned": len(routes),
+                "composed": 0,
+                "excluded": 0,
+                "blocked_on_evidence": 0,
+                "out_of_scope": 0,
+                "unresolved": 0,
+            },
+        },
+    )
 
 
 def _write_interaction_contract(
@@ -318,6 +369,8 @@ def test_frontend_scope_loads_typed_contract_and_exact_paths(tmp_path: Path) -> 
     report = validate_project(project)
 
     assert report.ui_interaction_inventory is not None
+    assert report.scope_inventory is not None
+    assert report.scope_inventory_path == "scope-inventory.yaml"
     assert list(report.interaction_contracts) == ["get_customer"]
     assert report.interaction_contracts["get_customer"].interaction_ids == [
         "customers.initial-load"
@@ -326,6 +379,51 @@ def test_frontend_scope_loads_typed_contract_and_exact_paths(tmp_path: Path) -> 
         "get_customer": "interaction-contracts/get_customer.yaml"
     }
     assert not any(item.code.startswith("ACC_UI_") for item in report.diagnostics)
+
+
+def test_ui_inventory_requires_typed_scope_inventory(tmp_path: Path) -> None:
+    project = make_valid_project(tmp_path)
+    _write_ui_inventory(project)
+    _write_interaction_contract(project)
+    (project / "scope-inventory.yaml").unlink()
+
+    report = validate_project(project)
+
+    assert "ACC_UI_SCOPE_INVENTORY_MISSING" in {item.code for item in report.diagnostics}
+
+
+def test_validation_runs_interaction_fidelity_for_route_and_default_authority(
+    tmp_path: Path,
+) -> None:
+    project = make_valid_project(tmp_path)
+    _write_ui_inventory(project)
+    _write_interaction_contract(project)
+    inventory_path = project / "ui-interaction-inventory.yaml"
+    inventory = yaml.safe_load(inventory_path.read_text(encoding="utf-8"))
+    inventory["interactions"][0]["route_ids"] = ["GET /missing"]
+    _write_yaml(inventory_path, inventory)
+    contract_path = project / "interaction-contracts" / "get_customer.yaml"
+    contract = yaml.safe_load(contract_path.read_text(encoding="utf-8"))
+    contract["defaults"] = [
+        {
+            "id": "unsafe-default",
+            "target_pointer": "/customer_id",
+            "source_kind": "literal",
+            "value": 7,
+            "authority": "observation",
+            "precedence": "caller_over_default",
+            "submission": "send",
+            "override_policy": "caller_allowed",
+            "evidence": _interaction_evidence(),
+        }
+    ]
+    _write_yaml(contract_path, contract)
+
+    report = validate_project(project)
+    codes = {item.code for item in report.diagnostics}
+
+    assert "ACC_UI_INTERACTION_ROUTE_UNKNOWN" in codes
+    assert "ACC_UI_DEFAULT_AUTHORITY_UNPROVEN" in codes
 
 
 def test_frontend_scope_rejects_orphan_and_duplicate_capability_contracts(tmp_path: Path) -> None:

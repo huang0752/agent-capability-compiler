@@ -12,7 +12,11 @@ from pydantic import TypeAdapter, ValidationError
 from acc_core.contracts import SourceContract
 from acc_core.contracts.fidelity import analyze_operation_schema_fidelity
 from acc_core.diagnostics import Diagnostic
-from acc_core.interactions import CapabilityInteractionContract, UIInteractionInventory
+from acc_core.interactions.models import (
+    CapabilityInteractionContract,
+    UIInteractionInventory,
+)
+from acc_core.interactions.validate import analyze_interaction_fidelity
 from acc_core.io import ProjectIOError, load_project_object
 from acc_core.models import (
     ActionOperationV2,
@@ -29,6 +33,7 @@ from acc_core.models import (
 )
 from acc_core.quality import CapabilityQuality
 from acc_core.quality.output_size import analyze_output_budget
+from acc_core.scope import ScopeInventory
 
 _DOCUMENT_SUFFIXES = {".json", ".yaml", ".yml"}
 
@@ -48,6 +53,8 @@ class ValidationReport:
     capability_quality_paths: dict[str, str] = field(default_factory=dict)
     policies: dict[str, Policy] = field(default_factory=dict)
     evals: dict[str, Eval] = field(default_factory=dict)
+    scope_inventory: ScopeInventory | None = None
+    scope_inventory_path: str | None = None
     ui_interaction_inventory: UIInteractionInventory | None = None
     ui_interaction_inventory_path: str | None = None
     interaction_contracts: dict[str, CapabilityInteractionContract] = field(default_factory=dict)
@@ -680,6 +687,16 @@ def validate_project(project_root: str | Path = ".") -> ValidationReport:
         diagnostics=report.diagnostics,
         relative_paths=report.capability_quality_paths,
     )
+    scope_inventory_path = "scope-inventory.yaml"
+    if (root / scope_inventory_path).exists() or (root / scope_inventory_path).is_symlink():
+        report.scope_inventory = _load_model(
+            root,
+            scope_inventory_path,
+            ScopeInventory,
+            report.diagnostics,
+        )
+        if report.scope_inventory is not None:
+            report.scope_inventory_path = scope_inventory_path
     inventory_path = "ui-interaction-inventory.yaml"
     if (root / inventory_path).exists() or (root / inventory_path).is_symlink():
         report.ui_interaction_inventory = _load_model(
@@ -716,6 +733,31 @@ def validate_project(project_root: str | Path = ".") -> ValidationReport:
         report.diagnostics,
     )
     _validate_auth_contract(report)
+    if report.ui_interaction_inventory is not None and report.scope_inventory is None:
+        report.diagnostics.append(
+            Diagnostic(
+                code="ACC_UI_SCOPE_INVENTORY_MISSING",
+                severity="error",
+                message="UI interaction fidelity requires scope-inventory.yaml.",
+                path=report.ui_interaction_inventory_path,
+                pointer=None,
+            )
+        )
+    if (
+        report.project is not None
+        and report.scope_inventory is not None
+        and report.ui_interaction_inventory is not None
+    ):
+        interaction_report = analyze_interaction_fidelity(
+            project=report.project,
+            scope_inventory=report.scope_inventory,
+            ui_inventory=report.ui_interaction_inventory,
+            contracts=report.interaction_contracts,
+            capabilities=report.capabilities,
+            operations=report.operations,
+            policies=report.policies,
+        )
+        report.diagnostics.extend(interaction_report.diagnostics)
     return report
 
 

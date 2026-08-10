@@ -15,6 +15,10 @@ from acc_core.compiler.actions import (
 )
 from acc_core.contracts import SourceContract
 from acc_core.diagnostics import Diagnostic
+from acc_core.interactions.compile import (
+    InteractionCompilationError,
+    compile_interactions,
+)
 from acc_core.models import (
     ActionCapabilityV2,
     ActionOperationV2,
@@ -978,6 +982,22 @@ def compile_project(project_root: str | Path = ".") -> CompilationReport:
         },
         "capabilities": compiled_capabilities,
     }
+    try:
+        interaction_attestation = compile_interactions(validation)
+    except InteractionCompilationError as exc:
+        _diagnostic(
+            diagnostics,
+            code=exc.code,
+            message=str(exc),
+            path=validation.interaction_contract_paths.get(
+                exc.capability_id,
+                f"interaction-contracts/{exc.capability_id}.yaml",
+            ),
+            pointer=f"/result_consumption/{exc.consumption_index}/state_ids",
+        )
+        return report
+    raw_ir["interactions"] = interaction_attestation.to_dict()
+    raw_ir["interaction_sha256"] = interaction_attestation.digest
     report.ir = cast(CompiledIR, _normalize_json(raw_ir))
     return report
 
