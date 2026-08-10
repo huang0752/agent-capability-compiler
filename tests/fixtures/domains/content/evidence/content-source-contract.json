@@ -1,12 +1,20 @@
 {
   "artifact": {
-    "action": "evidence-backed",
+    "action": {
+      "conflict_control": "server_serialized_state_predicate",
+      "effect": "transition",
+      "idempotency": "state_idempotent",
+      "outcome_resolution": "status_query",
+      "reversibility": "reversible",
+      "retry": "never",
+      "risk": "medium"
+    },
     "domain_id": "content_publication",
     "request_schema": "complete",
     "response_schema": "complete",
     "summary": "Source routes, request schemas, response schemas, and action semantics were inspected."
   },
-  "digest": "sha256:a7a1c4ffa545e3c21166240c4e8e381267ee24fcd9d8bd416bfa2e870c603e14",
+    "digest": "sha256:cf064dbff669ccb4d393271b808297db35db83aa4744d45b0552410aed198614",
   "kind": "content",
   "locator": "embedded-artifact:content-source-contract",
   "source_id": "content-source-contract",

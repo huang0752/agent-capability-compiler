@@ -29,9 +29,9 @@ evidence_snapshot:
 - evidence_ref: content-domain-confirmation
   digest: sha256:ad032be516e06e0c86b0ea400386bb99337d316c569c6ca4713a9a03fbdaf6ae
 - evidence_ref: content-source-contract
-  digest: sha256:a7a1c4ffa545e3c21166240c4e8e381267ee24fcd9d8bd416bfa2e870c603e14
+  digest: sha256:cf064dbff669ccb4d393271b808297db35db83aa4744d45b0552410aed198614
 dependency_snapshot_digest: sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
-evidence_digest: sha256:0be38882c591bd0c4e6de592bc03126f854d688e2bf33e28415e2e1898d18578
+evidence_digest: sha256:7d226ae310ba35fd2da1c406d216c88085b48f3f7de6067eb51b5d61a3830cc1
 user_confirmation:
   confirmer_ref: authenticated-reviewer
   authority: authenticated_user
@@ -39,7 +39,7 @@ user_confirmation:
   source_evidence_ref: content-domain-confirmation
   source_text_digest: sha256:ad032be516e06e0c86b0ea400386bb99337d316c569c6ca4713a9a03fbdaf6ae
   confirmed_at: '2026-08-10T00:00:00Z'
-  confirmed_decision_digest: sha256:908ec102c04a9a1d407083c0a183db304df4bcdefbcd0743d4b1ebfb905d9122
+  confirmed_decision_digest: sha256:adfd8089f94c46550dbaa230c91ccf40861d05c897c93fed9b5dc93cc85bd65a
   decisions:
   - kind: domain_completion
     subject_ref: content_publication

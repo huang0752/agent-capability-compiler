@@ -29,9 +29,9 @@ evidence_snapshot:
 - evidence_ref: finance-domain-confirmation
   digest: sha256:95cf7e19e110556c02742a7ac1daf90f3ddc480e83d1a59aae570253f4693c16
 - evidence_ref: finance-source-contract
-  digest: sha256:842b541d3802e4a5cc53e47aa31143cb90ed65e084bded762392821a0f0cf745
+  digest: sha256:ddab66b7be85d57289baf16b1e669e7f9f960ba8792c5e0154daadf70f13e96c
 dependency_snapshot_digest: sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
-evidence_digest: sha256:f364954708bee6dc8052e587264f1637419629b3d38895d8f79ce2c43497e86b
+evidence_digest: sha256:e2b5b4681030c5ef54f53059c987ab907ac5a70ac14733db9002f3f658521fa7
 user_confirmation:
   confirmer_ref: authenticated-reviewer
   authority: authenticated_user
@@ -39,7 +39,7 @@ user_confirmation:
   source_evidence_ref: finance-domain-confirmation
   source_text_digest: sha256:95cf7e19e110556c02742a7ac1daf90f3ddc480e83d1a59aae570253f4693c16
   confirmed_at: '2026-08-10T00:00:00Z'
-  confirmed_decision_digest: sha256:a6d3d3c61ce5c108ae5f6943bce1518ddc7f878de16ade96a19f8e9b17f15eac
+  confirmed_decision_digest: sha256:49703cce5a6f5256ab410ad6459acecc8872a549e93484100bc824256bd712ce
   decisions:
   - kind: domain_completion
     subject_ref: financial_controls

@@ -44,6 +44,34 @@ def _assert_evidence_has_real_artifact_digests(root: Path) -> None:
         assert document["digest"] == _artifact_digest(document["artifact"]), path
 
 
+def _resolve_json_pointer(document: object, pointer: str) -> object:
+    current = document
+    for raw_token in pointer.removeprefix("/").split("/"):
+        token = raw_token.replace("~1", "/").replace("~0", "~")
+        assert isinstance(current, dict) and token in current, pointer
+        current = current[token]
+    return current
+
+
+def _assert_provenance_pointers_resolve(root: Path, report: object) -> None:
+    validated = cast(Any, report)
+    evidence_documents = {
+        document["source_id"]: document
+        for path in sorted((root / "evidence").glob("*.json"))
+        if (document := json.loads(path.read_text(encoding="utf-8")))
+    }
+    for contract in validated.source_contracts.values():
+        for claim in contract.provenance:
+            _resolve_json_pointer(
+                evidence_documents[claim.evidence.source_id], claim.evidence_schema_pointer
+            )
+        if contract.action_semantics is not None:
+            for claim in contract.action_semantics.provenance:
+                _resolve_json_pointer(
+                    evidence_documents[claim.evidence.source_id], claim.evidence_pointer
+                )
+
+
 def _copy_fixture(tmp_path: Path, fixture: str) -> Path:
     target = tmp_path / fixture
     shutil.copytree(FIXTURES / fixture, target)
@@ -134,6 +162,7 @@ def test_domain_fixture_validates_compiles_and_reports_independent_axes(
     assert facts[expected_fact] is True
     assert facts["independent_coverage_axes"] == 12
     _assert_evidence_has_real_artifact_digests(root)
+    _assert_provenance_pointers_resolve(root, report)
 
     assert all(
         candidate.verification_level != "source_connected_verified"

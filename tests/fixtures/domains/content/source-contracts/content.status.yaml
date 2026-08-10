@@ -37,7 +37,7 @@ provenance:
     locator: embedded-artifact:content-source-contract
     summary: Source routes, request schemas, response schemas, and action semantics
       were inspected.
-    digest: sha256:a7a1c4ffa545e3c21166240c4e8e381267ee24fcd9d8bd416bfa2e870c603e14
+    digest: sha256:cf064dbff669ccb4d393271b808297db35db83aa4744d45b0552410aed198614
   evidence_schema_pointer: /artifact/request_schema
   authority: implementation
 - target_pointer: /response_schema
@@ -47,7 +47,7 @@ provenance:
     locator: embedded-artifact:content-source-contract
     summary: Source routes, request schemas, response schemas, and action semantics
       were inspected.
-    digest: sha256:a7a1c4ffa545e3c21166240c4e8e381267ee24fcd9d8bd416bfa2e870c603e14
+    digest: sha256:cf064dbff669ccb4d393271b808297db35db83aa4744d45b0552410aed198614
   evidence_schema_pointer: /artifact/response_schema
   authority: implementation
 action_semantics: null

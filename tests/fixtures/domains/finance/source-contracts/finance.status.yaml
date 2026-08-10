@@ -37,7 +37,7 @@ provenance:
     locator: embedded-artifact:finance-source-contract
     summary: Source routes, request schemas, response schemas, and action semantics
       were inspected.
-    digest: sha256:842b541d3802e4a5cc53e47aa31143cb90ed65e084bded762392821a0f0cf745
+    digest: sha256:ddab66b7be85d57289baf16b1e669e7f9f960ba8792c5e0154daadf70f13e96c
   evidence_schema_pointer: /artifact/request_schema
   authority: implementation
 - target_pointer: /response_schema
@@ -47,7 +47,7 @@ provenance:
     locator: embedded-artifact:finance-source-contract
     summary: Source routes, request schemas, response schemas, and action semantics
       were inspected.
-    digest: sha256:842b541d3802e4a5cc53e47aa31143cb90ed65e084bded762392821a0f0cf745
+    digest: sha256:ddab66b7be85d57289baf16b1e669e7f9f960ba8792c5e0154daadf70f13e96c
   evidence_schema_pointer: /artifact/response_schema
   authority: implementation
 action_semantics: null

@@ -1,12 +1,20 @@
 {
   "artifact": {
-    "action": "evidence-backed",
+    "action": {
+      "conflict_control": "optimistic_concurrency",
+      "effect": "transition",
+      "idempotency": "source_key",
+      "outcome_resolution": "outcome_unknown",
+      "reversibility": "reversible",
+      "retry": "idempotent_only",
+      "risk": "medium"
+    },
     "domain_id": "job_operations",
     "request_schema": "complete",
     "response_schema": "complete",
     "summary": "Source routes, request schemas, response schemas, and action semantics were inspected."
   },
-  "digest": "sha256:0d6d1d8bbf5b81a40740acb704dbbfa2fd8b551495f20edc32dd2b7f41b31a80",
+    "digest": "sha256:5d53830e9e758050d5b013d598b080ca251dd95e214b28668e417a462e3b9e8b",
   "kind": "content",
   "locator": "embedded-artifact:jobs-source-contract",
   "source_id": "jobs-source-contract",

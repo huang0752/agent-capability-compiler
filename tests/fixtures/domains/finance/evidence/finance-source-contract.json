@@ -1,12 +1,20 @@
 {
   "artifact": {
-    "action": "evidence-backed",
+    "action": {
+      "conflict_control": "optimistic_concurrency",
+      "effect": "transition",
+      "idempotency": "source_key",
+      "outcome_resolution": "synchronous_result",
+      "reversibility": "reversible",
+      "retry": "idempotent_only",
+      "risk": "high"
+    },
     "domain_id": "financial_controls",
     "request_schema": "complete",
     "response_schema": "complete",
     "summary": "Source routes, request schemas, response schemas, and action semantics were inspected."
   },
-  "digest": "sha256:842b541d3802e4a5cc53e47aa31143cb90ed65e084bded762392821a0f0cf745",
+    "digest": "sha256:ddab66b7be85d57289baf16b1e669e7f9f960ba8792c5e0154daadf70f13e96c",
   "kind": "content",
   "locator": "embedded-artifact:finance-source-contract",
   "source_id": "finance-source-contract",
