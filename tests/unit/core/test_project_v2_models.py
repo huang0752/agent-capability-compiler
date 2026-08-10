@@ -59,11 +59,13 @@ def test_schema_exports_use_only_canonical_current_names() -> None:
         "capability-quality",
         "eval",
         "evidence",
+        "interaction-contract",
         "operation",
         "policy",
         "project",
         "scope-inventory",
         "source-contract",
+        "ui-interaction-inventory",
     }
     for name in (
         "capability",
