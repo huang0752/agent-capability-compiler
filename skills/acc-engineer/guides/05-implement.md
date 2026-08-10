@@ -9,7 +9,7 @@
 
 ## 动作
 
-1. 仅为 disposition 是 `planned` 或 `composed` 的路由创建 Evidence 引用、SourceContracts、Operations、Capabilities、CapabilityQuality、Policies、Evals 和 Fake fixtures。
+1. 仅为 disposition 是 `planned` 或 `composed` 的路由创建 Evidence、SourceContracts、Operations、Capabilities、CapabilityQuality、Policies、Evals 和 Fake fixtures；仅为已 adopt 且有 Evidence 的交互创建 `interaction-contracts/<capability-id>.yaml`。
 2. 从证据选择唯一的 Provider `auth`：`none`、环境引用的 `bearer_secret`，或 `password_bearer`。`password_bearer` 在 `stdio` 使用 `environment_secret`，在 `streamable_http` 使用 `gateway_session`。新 Operation 不得包含 `credential_ref`。
 3. 从 SourceContract 和 provenance 投影 Operation Schema：Operation 输入不得超出源接受范围，Operation 输出不得窄于源可能响应。需要受信 principal/tenant 值时才声明 `context_bindings`；目标必须映射到已证实的请求位置，且不得出现在 Capability input 或 Workflow arguments。
 4. 使用受限工作流步骤 `call/pick/map/filter/assert/redact/branch/parallel/foreach/emit`；引用、循环和并发保持静态有界。
@@ -17,6 +17,7 @@
 6. 每次修改后检查写入路径和原系统只读基线。
 7. 为 CapabilityQuality 落实 selector acquisition、producer graph、failure isolation、output budget 与长文本披露。Capability 输出收紧必须由工作流的 pick/map/filter/redact/dataflow 可证明，不能靠手写 Schema 假设。
 8. Read Operation 必须显式声明 `read` effect，不能从 HTTP 方法推断；仅在显式 Action 项目中实现 `prepare → approve → commit → status`。commit 使用不透明 approval handle，并落实 idempotency、concurrency 和 retry 合同。不得简单放开 POST。
+9. 将 adopted bindings/defaults/options/conditions/related data/states 转为受限 InteractionContract；`hidden/disabled` 不是授权。只有 Compiler 可证明的 public default 才进入确定性规范化，前端默认值和前端条件不能修改 SourceContract。
 
 ## 门禁
 
@@ -29,6 +30,7 @@
 - 每个实现的 Operation 都可经 `scope_route_ids` 回溯到 `planned`/`composed` 路由。
 - Schema fidelity 无 evidence conflict；unknown 保持诊断，不通过伪造上界消除。
 - Action 的 approval、幂等、并发、重试和状态查询合同完整，且没有把 Secret/Principal/approval grant 暴露为 Agent 输入。
+- InteractionContract 没有任意客户端表达式，trusted binding 不进入公共输入，unknown 没有被伪装为通过。
 
 ## 输出
 
@@ -37,4 +39,4 @@
 ## 停止条件
 
 - 计划内定义和 Eval 齐备后进入 Validate。
-- 一旦发现需要修改原系统、访问生产、使用写接口或伪造 Evidence，立即停止；不得用临时代码绕过门禁。
+- 一旦发现需要修改原系统、访问生产、直接执行源写调用或伪造 Evidence，立即停止；Action 定义与隔离 Fake/沙箱验证不等于源系统写入。

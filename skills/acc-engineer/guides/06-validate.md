@@ -9,26 +9,27 @@
 
 ## 动作
 
-1. 先运行 `scope_audit.py --project <acc_project>` 并将 JSON 保留为 `scope-audit-report.json`；审计通过前不得运行 ACC 校验命令。
-2. 再依次运行 `acc validate --json`、`acc compile --check --json` 和 `acc coverage --json`；Coverage 只提供当前九轴合同。
+1. 先运行 `scope_audit.py --project <acc_project>`；发现客户端面时紧接运行 `interaction_audit.py --project <acc_project> --output interaction-audit-report.json`。任一审计失败前不得运行 ACC 校验命令。
+2. 再依次运行 `acc validate --json`、`acc compile --check --json` 和 `acc coverage --json`；route 与 interaction denominator 必须分别闭合。
 3. 同时检查退出码、`ok`、`result` 和全部 `diagnostics`；不得只凭命令退出判断成功。Scope audit 的 warning 不阻断（warning-only 仍为 `ok: true`），但必须原样保留到风险交付物，不能当作“无诊断”。
 4. 修复 ACC 定义或事实来源后，每次都从 scope audit 重新验证；不得放宽 Schema 掩盖错误。
 5. 复核原系统只读基线及 Secret 扫描结果。
 6. 检查 `provider.auth`/transport 组合、Operation 禁止凭据、`context_binding_allowlist` 与全部 `context_bindings` 编译诊断；不要把 Schema 可验证误写为 `streamable_http` Gateway 已运行。
 7. 分别检查 `route_disposition`、`operation_trace`、`scenario_coverage`、`constructability`、`discoverability_graph`、`composition`、`schema_fidelity`、`output_budget`、`live_observations`。Coverage 不生成总分，route closure 也不代表 usable。
+8. 另外逐项检查十个交互轴：`surface_disposition`、`interaction_trace`、`input_binding_fidelity`、`default_provenance`、`option_resolution`、`condition_coverage`、`related_data_graph`、`state_scenarios`、`presentation_projection`、`client_adapter_evidence`。不生成总分，源连接不能填充 client adapter 证据。
 
 ## 门禁
 
 - 三个命令均真实执行并返回 `ok: true`，不存在被忽略的 error diagnostics。
-- Scope audit 先于三个 ACC 命令通过，且 JSON 已保留。
-- 编译仅接受静态引用、有界工作流和证据绑定的只读 Operation。
-- 修复未触及原系统，未连接生产环境，也未引入 Secret 或写接口。
+- Scope/interaction audits 先于三个 ACC 命令通过，且 JSON 已保留。
+- 编译仅接受静态引用、有界工作流、证据绑定的 Read，以及具备完整安全生命周期的 Action。
+- 修复未触及原系统，未连接生产环境，也未引入 Secret 或未经安全合同的 Action。
 - 任何失败、警告或未运行项都被如实保留。
 - 任一 error 都阻断后续命令；只有 warning 时可以继续，但不得丢弃 warning。
 
 ## 输出
 
-- `scope-audit-report.json`、通过校验的编译候选、Coverage 结果和可复查诊断。
+- `scope-audit-report.json`、适用时的 `interaction-audit-report.json`、通过校验的编译候选、Coverage 结果和可复查诊断。
 
 ## 停止条件
 

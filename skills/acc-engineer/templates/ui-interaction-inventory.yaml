@@ -1,0 +1,46 @@
+# Planning artifact normalized from client evidence; it never contains framework source code.
+schema_version: "2"
+scope:
+  mode: discovered
+  evidence_sources:
+    - REPLACE_WITH_CLIENT_DISCOVERY_EVIDENCE
+  rationale: null
+surfaces:
+  - id: REPLACE_WITH_SURFACE_ID
+    kind: page
+    route_or_entry: /REPLACE_WITH_CLIENT_ENTRY
+    business_purpose: REPLACE_WITH_EVIDENCED_BUSINESS_PURPOSE
+    evidence_sources:
+      - REPLACE_WITH_SURFACE_EVIDENCE
+interactions:
+  - id: REPLACE_WITH_INTERACTION_ID
+    surface_id: REPLACE_WITH_SURFACE_ID
+    business_intent: REPLACE_WITH_EVIDENCED_BUSINESS_INTENT
+    trigger:
+      kind: screen_load
+    route_ids:
+      - REPLACE_WITH_SCOPE_ROUTE_ID
+    call_order: sequential
+    input_bindings: []
+    defaults: []
+    option_sources: []
+    conditions: []
+    related_data: []
+    result_consumption: []
+    states: []
+    evidence_claims:
+      - target_pointer: /interactions/0
+        evidence:
+          source_id: REPLACE_WITH_INTERACTION_EVIDENCE_SOURCE_ID
+          kind: source_file
+          path: REPLACE_WITH_CLIENT_SOURCE_RELATIVE_PATH
+          line_start: 1
+          line_end: 1
+          digest: sha256:REPLACE_WITH_FULL_FILE_SHA256
+        evidence_pointer: /route_ids/0
+        authority: implementation
+    unknowns: []
+summary:
+  surfaces: 1
+  interactions: 1
+  unresolved: 0

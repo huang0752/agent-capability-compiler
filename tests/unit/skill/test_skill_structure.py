@@ -233,7 +233,9 @@ def test_scope_governance_guides_define_each_phase_contract() -> None:
     handoff = (SKILL / "guides" / "09-handoff.md").read_text(encoding="utf-8")
 
     assert "usage_evidence_sources" in analyze
-    assert "不解析 Vue、React" in analyze
+    assert "不解析或执行任何客户端框架源码" in analyze
+    for framework_name in ("Vue", "React", "Angular", "Flutter"):
+        assert framework_name not in skill + harness + analyze
     assert "planned` 或 `composed" in model
     for contract in (
         "exclusion_rules",
@@ -414,6 +416,84 @@ def test_skill_requires_explicit_read_effects_and_action_lifecycle() -> None:
     assert "prepare → approve → commit → status" in workflow
     assert "不得简单放开 POST" in workflow
     assert "隔离沙箱" in workflow
+
+
+def test_skill_treats_client_interactions_as_independent_platform_neutral_evidence() -> None:
+    skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+    harness = (SKILL / "HARNESS.md").read_text(encoding="utf-8")
+    analyze = (SKILL / "guides" / "02-analyze.md").read_text(encoding="utf-8")
+    model = (SKILL / "guides" / "03-model.md").read_text(encoding="utf-8")
+    plan = (SKILL / "guides" / "04-plan.md").read_text(encoding="utf-8")
+    implement = (SKILL / "guides" / "05-implement.md").read_text(encoding="utf-8")
+    validate = (SKILL / "guides" / "06-validate.md").read_text(encoding="utf-8")
+    test_guide = (SKILL / "guides" / "07-test.md").read_text(encoding="utf-8")
+    refine = (SKILL / "guides" / "08-refine.md").read_text(encoding="utf-8")
+    handoff = (SKILL / "guides" / "09-handoff.md").read_text(encoding="utf-8")
+    metadata = (SKILL / "agents" / "openai.yaml").read_text(encoding="utf-8")
+    workflow = "\n".join(
+        (
+            skill,
+            harness,
+            analyze,
+            model,
+            plan,
+            implement,
+            validate,
+            test_guide,
+            refine,
+            handoff,
+            metadata,
+        )
+    )
+
+    for contract in (
+        "ui-interaction-inventory.yaml",
+        "InteractionContract",
+        "interaction_audit.py",
+        "surfaces",
+        "events",
+        "bindings",
+        "defaults",
+        "options",
+        "conditions",
+        "related data",
+        "states",
+        "unknowns",
+    ):
+        assert contract in workflow
+
+    assert "hidden/disabled" in workflow
+    assert "不是授权" in workflow
+    assert "前端默认值" in workflow and "SourceContract" in workflow
+    assert "前端条件" in workflow and "SourceContract" in workflow
+    assert "只分析已有 `GET`/`HEAD`" not in analyze
+    assert "且效果为只读" not in model
+    assert "能力需要写操作/生产访问" not in plan
+    assert "使用写接口或伪造 Evidence" not in implement
+    assert "新需求超出已声明只读范围" not in refine
+
+    for axis in (
+        "surface_disposition",
+        "interaction_trace",
+        "input_binding_fidelity",
+        "default_provenance",
+        "option_resolution",
+        "condition_coverage",
+        "related_data_graph",
+        "state_scenarios",
+        "presentation_projection",
+        "client_adapter_evidence",
+    ):
+        assert axis in validate + refine + handoff
+    assert "不生成总分" in validate + refine + handoff
+
+    for level in (
+        "headless_verified",
+        "source_connected_verified",
+        "client_adapter_verified",
+    ):
+        assert level in test_guide + handoff
+    assert "source_connected_verified` 不代表 `client_adapter_verified" in handoff
 
 
 def test_installers_copy_thin_integrations_and_refuse_overwrite(tmp_path: Path) -> None:

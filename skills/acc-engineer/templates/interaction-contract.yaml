@@ -1,0 +1,15 @@
+# Copy under interaction-contracts/<capability-id>.yaml after interaction evidence is available.
+schema_version: "2"
+capability_id: REPLACE_WITH_CAPABILITY_ID
+interaction_ids:
+  - REPLACE_WITH_ADOPTED_INTERACTION_ID
+public_input_bindings: []
+trusted_input_bindings: []
+defaults: []
+option_sources: []
+conditions: []
+related_data: []
+result_consumption: []
+required_scenarios:
+  - REPLACE_WITH_HEADLESS_SCENARIO_ID
+omissions: []

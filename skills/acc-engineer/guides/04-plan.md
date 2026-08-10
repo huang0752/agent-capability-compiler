@@ -19,6 +19,7 @@
 8. 为每个 Capability 设计正常、缺失/空数据和错误场景；权限相关能力必须包含权限或跨租户负例。Capability 输出只有经过可证明的 pick/map/redact/dataflow 投影才可比 Operation 输出更窄。
 9. 一接口一工具不是天然缺陷。保留有明确 business intent 的单 Operation search、detail、monitor；只拆分独立 selector、无数据流关系或失败语义不一致的组合。`duplicate_or_subsumed` 必须形成 excluded route → replacement planned/composed route → Operation → Capability dependency 的闭包。
 10. 显式 Action 计划必须采用 `prepare → approve → commit → status`，记录 effect、risk、approval、idempotency、concurrency、retry 与目标资源版本；不得简单放开 POST，也不得让 Agent 提供 JWT、密码或任意 approval 内容。
+11. 为每个高价值 interaction 选择 adopt 或 evidence-backed omission；adopt 时建立 `InteractionContract` 计划，显式记录 bindings、defaults、options、conditions、related data、states 和 required headless scenarios。未经证据的客户端细节保持 unknown。
 
 ## 门禁
 
@@ -32,6 +33,7 @@
 - Capability Plan 无悬空、遗漏、重复或空白 route ID，无旧 `deliberately_excluded` 自由文本权威字段，decision 引用均指向真实对象。
 - 每个 Capability 的 selector acquisition、empty success path、failure isolation 和 output budget 均完整；producer graph 可达，独立业务根没有被强行聚合。
 - Action 有可审查的 preview/approval/commit/status 合同与隔离沙箱计划；缺一项即阻断 Implement。
+- 每个 adopted interaction 都可回溯到 UI inventory；前端 `hidden/disabled` 不是授权，前端默认值和前端条件不会冒充 `SourceContract`。
 
 ## 输出
 
@@ -42,4 +44,4 @@
 ## 停止条件
 
 - 计划通过价值、安全和覆盖门禁后进入 Implement。
-- 若用户目标不清、能力需要写操作/生产访问，或关键 Evidence 不足，可输出 `status: blocked_on_evidence` 的可审查计划，但必须停止并请求确认或回到 Analyze，不得进入 Implement。
+- 若用户目标不清、需要生产访问、Action 缺少完整安全合同，或关键 Evidence 不足，可输出 `status: blocked_on_evidence` 的可审查计划，但必须停止并请求确认或回到 Analyze，不得进入 Implement。

@@ -21,16 +21,17 @@ If the request is only to audit or refine an existing ACC project, still run Pre
 - When an existing-system request does not specify range, default to `system_complete`.
 - `pilot` is allowed 只有用户明确提出 MVP/试点范围并记录其确认时；不得为加快交付自行缩小范围。
 - First perform 浅层全局发现 to establish the route denominator, then use bounded `--include` paths for deep Evidence capture. An include list is never the discovery denominator.
-- Normalize 前端 call evidence into route `usage_evidence_sources`; the auditor does not parse framework source. Excluding a frontend-used eligible route always emits a warning, and `system_complete` also errors when that exact route 未精确批准.
+- Keep route usage and client interaction as two facts: route `usage_evidence_sources` records observed calls, while `ui-interaction-inventory.yaml` independently records evidenced business interactions. Framework adapters normalize Evidence; Core and auditors never execute or parse client code. Excluding a frontend-used eligible route always emits a warning, and `system_complete` also errors when that exact route 未精确批准.
 - In system-complete scope, every eligible exclusion uses one `exclusion_rules` entry plus a distinct route `exclusion_decision`; a valid pair replaces `reason`. Ineligible, blocked, out-of-scope, and pilot/domain exclusions still require reason and Evidence. Capability Plan coverage must exactly mirror route dispositions and reference decisions without duplicating their prose.
 - Label direct Fake Runtime results `offline_candidate`. Use `gateway_offline_verified` only after the real Gateway protocol path succeeds against a Fake Source. Use `source_connected_verified` only after an explicitly authorized local/test source connection succeeds; none proves production behavior.
 
 ## Evidence and quality truth
 
 - Normalize Evidence into a `SourceContract` with `request_schema`, `response_schema`, completeness, and pointer-level `provenance`; do not turn observations into invented limits.
+- Normalize client surfaces, events, bindings, defaults, options, conditions, related data, states, and unknowns into the UI inventory, then adopt them through an `InteractionContract`. A hidden/disabled control is not authorization. 前端默认值或前端条件不能冒充 `SourceContract` authority; conflicts remain explicit.
 - Operation 输入 must stay within what the evidenced source accepts. Operation 输出 must cover what the evidenced source can return. A narrower Capability 输出 is allowed only when deterministic workflow projection is 可证明.
 - 一接口一工具不是天然缺陷，单 Operation search/detail/monitor can be the correct business Capability. Diagnose constructability, discoverability, data flow, composition, failure behavior, and output budget instead of optimizing 工具数量.
-- Coverage reports nine independent axes without an aggregate score. A closed route disposition is not proof that the resulting Capability is usable.
+- Coverage retains nine source/capability axes and adds ten independent interaction axes without an aggregate score. Route closure, interaction fidelity, source connection, and real client conformance remain distinct facts.
 
 ## Authentication and request identity
 
@@ -55,7 +56,7 @@ If the request is only to audit or refine an existing ACC project, still run Pre
 | Phase | Read | Required output or gate |
 | --- | --- | --- |
 | 0 Preflight | [01-preflight.md](guides/01-preflight.md) | Safe paths, declared scope mode, stop/go decision |
-| 1 Analyze | [02-analyze.md](guides/02-analyze.md) | Global route inventory, `system-map.yaml`, captured evidence |
+| 1 Analyze | [02-analyze.md](guides/02-analyze.md) | Route and interaction inventories, `system-map.yaml`, captured evidence |
 | 2 Model | [03-model.md](guides/03-model.md) | Domain, entities, permissions, tenant boundary, unknowns |
 | 3 Plan | [04-plan.md](guides/04-plan.md) | `capability-plan.yaml`, `coverage-baseline.json` |
 | 4 Implement | [05-implement.md](guides/05-implement.md) | Operations, Capabilities, Policies, Evals, fixtures |
@@ -72,7 +73,8 @@ Use the bundled scripts instead of recreating fragile checks:
 - `scripts/verify_read_only_workspace.py` — prove source/ACC separation and detect source changes.
 - `scripts/inventory.py` — bounded, non-symlink source inventory.
 - `scripts/evidence_capture.py` — atomically capture bounded evidence into the ACC project.
-- `scripts/scope_audit.py` — audit scope mode, structured exclusions, route/Operation/Capability closure, counts, and cross-artifact references; it consumes normalized Evidence fields rather than parsing source frontends.
+- `scripts/scope_audit.py` — audit scope mode, structured exclusions, route/Operation/Capability closure, counts, and cross-artifact references.
+- `scripts/interaction_audit.py` — audit normalized UI inventory structure, Evidence, and route/interaction cross-references without parsing a client framework.
 - `scripts/artifact_manifest.py` — create a deterministic content-free manifest for a non-Git ACC project.
 - `scripts/summarize_diagnostics.py` — summarize ACC JSON diagnostics without hiding failures.
 
@@ -94,6 +96,7 @@ From the ACC project directory, inspect every JSON result:
 
 ```bash
 python3 <skill>/scripts/scope_audit.py --project . > scope-audit-report.json
+python3 <skill>/scripts/interaction_audit.py --project . --output interaction-audit-report.json
 acc validate --json
 acc compile --check --json
 acc coverage --json
@@ -102,8 +105,8 @@ acc test runtime --json
 acc test e2e --json
 ```
 
-The scope audit is a required gate and must pass before `acc validate`. Coverage always uses the current nine-axis contract and requires `scope-inventory.yaml`. Then build the pack twice and compare SHA-256 values. A zero exit code is not sufficient evidence if the result contains findings or skipped coverage.
+The scope audit and, when client surfaces exist, interaction audit are required gates before `acc validate`. Coverage reports the nine existing axes plus `surface_disposition`, `interaction_trace`, `input_binding_fidelity`, `default_provenance`, `option_resolution`, `condition_coverage`, `related_data_graph`, `state_scenarios`, `presentation_projection`, and `client_adapter_evidence`; it never generates a total score. Then build the pack twice and compare SHA-256 values. A zero exit code is not sufficient evidence if the result contains findings or skipped coverage.
 
 ## Completion
 
-Finish only after Phase 8 produces `HANDOFF.md`, `scope-audit-report.json`, `coverage-report.json`, `test-report.json`, and `risk-report.json`, plus `candidate.diff` for a Git ACC project or `artifact-manifest.json` for a non-Git ACC project. Copy every scope warning into both risk artifacts, state the scope mode, validation level, and what was not exercised; then stop for human review.
+Finish only after Phase 8 produces `HANDOFF.md`, `scope-audit-report.json`, applicable `interaction-audit-report.json`, `coverage-report.json`, `test-report.json`, and `risk-report.json`, plus `candidate.diff` for a Git ACC project or `artifact-manifest.json` for a non-Git ACC project. Copy every audit warning into both risk artifacts; state route and interaction scope plus independently proven verification levels. `headless_verified`, `source_connected_verified`, and `client_adapter_verified` never imply one another; then stop for human review.

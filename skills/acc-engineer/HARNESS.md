@@ -27,12 +27,13 @@ Outputs are confined to `acc_project`. The source checkout is evidence, never an
 10. Separate 浅层全局发现 from bounded deep Evidence includes, and never use `--include` as the discovery denominator.
 11. Authentication belongs to `provider.auth`: `none`, `bearer_secret`, or `password_bearer`; Operation 不得保存 `credential_ref`, and account/password/JWT values never enter project files.
 12. Request identity comes only from immutable `PrincipalContext`. `context_bindings` inject trusted principal/tenant values into evidenced path/query inputs and cannot be supplied by an Agent or Workflow.
-13. Frontend usage is normalized into `usage_evidence_sources`; excluding such a route always warns, and system-complete scope treats an unapproved exact route as an error.
+13. Frontend route usage is normalized into `usage_evidence_sources`; client business semantics are separately normalized into `ui-interaction-inventory.yaml` and adopted through an `InteractionContract`.
 14. Scope Inventory is the only authority for exclusion rules, route decisions, Evidence, replacement closure, and exact user approval. Capability Plan stores references, not duplicate free-text exclusion facts.
 15. Convert captured Evidence into `SourceContract` request/response schemas and pointer-level `provenance`. Operation 输入 is an evidenced safe subset; Operation 输出 covers evidenced source responses; Capability 输出 may narrow only through a 可证明 deterministic projection.
 16. Every Capability plan records selector acquisition, an empty success path where list/search can legitimately return nothing, failure isolation, and output budget. Producer edges must make required selectors constructible.
 17. Coverage keeps route disposition, Operation trace, scenarios, constructability, discoverability, composition, schema fidelity, output budget, and live observations independent; it does not generate an aggregate score or equate route closure with usability.
 18. An Action uses `prepare → approve → commit → status`, complete safety contracts, trusted approval handles, and isolated sandbox validation; 不得简单放开 POST.
+19. Client discovery records surfaces, events, bindings, defaults, options, conditions, related data, states, and unknowns. A hidden/disabled control 不是授权；前端默认值和前端条件不得冒充 `SourceContract`。
 
 ## State machine
 
@@ -53,35 +54,35 @@ Canonicalize both paths with `pwd -P` or `realpath`. Declare `system_complete` b
 
 ### 1. Analyze
 
-Perform shallow global discovery across route registrations, OpenAPI, and client surfaces to establish `scope-inventory.yaml`. Normalize frontend usage Evidence into route fields; the scope auditor does not parse Vue, React, or other framework source. Only then use repeatable workspace-relative `--include` paths for deep Evidence inspection of relevant controllers, services, models, auth, tests, and docs. Bind every interface and permission claim to a locator plus digest, then normalize it into `SourceContract` `request_schema`, `response_schema`, completeness, and pointer-level `provenance`. Produce a system map and analysis report; list gaps.
+Perform shallow global discovery across route registrations, OpenAPI, and client surfaces to establish `scope-inventory.yaml` and `ui-interaction-inventory.yaml`. Normalize calls into route usage, then independently normalize surfaces/events/bindings/defaults/options/conditions/related data/states/unknowns with immutable Evidence. The auditors do not parse or execute framework source. Only then use repeatable workspace-relative `--include` paths for deep Evidence inspection. Bind every interface and permission claim to a locator plus digest and normalize source contracts separately; UI evidence cannot upgrade authorization or `SourceContract` authority. Produce a system map and analysis report; list gaps.
 
 ### 2. Model
 
-Normalize only the observed domain: entities, relations, read operations, permission scopes, tenant derivation, existing tests, and uncertainty. Add `scope_route_ids` to every candidate Operation so it traces to discovered routes. Separate upstream authorization from ACC output disclosure. Do not add speculative abstractions.
+Normalize only the observed domain: entities, relations, Read and Action operations, permission scopes, tenant derivation, interaction dependency graph, existing tests, and uncertainty. Add `scope_route_ids` to every candidate Operation and retain route `interaction_ids`. Separate upstream authorization from UI visibility and ACC output disclosure. Do not add speculative abstractions.
 
 ### 3. Plan
 
-Assign every eligible discovered route exactly one disposition: `planned`, `composed`, `excluded`, or `blocked_on_evidence`; `out_of_scope` is valid only where the declared mode permits it. System-complete exclusions require a structured rule and distinct route decision, which replace a free-text route reason only when valid; subjective and frontend-used exclusions require exact route approval. Ineligible, blocked, out-of-scope, and pilot/domain exclusions keep reason plus Evidence. Capability Plan route lists and decision pointers exactly close over Inventory without duplicate free text. Never count `blocked_on_evidence` as complete. Reconcile the `source_scope` baseline, then design business capabilities with explicit selector acquisition, empty success path, failure isolation, and output budget. Keep credentials, tenant identity, and server-derived values out of agent inputs. Require positive and permission-negative Evals where applicable. Do not advance with unresolved scope.
+Assign every eligible route and high-value interaction a traceable disposition, adoption, or evidence-backed omission. System-complete exclusions keep their structured approval rules. Capability Plan closes over both denominators, records interaction dependencies, and never counts unresolved items as complete. Design business capabilities with explicit selector acquisition, defaults/options provenance, conditional input construction, empty success path, failure isolation, and output budget. Keep credentials, tenant identity, and server-derived values out of agent inputs. Require positive and permission-negative Evals where applicable. Do not advance with unresolved scope.
 
 ### 4. Implement
 
-Write only under `acc_project`, and implement only routes disposed as `planned` or `composed`: Evidence, SourceContracts, Operations, Capabilities, CapabilityQuality, Policies, Evals, and fixtures. Prove Operation schema fidelity and every Capability output projection. Select Provider auth from evidence: `none`, environment-backed `bearer_secret`, or `password_bearer`; new Operations never carry `credential_ref`. For `stdio`, password login uses `environment_secret`; `streamable_http` requires `gateway_session`. Add `context_bindings` only for evidenced trusted path/query inputs and keep those targets out of Capability inputs and Workflow arguments. Freeze evidence digests from exact source material. No source-system edits or generated artifacts outside the project.
+Write only under `acc_project`, and implement only planned/composed routes and evidenced interaction adoptions: Evidence, SourceContracts, Operations, Capabilities, InteractionContracts, Policies, Evals, and fixtures. Prove schema fidelity, output projection, and every adopted default/binding/condition. Select Provider auth from evidence; trusted values stay outside public inputs. Action definitions retain `prepare → approve → commit → status`. Freeze evidence digests from exact source material. No source-system edits or generated artifacts outside the project.
 
 ### 5. Validate
 
-Run `scope_audit.py --project <acc_project>` first and retain `scope-audit-report.json`. Only after it has no errors run `validate`, `compile --check`, and `coverage` with `--json`. Inspect `ok`, diagnostics, and findings: warning-only is non-blocking but every warning remains a handoff risk. Fix one diagnostic class at a time and rerun from the scope audit.
+Run `scope_audit.py` first, then `interaction_audit.py` when a client surface was discovered; retain both reports. Only after they have no errors run `validate`, `compile --check`, and `coverage`. Inspect every independent source and interaction axis; warning-only is non-blocking but remains a handoff risk.
 
 ### 6. Test
 
-Run contract and direct Fake Runtime suites as `offline_candidate`. Label the real Gateway protocol path against a Fake Source `gateway_offline_verified`. Exercise normal, empty, 404, insufficient scope, cross-tenant, redaction, timeout, response-too-large, error mapping, MCP list, and MCP call behavior. Test `PrincipalContext`, effective scopes, Provider auth, and every declared `context_bindings` target without exposing identity or credentials through MCP tools. Treat `stdio` as one fixed identity; do not claim `streamable_http` until its Gateway request identity path is actually exercised. A `source_connected_verified` result additionally requires explicit local/test connection authorization and a successful source-connected run; never infer it from Fake tests.
+Run contract and direct Fake Runtime suites as `offline_candidate`; record `headless_verified` only when every required normalized interaction scenario passes. Keep Gateway/Fake Source protocol evidence distinct. `source_connected_verified` requires an authorized local/test source run, while `client_adapter_verified` requires the real client adapter to replay the same contract successfully. None implies another. Exercise defaults, options, cascades, related data, states, permissions, identity, and the Action lifecycle without exposing secrets.
 
 ### 7. Refine
 
-Compare all Coverage axes independently: route disposition, Operation trace, scenario coverage, constructability, discoverability graph, composition, schema fidelity, output budget, and live observations. Do not generate a total score. Detect duplicate decisions, whole-domain zero capability, frontend-used exclusions, and the high-exclusion heuristic (eligible `>= 10`, excluded `>= 70%`). Remove orphaned or duplicate definitions, correct evidence-unsupported schemas, and add missing valuable or negative coverage. Rerun scope audit, validation, and tests after each material change.
+Compare the nine existing axes and ten interaction axes independently: `surface_disposition`, `interaction_trace`, `input_binding_fidelity`, `default_provenance`, `option_resolution`, `condition_coverage`, `related_data_graph`, `state_scenarios`, `presentation_projection`, and `client_adapter_evidence`. Do not generate a total score. Detect orphaned interactions, unproven defaults, unsafe conditions, broken related-data graphs, frontend-used exclusions, and denominator distortion. Rerun both audits, validation, and tests after each material change.
 
 ### 8. Handoff
 
-Verify the source snapshot is unchanged. Build the pack twice and compare digests. State the scope mode and validation level. Produce review artifacts with exact commands/results, paths, limitations, and risks. For a Git ACC project provide `candidate.diff`; for a non-Git project generate `artifact-manifest.json` with the bundled deterministic helper. Do not commit or push unless separately requested; stop for human review.
+Verify the source snapshot is unchanged. Build the pack twice and compare digests. State route scope, interaction scope, and each independently proven verification level. A source-connected result never becomes client-adapter proof. Produce review artifacts with exact commands/results, limitations, and risks. Do not commit or push unless separately requested; stop for human review.
 
 ## Handoff truth rules
 

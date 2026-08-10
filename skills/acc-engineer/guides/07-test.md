@@ -17,6 +17,8 @@
 6. 仅当用户明确授权连接本地/测试原系统，且源连接套件真实通过时，才标记 `source_connected_verified`。
 7. 覆盖 `none`、`bearer_secret` 或所选 `password_bearer` 合同，确认 `PrincipalContext` 与 `context_bindings` 不进入 Agent 输入；`stdio` 只使用固定身份，`streamable_http` 只有实际 Gateway 请求级身份测试通过后才能声明可用。
 8. 对显式 Action 只在隔离沙箱验证 `prepare → approve → commit → status`，并覆盖过期/跨会话 approval、重复提交、并发冲突、上游拒绝和结果未知。严禁把生产写操作当成自动测试。
+9. 用平台中立 headless evaluator 覆盖 missing/null/explicit defaults、options 成功/空/错误/分页、cascade stale response、conditions、related data、states、presentation projection，以及 Action lifecycle events。
+10. 只有全部 required interaction scenarios 未跳过且通过时才记录 `headless_verified`。实际连接本地/测试源只支持 `source_connected_verified`；只有真实客户端 adapter 重放同一合同通过时才记录 `client_adapter_verified`，三者互不推导。
 
 ## 门禁
 
@@ -26,10 +28,12 @@
 - 原系统只读基线无变化；所有失败和未覆盖项均如实记录。
 - `offline_candidate`、`gateway_offline_verified` 与 `source_connected_verified` 严格分开，三者都不得表述为生产验证。
 - environment Secret、Gateway session、JWT、Authorization、Cookie 和认证状态不得进入 Pack、MCP tools、错误、日志或测试报告。
+- UI `hidden/disabled` 不是授权测试；必须保留服务端 permission/cross-tenant 负例。
+- `source_connected_verified` 不是 `client_adapter_verified`，headless 通过也不能声称真实客户端已验证。
 
 ## 输出
 
-- 含 validation level（`offline_candidate`、`gateway_offline_verified` 或 `source_connected_verified`）的测试证据、失败诊断和覆盖明细。
+- 分别列出 `offline_candidate`、`gateway_offline_verified`、`headless_verified`、`source_connected_verified`、`client_adapter_verified` 的实际证据、失败诊断和覆盖明细；未运行者明确为未验证。
 
 ## 停止条件
 
