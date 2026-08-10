@@ -1,6 +1,6 @@
-"""Strict v2 Operation and Capability document models.
+"""Strict current-format Operation and Capability document models.
 
-The v2 shape makes read and action documents explicit.  This module validates
+The current shape makes read and action documents explicit. This module validates
 their public structure only; cross-document workflow safety proofs remain a
 compiler responsibility.
 """
@@ -18,7 +18,6 @@ from acc_core.models import (
     Evidence,
     JsonObject,
     NonEmptyString,
-    Project,
     ProjectIdentity,
     ProviderConfig,
     RuntimeConfig,
@@ -38,7 +37,7 @@ def _checked_json_schema(value: JsonObject) -> JsonObject:
 
 
 class _OperationDocumentV2(StrictModel):
-    """Fields shared by explicitly classified v2 Operations."""
+    """Fields shared by explicitly classified current Operations."""
 
     schema_version: Literal["2"]
     id: NonEmptyString
@@ -72,7 +71,7 @@ class _OperationDocumentV2(StrictModel):
 
 
 class ReadOperationV2(_OperationDocumentV2):
-    """An explicitly read-only v2 Operation."""
+    """An explicitly read-only current Operation."""
 
     kind: Literal["read"]
 
@@ -84,7 +83,7 @@ class ReadOperationV2(_OperationDocumentV2):
 
 
 class ActionOperationV2(_OperationDocumentV2):
-    """An explicitly mutating v2 Operation with a complete safety contract."""
+    """An explicitly mutating current Operation with a complete safety contract."""
 
     kind: Literal["action"]
 
@@ -95,10 +94,11 @@ class ActionOperationV2(_OperationDocumentV2):
         return self
 
 
-type OperationV2 = Annotated[
+type Operation = Annotated[
     ReadOperationV2 | ActionOperationV2,
     Field(discriminator="kind"),
 ]
+OperationV2 = Operation
 
 
 class ApprovalContractV2(StrictModel):
@@ -154,20 +154,21 @@ class ActionCapabilityV2(_CapabilityDocumentV2):
     commit_workflow: Annotated[list[WorkflowStep], Field(min_length=1)]
 
 
-type CapabilityV2 = Annotated[
+type Capability = Annotated[
     ReadCapabilityV2 | ActionCapabilityV2,
     Field(discriminator="kind"),
 ]
+CapabilityV2 = Capability
 
 
 class QualityProfileV2(StrictModel):
-    """Select the compile-time quality gate for a v2 project."""
+    """Select the compile-time quality gate for a current project."""
 
     profile: Literal["standard", "release"]
 
 
-class ProjectV2(StrictModel):
-    """A v2 project that explicitly opts into quality contracts."""
+class Project(StrictModel):
+    """The sole current project contract with explicit quality controls."""
 
     schema_version: Literal["2"]
     project: ProjectIdentity
@@ -177,15 +178,13 @@ class ProjectV2(StrictModel):
     quality: QualityProfileV2
 
 
-type ProjectDocument = Annotated[
-    Project | ProjectV2,
-    Field(discriminator="schema_version"),
-]
-_PROJECT_DOCUMENT_ADAPTER: TypeAdapter[Project | ProjectV2] = TypeAdapter(ProjectDocument)
+ProjectV2 = Project
+ProjectDocument = Project
+_PROJECT_DOCUMENT_ADAPTER: TypeAdapter[Project] = TypeAdapter(ProjectDocument)
 
 
-def load_project_document(value: object) -> Project | ProjectV2:
-    """Validate and dispatch one public v1 or v2 Project document."""
+def load_project_document(value: object) -> Project:
+    """Validate one current Project document and reject every other format."""
 
     return _PROJECT_DOCUMENT_ADAPTER.validate_python(value)
 
@@ -195,8 +194,11 @@ __all__ = [
     "ActionContractV2",
     "ActionOperationV2",
     "ApprovalContractV2",
+    "Capability",
     "CapabilityV2",
+    "Operation",
     "OperationV2",
+    "Project",
     "ProjectDocument",
     "ProjectV2",
     "QualityProfileV2",

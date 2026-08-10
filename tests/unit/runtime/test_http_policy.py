@@ -9,12 +9,12 @@ import httpx
 import pytest
 from pydantic import JsonValue
 
-from acc_core.models import Operation, Policy, ReadOperationV2
+from acc_core.models import Policy, ReadOperationV2
 from acc_runtime.auth import NoAuthStrategy
 from acc_runtime.context import PrincipalContext
 from acc_runtime.errors import RuntimeError as ACCRuntimeError
 from acc_runtime.policies import PolicyEnforcer
-from acc_runtime.providers import HttpProvider
+from acc_runtime.providers import HttpOperationError, HttpProvider
 
 
 class StaticSecretResolver:
@@ -25,51 +25,11 @@ class StaticSecretResolver:
         return self.values[reference]
 
 
-def _operation(**http_overrides: Any) -> Operation:
-    http = {
-        "method": "GET",
-        "path": "/customers/{customer_id}",
-        "path_parameters": {"customer_id": "customer_id"},
-        "query_parameters": {"include": "include"},
-        "credential_ref": "CRM_USER_TOKEN",
-        "scopes": ["customer.read"],
-        "timeout_seconds": 15,
-        "max_response_bytes": 1_048_576,
-    }
+def _operation(**http_overrides: Any) -> ReadOperationV2:
+    operation = _v2_read_operation()
+    http = operation.http.model_dump(mode="json")
     http.update(http_overrides)
-    return Operation.model_validate(
-        {
-            "schema_version": "1",
-            "id": "crm.get_customer",
-            "title": "Get customer",
-            "kind": "http",
-            "input_schema": {
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["customer_id"],
-                "properties": {
-                    "customer_id": {"type": "string"},
-                    "include": {"type": "string"},
-                },
-            },
-            "output_schema": {
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "type": "object",
-                "required": ["id"],
-                "properties": {"id": {"type": "string"}},
-            },
-            "http": http,
-            "safety": {"effect": "read"},
-            "evidence": [
-                {
-                    "source_id": "crm",
-                    "locator": "openapi.json#/customers/{customer_id}",
-                    "digest": f"sha256:{'0' * 64}",
-                }
-            ],
-        }
-    )
+    return ReadOperationV2.model_validate({**operation.model_dump(mode="json"), "http": http})
 
 
 def _client(handler: Any) -> httpx.AsyncClient:
@@ -81,13 +41,16 @@ def _v2_read_operation() -> ReadOperationV2:
         {
             "schema_version": "2",
             "kind": "read",
-            "id": "crm.get_customer_v2",
-            "title": "Get customer v2",
+            "id": "crm.get_customer",
+            "title": "Get customer",
             "input_schema": {
                 "type": "object",
                 "additionalProperties": False,
                 "required": ["customer_id"],
-                "properties": {"customer_id": {"type": "string"}},
+                "properties": {
+                    "customer_id": {"type": "string"},
+                    "include": {"type": "string"},
+                },
             },
             "output_schema": {
                 "type": "object",
@@ -98,7 +61,7 @@ def _v2_read_operation() -> ReadOperationV2:
                 "method": "GET",
                 "path": "/customers/{customer_id}",
                 "path_parameters": {"customer_id": "customer_id"},
-                "query_parameters": {},
+                "query_parameters": {"include": "include"},
                 "request": None,
                 "success": {"statuses": [200], "body": "json"},
                 "scopes": [],
@@ -140,13 +103,13 @@ def _v2_principal() -> PrincipalContext:
 
 
 @pytest.mark.asyncio
-async def test_http_provider_encodes_paths_maps_queries_and_injects_secret() -> None:
-    captured: httpx.Request | None = None
+async def test_http_provider_rejects_a_legacy_operation_before_network() -> None:
+    network_calls = 0
 
     def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal captured
-        captured = request
-        return httpx.Response(200, json={"id": "customer/one"})
+        nonlocal network_calls
+        network_calls += 1
+        return httpx.Response(200, json={"id": "one"})
 
     async with _client(handler) as client:
         provider = HttpProvider(
@@ -155,32 +118,14 @@ async def test_http_provider_encodes_paths_maps_queries_and_injects_secret() -> 
             secret_resolver=StaticSecretResolver({"CRM_USER_TOKEN": "private-token"}),
             client=client,
         )
-        result = await provider.execute(
-            _operation(), {"customer_id": "customer/one", "include": "contacts & notes"}
-        )
+        with pytest.raises(HttpOperationError) as caught:
+            await provider.call(
+                {"schema_version": "1", "id": "crm.get_customer"},
+                {"customer_id": "one"},
+            )
 
-    assert result == {"id": "customer/one"}
-    assert captured is not None
-    assert captured.url.raw_path == b"/customers/customer%2Fone?include=contacts%20%26%20notes"
-    assert captured.url.host == "crm.example.test"
-    assert captured.headers["authorization"] == "Bearer private-token"
-
-
-@pytest.mark.asyncio
-async def test_http_provider_call_accepts_compiled_operation_mapping() -> None:
-    async with _client(lambda request: httpx.Response(200, json={"id": "one"})) as client:
-        provider = HttpProvider(
-            base_url_ref="CRM_BASE_URL",
-            environment={"CRM_BASE_URL": "https://crm.example.test"},
-            secret_resolver=StaticSecretResolver({"CRM_USER_TOKEN": "private-token"}),
-            client=client,
-        )
-        result = await provider.call(
-            _operation().model_dump(mode="json"),
-            {"customer_id": "one"},
-        )
-
-    assert result == {"id": "one"}
+    assert caught.value.code == "ACC_RUNTIME_HTTP_OPERATION_INVALID"
+    assert network_calls == 0
 
 
 @pytest.mark.asyncio
@@ -219,7 +164,7 @@ async def test_v2_http_success_statuses_are_exact_instead_of_any_2xx() -> None:
 
     assert captured.value.code == "ACC_RUNTIME_HTTP_UPSTREAM_ERROR"
     assert captured.value.details == {
-        "operation": "crm.get_customer_v2",
+        "operation": "crm.get_customer",
         "upstream_status": 201,
     }
 
@@ -248,7 +193,9 @@ async def test_http_provider_rejects_base_urls_that_are_not_fixed_http_origins(
     )
 
     with pytest.raises(ACCRuntimeError) as caught:
-        await provider.execute(_operation(), {"customer_id": "one"})
+        await provider.execute(
+            _operation(), {"customer_id": "one"}, principal_context=_v2_principal()
+        )
 
     assert caught.value.code == "ACC_RUNTIME_HTTP_BASE_URL_INVALID"
     assert caught.value.status == 500
@@ -273,7 +220,11 @@ async def test_http_provider_validates_declared_input_schema_before_network() ->
             client=client,
         )
         with pytest.raises(ACCRuntimeError) as caught:
-            await provider.execute(_operation(), {"customer_id": 42, "token": "attacker"})
+            await provider.execute(
+                _operation(),
+                {"customer_id": 42, "token": "attacker"},
+                principal_context=_v2_principal(),
+            )
 
     assert caught.value.code == "ACC_RUNTIME_INPUT_SCHEMA_INVALID"
     assert caught.value.status == 400
@@ -309,7 +260,11 @@ async def test_http_provider_rejects_non_finite_query_numbers_before_network() -
             client=client,
         )
         with pytest.raises(ACCRuntimeError) as caught:
-            await provider.execute(operation, {"customer_id": "one", "include": float("nan")})
+            await provider.execute(
+                operation,
+                {"customer_id": "one", "include": float("nan")},
+                principal_context=_v2_principal(),
+            )
 
     assert caught.value.code == "ACC_RUNTIME_INPUT_SCHEMA_INVALID"
     assert called is False
@@ -340,7 +295,9 @@ async def test_http_provider_maps_failures_without_logging_response_or_token(
             client=client,
         )
         with caplog.at_level(logging.WARNING), pytest.raises(ACCRuntimeError) as caught:
-            await provider.execute(_operation(), {"customer_id": "one"})
+            await provider.execute(
+                _operation(), {"customer_id": "one"}, principal_context=_v2_principal()
+            )
 
     assert caught.value.code == expected_code
     assert caught.value.status == expected_status
@@ -362,7 +319,9 @@ async def test_http_provider_maps_timeout_to_stable_error() -> None:
             client=client,
         )
         with pytest.raises(ACCRuntimeError) as caught:
-            await provider.execute(_operation(), {"customer_id": "one"})
+            await provider.execute(
+                _operation(), {"customer_id": "one"}, principal_context=_v2_principal()
+            )
 
     assert caught.value.code == "ACC_RUNTIME_HTTP_TIMEOUT"
     assert caught.value.status == 504
@@ -382,7 +341,11 @@ async def test_http_provider_stops_when_streamed_response_exceeds_limit() -> Non
             client=client,
         )
         with pytest.raises(ACCRuntimeError) as caught:
-            await provider.execute(_operation(max_response_bytes=5), {"customer_id": "one"})
+            await provider.execute(
+                _operation(max_response_bytes=5),
+                {"customer_id": "one"},
+                principal_context=_v2_principal(),
+            )
 
     assert caught.value.code == "ACC_RUNTIME_HTTP_RESPONSE_TOO_LARGE"
     assert caught.value.status == 502
@@ -406,16 +369,18 @@ async def test_head_returns_an_empty_object_without_parsing_a_body() -> None:
             _operation(
                 method="HEAD",
                 query_parameters={},
-            ).model_copy(update={"output_schema": {"type": "object", "maxProperties": 0}}),
+                success={"statuses": [200], "body": "empty"},
+            ).model_copy(update={"output_schema": {"type": "null"}}),
             {"customer_id": "one"},
+            principal_context=_v2_principal(),
         )
 
-    assert result == {}
+    assert result is None
 
 
 def _policy(**overrides: Any) -> Policy:
     document = {
-        "schema_version": "1",
+        "schema_version": "2",
         "id": "crm-read",
         "required_scopes": ["customer.read", "tenant.read"],
         "tenant_mode": "required",

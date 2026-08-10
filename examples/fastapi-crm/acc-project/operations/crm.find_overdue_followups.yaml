@@ -1,7 +1,7 @@
-schema_version: '1'
+schema_version: '2'
 id: crm.find_overdue_followups
 title: Find overdue followups
-kind: http
+kind: read
 input_schema:
   type: object
   additionalProperties: false
@@ -54,8 +54,16 @@ http:
   - followup.read
   timeout_seconds: 5
   max_response_bytes: 32768
-safety:
-  effect: read
+  request: null
+  success: {statuses: [200], body: json}
+  safety:
+    effect: read
+    risk: low
+    reversibility: reversible
+    retry: {mode: idempotent_only}
+    idempotency: {mode: unsupported}
+    concurrency: {mode: not_supported}
+context_bindings: {tenant_id: tenant_context.tenant_id}
 evidence:
 - source_id: crm-app-overdue
   kind: source_file

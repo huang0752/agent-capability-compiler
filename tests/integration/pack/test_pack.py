@@ -14,6 +14,7 @@ from acc_core.packaging import (
     PackChecksumMismatchError,
     PackDuplicateEntryError,
     PackFileTooLargeError,
+    PackFormatError,
     PackPathError,
     PackSymlinkError,
     PackUnknownEntryError,
@@ -41,11 +42,12 @@ def _make_project(root: Path) -> Path:
     _write_yaml(
         project / "project.yaml",
         {
-            "schema_version": "1",
-            "project": {"id": "example-crm", "version": "0.1.0"},
+            "schema_version": "2",
+            "project": {"id": "example-crm", "version": "2.0.0"},
             "source_workspace": {"path": "../system", "mode": "read_only"},
             "runtime": {"transport": ["stdio"]},
             "provider": {"kind": "http", "base_url_ref": "CRM_BASE_URL"},
+            "quality": {"profile": "standard"},
         },
     )
     _write_yaml(
@@ -91,11 +93,26 @@ def _archive_entries(path: Path) -> list[tuple[zipfile.ZipInfo, bytes]]:
         return [(info, archive.read(info)) for info in archive.infolist()]
 
 
+def _rewrite_json_member(path: Path, member_name: str, value: object) -> None:
+    entries = dict((info.filename, contents) for info, contents in _archive_entries(path))
+    entries[member_name] = _canonical_json(value)
+    if member_name != "pack.lock":
+        lock = json.loads(entries["pack.lock"])
+        for record in lock["files"]:
+            if record["path"] == member_name:
+                record["sha256"] = hashlib.sha256(entries[member_name]).hexdigest()
+                record["size"] = len(entries[member_name])
+        entries["pack.lock"] = _canonical_json(lock)
+    _write_archive(
+        path, [(_zip_info(name), contents) for name, contents in sorted(entries.items())]
+    )
+
+
 def test_build_pack_is_byte_reproducible_and_lock_covers_every_payload(tmp_path: Path) -> None:
     project = _make_project(tmp_path)
     compiled_ir = {
-        "schema_version": "1",
-        "project": {"id": "example-crm", "version": "0.1.0"},
+        "ir_version": "2",
+        "project": {"id": "example-crm", "version": "2.0.0"},
         "capabilities": [{"id": "get_customer"}],
     }
     first_path = tmp_path / "first.accpkg"
@@ -141,8 +158,8 @@ def test_build_pack_is_byte_reproducible_and_lock_covers_every_payload(tmp_path:
     verification = verify_pack(first_path)
     assert verification.manifest.to_dict() == {
         "format": "acc.capability-pack",
-        "format_version": 1,
-        "project": {"id": "example-crm", "version": "0.1.0"},
+        "format_version": 2,
+        "project": {"id": "example-crm", "version": "2.0.0"},
     }
     assert load_pack_manifest(first_path) == verification.manifest
 
@@ -151,16 +168,64 @@ def test_build_pack_accepts_only_ir_json_from_a_compiled_directory(tmp_path: Pat
     project = _make_project(tmp_path)
     compiled = tmp_path / "compiled"
     compiled.mkdir()
-    (compiled / "ir.json").write_text('{"z": 1, "a": 2}\n', encoding="utf-8")
+    (compiled / "ir.json").write_text('{"ir_version": "2", "z": 1, "a": 2}\n', encoding="utf-8")
 
     build_pack(project, tmp_path / "project.accpkg", compiled_ir=compiled)
 
     with zipfile.ZipFile(tmp_path / "project.accpkg") as archive:
-        assert archive.read("compiled/ir.json") == b'{"a":2,"z":1}\n'
+        assert archive.read("compiled/ir.json") == b'{"a":2,"ir_version":"2","z":1}\n'
 
     (compiled / "debug.json").write_text("{}", encoding="utf-8")
     with pytest.raises(PackUnknownEntryError):
         build_pack(project, tmp_path / "unknown.accpkg", compiled_ir=compiled)
+
+
+def test_build_pack_rejects_a_legacy_project_before_writing_an_archive(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    project_document = yaml.safe_load((project / "project.yaml").read_text(encoding="utf-8"))
+    project_document["schema_version"] = "1"
+    project_document.pop("quality")
+    _write_yaml(project / "project.yaml", project_document)
+    output = tmp_path / "legacy.accpkg"
+
+    with pytest.raises(PackFormatError) as caught:
+        build_pack(project, output)
+
+    assert caught.value.code == "ACC_PACK_FORMAT_INVALID"
+    assert str(caught.value) == "project.yaml declares an unsupported schema version"
+    assert not output.exists()
+
+
+def test_verify_pack_rejects_a_legacy_manifest_before_interpreting_payloads(
+    tmp_path: Path,
+) -> None:
+    pack = tmp_path / "legacy-manifest.accpkg"
+    build_pack(_make_project(tmp_path), pack)
+    with zipfile.ZipFile(pack) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+    manifest["format_version"] = 1
+    _rewrite_json_member(pack, "manifest.json", manifest)
+
+    with pytest.raises(PackFormatError) as caught:
+        verify_pack(pack)
+
+    assert caught.value.path == "manifest.json"
+    assert str(caught.value) == "unsupported capability-pack format or version"
+
+
+def test_verify_pack_rejects_a_legacy_lock_version_with_a_stable_path(tmp_path: Path) -> None:
+    pack = tmp_path / "legacy-lock.accpkg"
+    build_pack(_make_project(tmp_path), pack)
+    with zipfile.ZipFile(pack) as archive:
+        lock = json.loads(archive.read("pack.lock"))
+    lock["format_version"] = 1
+    _rewrite_json_member(pack, "pack.lock", lock)
+
+    with pytest.raises(PackFormatError) as caught:
+        verify_pack(pack)
+
+    assert caught.value.path == "pack.lock"
+    assert str(caught.value) == "pack.lock has an unsupported algorithm or version"
 
 
 def test_build_pack_rejects_project_symlinks(tmp_path: Path) -> None:

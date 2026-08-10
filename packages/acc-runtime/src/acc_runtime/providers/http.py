@@ -17,10 +17,10 @@ import httpx
 from jsonschema import Draft202012Validator
 from pydantic import JsonValue, ValidationError
 
-from acc_core.models import ActionOperationV2, Operation, ReadOperationV2
+from acc_core.models import ActionOperationV2, ReadOperationV2
 from acc_core.models.actions import BodyInjectionTargetV2, HeaderInjectionTargetV2
 from acc_runtime.actions.runtime_executor import ActionReadResult
-from acc_runtime.auth import AuthAttempt, AuthUnauthorizedError, HttpAuthStrategy
+from acc_runtime.auth import AuthAttempt, AuthUnauthorizedError, HttpAuthStrategy, NoAuthStrategy
 from acc_runtime.context import PrincipalContext, sensitive_auth_name_marker
 from acc_runtime.credentials import SecretValue, resolve_secret
 from acc_runtime.errors import RuntimeError
@@ -42,8 +42,8 @@ class _Cancelled:
 
 _CANCELLED = _Cancelled()
 type _ProviderOutcome = JsonValue | _ProviderFailure | _Cancelled
-type _ExecutableReadOperation = Operation | ReadOperationV2
-type _ExecutableHttpOperation = Operation | ReadOperationV2 | ActionOperationV2
+type _ExecutableReadOperation = ReadOperationV2
+type _ExecutableHttpOperation = ReadOperationV2 | ActionOperationV2
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,28 +142,20 @@ class EnvironmentSecretResolver:
 
 
 def _load_read_operation(value: Mapping[str, object]) -> _ExecutableReadOperation:
-    if value.get("schema_version") == "2":
-        if value.get("kind") == "action":
-            try:
-                action = ActionOperationV2.model_validate(value)
-            except ValidationError:
-                raise HttpOperationError(
-                    "compiled HTTP operation is invalid",
-                    details={},
-                ) from None
-            raise HttpMethodDeniedError(
-                "Action operations require the Action lifecycle",
-                details={"operation": action.id},
-            )
+    if value.get("kind") == "action":
         try:
-            return ReadOperationV2.model_validate(value)
+            action = ActionOperationV2.model_validate(value)
         except ValidationError:
             raise HttpOperationError(
                 "compiled HTTP operation is invalid",
                 details={},
             ) from None
+        raise HttpMethodDeniedError(
+            "Action operations require the Action lifecycle",
+            details={"operation": action.id},
+        )
     try:
-        return Operation.model_validate(value)
+        return ReadOperationV2.model_validate(value)
     except ValidationError:
         raise HttpOperationError(
             "compiled HTTP operation is invalid",
@@ -186,7 +178,7 @@ class HttpProvider:
         self.base_url_ref = base_url_ref
         self._environment = environment
         self._secret_resolver = secret_resolver or EnvironmentSecretResolver(environment)
-        self._auth_strategy = auth_strategy
+        self._auth_strategy = auth_strategy or NoAuthStrategy()
         self.client = client
 
     async def call(
@@ -220,7 +212,7 @@ class HttpProvider:
         arguments: Mapping[str, JsonValue],
         principal_context: PrincipalContext,
     ) -> ActionReadResult:
-        """Execute a v2 read while retaining only non-sensitive response metadata."""
+        """Execute a current read while retaining only non-sensitive response metadata."""
 
         provider = self
         outcome = await provider._call_read_outcome(
@@ -593,51 +585,25 @@ class HttpProvider:
         self,
         operation: _ExecutableHttpOperation,
         principal_context: PrincipalContext | None,
-    ) -> AuthAttempt | None:
-        if self._auth_strategy is not None:
-            if not isinstance(principal_context, PrincipalContext):
-                raise HttpOperationError(
-                    "provider authentication requires a trusted PrincipalContext",
-                    details={"operation": operation.id},
-                )
-            if getattr(operation.http, "credential_ref", None) is not None:
-                raise HttpOperationError(
-                    "operation credential conflicts with provider authentication",
-                    details={"operation": operation.id},
-                )
-            attempt = await self._auth_strategy.authorize(principal_context)
-            if attempt.state_key != principal_context.auth_state_key:
-                raise HttpOperationError(
-                    "authentication attempt does not belong to the PrincipalContext",
-                    details={"operation": operation.id},
-                )
-            return attempt
-
-        credential_ref = getattr(operation.http, "credential_ref", None)
-        if credential_ref is None:
+    ) -> AuthAttempt:
+        if not isinstance(principal_context, PrincipalContext):
             raise HttpOperationError(
-                "operation credential is required without provider authentication",
+                "provider authentication requires a trusted PrincipalContext",
                 details={"operation": operation.id},
             )
-        return None
+        attempt = await self._auth_strategy.authorize(principal_context)
+        if attempt.state_key != principal_context.auth_state_key:
+            raise HttpOperationError(
+                "authentication attempt does not belong to the PrincipalContext",
+                details={"operation": operation.id},
+            )
+        return attempt
 
     def _request_headers(
         self,
         operation: _ExecutableHttpOperation,
-        attempt: AuthAttempt | None,
+        attempt: AuthAttempt,
     ) -> dict[str, str]:
-        if attempt is None:
-            credential_ref = getattr(operation.http, "credential_ref", None)
-            assert credential_ref is not None
-            credential = self._secret_resolver.resolve(credential_ref)
-            token = credential if isinstance(credential, str) else credential.get_secret_value()
-            if not isinstance(token, str) or not token:
-                raise HttpRequestError(
-                    "resolved credential is empty or invalid",
-                    details={"operation": operation.id},
-                )
-            return {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-
         headers = {"Accept": "application/json"}
         for name, secret in attempt.headers.items():
             if name.casefold() == "cookie":
@@ -655,7 +621,7 @@ class HttpProvider:
         url: str,
         headers: Mapping[str, str],
         principal_context: PrincipalContext | None,
-        attempt: AuthAttempt | None,
+        attempt: AuthAttempt,
     ) -> JsonValue:
         return (
             await self._send_decoded_with_retry(
@@ -675,19 +641,14 @@ class HttpProvider:
         url: str,
         headers: Mapping[str, str],
         principal_context: PrincipalContext | None,
-        attempt: AuthAttempt | None,
+        attempt: AuthAttempt,
     ) -> _DecodedResponse:
         try:
             return await self._send_decoded(client, operation, url, headers)
         except _OperationUnauthorized:
-            if (
-                self._auth_strategy is None
-                or principal_context is None
-                or attempt is None
-                or not await self._auth_strategy.on_unauthorized(
-                    principal_context,
-                    attempt,
-                )
+            if principal_context is None or not await self._auth_strategy.on_unauthorized(
+                principal_context,
+                attempt,
             ):
                 raise AuthUnauthorizedError(
                     "source authentication is unauthorized",
@@ -1042,10 +1003,7 @@ class HttpProvider:
                     "upstream resource was not found",
                     details={"operation": operation.id},
                 )
-            if isinstance(operation, (ReadOperationV2, ActionOperationV2)):
-                successful = response.status_code in operation.http.success.statuses
-            else:
-                successful = 200 <= response.status_code < 300
+            successful = response.status_code in operation.http.success.statuses
             if not successful:
                 self._log_status(operation, response.status_code)
                 raise HttpUpstreamError(
@@ -1073,14 +1031,6 @@ class HttpProvider:
             response_headers = dict(response.headers)
         finally:
             await response.aclose()
-
-        if not isinstance(operation, (ReadOperationV2, ActionOperationV2)):
-            if operation.http.method == "HEAD":
-                return _DecodedResponse(value={}, response_headers=response_headers)
-            return _DecodedResponse(
-                value=self._decode_json_body(operation, response_body),
-                response_headers=response_headers,
-            )
 
         body_mode = operation.http.success.body
         if body_mode == "empty":

@@ -21,12 +21,11 @@ from pydantic import JsonValue, ValidationError
 from acc_core.cli.scope_diagnostics import analyze_run_scope_configuration
 from acc_core.compiler import compile_project
 from acc_core.compiler.diff import semantic_diff
-from acc_core.coverage import analyze_coverage, analyze_coverage_v2
+from acc_core.coverage import analyze_coverage
 from acc_core.diagnostics import Diagnostic, ResultEnvelope
 from acc_core.evals import ContractEvalRunner
 from acc_core.evidence import EvidenceFreezeError, freeze_operation_evidence
 from acc_core.io import ProjectIOError, load_project_object
-from acc_core.models import ProjectV2
 from acc_core.packaging import CapabilityPackError, build_pack
 from acc_core.schemas import export_schemas
 from acc_core.scope import ScopeInventory
@@ -89,7 +88,6 @@ def _parser() -> AccArgumentParser:
 
     coverage_parser = subparsers.add_parser("coverage", help="analyze capability coverage")
     coverage_parser.add_argument("path", nargs="?", default=".")
-    coverage_parser.add_argument("--version", choices=("1", "2"))
     _add_json_argument(coverage_parser)
     coverage_parser.set_defaults(handler=_coverage_command)
 
@@ -226,10 +224,18 @@ def _init_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope]:
             ),
         )
     target.mkdir(parents=True, exist_ok=True)
-    for directory in ("capabilities", "evals", "evidence", "operations", "policies"):
+    for directory in (
+        "capabilities",
+        "capability-quality",
+        "evals",
+        "evidence",
+        "operations",
+        "policies",
+        "source-contracts",
+    ):
         (target / directory).mkdir()
     template = {
-        "schema_version": "1",
+        "schema_version": "2",
         "project": {"id": target.name, "version": "0.1.0"},
         "source_workspace": {"path": "../system", "mode": "read_only"},
         "runtime": {"transport": ["stdio"]},
@@ -238,6 +244,7 @@ def _init_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope]:
             "base_url_ref": "ACC_TARGET_BASE_URL",
             "auth": {"kind": "none"},
         },
+        "quality": {"profile": "standard"},
     }
     project_file.write_text(yaml.safe_dump(template, sort_keys=False), encoding="utf-8")
     return EXIT_SUCCESS, _success("init", {"path": str(target)})
@@ -445,38 +452,23 @@ def _coverage_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelop
     report = validate_project(project_root)
     if not report.ok or report.project is None:
         return EXIT_INPUT, _compilation_failure("coverage", report.diagnostics)
-    requested_version = getattr(arguments, "version", None)
-    if requested_version == "1" and isinstance(report.project, ProjectV2):
+    try:
+        inventory = ScopeInventory.model_validate(
+            load_project_object(project_root, "scope-inventory.yaml")
+        )
+    except (ProjectIOError, ValidationError):
         return EXIT_INPUT, _failure(
             "coverage",
             Diagnostic(
-                code="ACC_COVERAGE_VERSION_UNSUPPORTED",
+                code="ACC_COVERAGE_SCOPE_INVENTORY_INVALID",
                 severity="error",
-                message="Coverage v1 supports only Project v1.",
-                path="project.yaml",
-                pointer="/schema_version",
+                message="Coverage requires a valid scope-inventory.yaml.",
+                path="scope-inventory.yaml",
+                pointer=None,
             ),
         )
-    coverage_version = requested_version or ("2" if isinstance(report.project, ProjectV2) else "1")
-    if coverage_version == "2":
-        try:
-            inventory = ScopeInventory.model_validate(
-                load_project_object(project_root, "scope-inventory.yaml")
-            )
-        except (ProjectIOError, ValidationError):
-            return EXIT_INPUT, _failure(
-                "coverage",
-                Diagnostic(
-                    code="ACC_COVERAGE_SCOPE_INVENTORY_INVALID",
-                    severity="error",
-                    message="Coverage v2 requires a valid scope-inventory.yaml.",
-                    path="scope-inventory.yaml",
-                    pointer=None,
-                ),
-            )
-        result = analyze_coverage_v2(report, inventory).model_dump(mode="json")
-        return EXIT_SUCCESS, _success("coverage", result, report.diagnostics)
-    return EXIT_SUCCESS, _success("coverage", analyze_coverage(report), report.diagnostics)
+    result = analyze_coverage(report, inventory).model_dump(mode="json")
+    return EXIT_SUCCESS, _success("coverage", result, report.diagnostics)
 
 
 def _read_json_document(path_value: str, *, max_bytes: int = 1_048_576) -> object:
@@ -614,10 +606,10 @@ def _adapter_init_command(arguments: argparse.Namespace) -> tuple[int, ResultEnv
     (target / "contract.yaml").write_text(
         yaml.safe_dump(
             {
-                "schema_version": "1",
+                "schema_version": "2",
                 "id": target.name,
                 "version": "0.1.0",
-                "base_path": "/adapter",
+                "base_path": "/adapter/v2",
                 "operations": [],
             },
             sort_keys=False,
@@ -964,7 +956,7 @@ def _run_stdio_runtime(
     pack_path: Path,
     deployment_scope_ceiling: frozenset[str],
 ) -> list[dict[str, object]]:
-    """Inspect or serve one stdio Pack while retaining its legacy lifecycle."""
+    """Inspect or serve one current stdio Pack with deterministic cleanup."""
 
     import anyio
 

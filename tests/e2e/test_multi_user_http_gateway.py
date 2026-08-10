@@ -25,6 +25,7 @@ from pydantic import JsonValue
 from acc_core.compiler import compile_project
 from acc_core.coverage import analyze_coverage
 from acc_core.packaging import build_pack, load_pack_manifest
+from acc_core.scope import ScopeInventory
 from acc_core.validation import validate_project
 from acc_runtime.credentials import SecretValue
 from acc_runtime.gateway import (
@@ -194,6 +195,41 @@ def _write_yaml(path: Path, value: object) -> None:
     path.write_text(yaml.safe_dump(value, sort_keys=False), encoding="utf-8")
 
 
+def _scope_inventory() -> ScopeInventory:
+    return ScopeInventory.model_validate(
+        {
+            "schema_version": "2",
+            "scope": {"mode": "pilot", "selected_domains": ["records"]},
+            "domains": [{"id": "records", "status": "selected"}],
+            "routes": [
+                {
+                    "id": "GET /api/records/current",
+                    "domain": "records",
+                    "method": "GET",
+                    "kind": "read",
+                    "effect": "read",
+                    "path": "/api/records/current",
+                    "evidence_sources": ["routes.py"],
+                    "eligibility": "eligible",
+                    "disposition": "composed",
+                    "operation_id": "records.current",
+                    "capability_ids": ["records_current"],
+                }
+            ],
+            "summary": {
+                "discovered_routes": 1,
+                "eligible_routes": 1,
+                "planned": 0,
+                "composed": 1,
+                "excluded": 0,
+                "blocked_on_evidence": 0,
+                "out_of_scope": 0,
+                "unresolved": 0,
+            },
+        }
+    )
+
+
 def _make_gateway_project(root: Path) -> Path:
     source = root / "source"
     source.mkdir(parents=True)
@@ -202,8 +238,8 @@ def _make_gateway_project(root: Path) -> Path:
     _write_yaml(
         project / "project.yaml",
         {
-            "schema_version": "1",
-            "project": {"id": PROJECT_ID, "version": "0.1.0"},
+            "schema_version": "2",
+            "project": {"id": PROJECT_ID, "version": "2.0.0"},
             "source_workspace": {"path": "../source", "mode": "read_only"},
             "runtime": {"transport": ["streamable_http"]},
             "provider": {
@@ -227,15 +263,16 @@ def _make_gateway_project(root: Path) -> Path:
                 },
                 "context_binding_allowlist": ["tenant_context.tenant_id"],
             },
+            "quality": {"profile": "standard"},
         },
     )
     _write_yaml(
         project / "operations" / "records.current.yaml",
         {
-            "schema_version": "1",
+            "schema_version": "2",
+            "kind": "read",
             "id": "records.current",
             "title": "Current record",
-            "kind": "http",
             "input_schema": {
                 "type": "object",
                 "additionalProperties": False,
@@ -264,15 +301,26 @@ def _make_gateway_project(root: Path) -> Path:
                 "path": "/api/records/current",
                 "path_parameters": {},
                 "query_parameters": {"actor": "actor_id", "tenant": "tenant_id"},
+                "request": None,
+                "success": {"statuses": [200], "body": "json"},
                 "scopes": ["records.read"],
                 "timeout_seconds": 5,
                 "max_response_bytes": 4096,
+                "safety": {
+                    "effect": "read",
+                    "risk": "low",
+                    "reversibility": "reversible",
+                    "retry": {"mode": "idempotent_only"},
+                    "idempotency": {"mode": "unsupported"},
+                    "concurrency": {"mode": "not_supported"},
+                },
             },
-            "safety": {"effect": "read"},
             "evidence": [
                 {
                     "source_id": "offline-route",
-                    "locator": "routes.py#L1-L1",
+                    "kind": "source_file",
+                    "path": "routes.py",
+                    "json_pointer": None,
                     "digest": f"sha256:{'0' * 64}",
                 }
             ],
@@ -291,7 +339,7 @@ def _make_gateway_project(root: Path) -> Path:
     _write_yaml(
         project / "policies" / "records-read.yaml",
         {
-            "schema_version": "1",
+            "schema_version": "2",
             "id": "records-read",
             "required_scopes": ["records.read"],
             "tenant_mode": "required",
@@ -304,7 +352,8 @@ def _make_gateway_project(root: Path) -> Path:
     _write_yaml(
         project / "capabilities" / "records_current.yaml",
         {
-            "schema_version": "1",
+            "schema_version": "2",
+            "kind": "read",
             "id": "records_current",
             "title": "Current record",
             "description": "Read only the current user's offline record.",
@@ -321,14 +370,48 @@ def _make_gateway_project(root: Path) -> Path:
     _write_yaml(
         project / "evals" / "offline-normal.yaml",
         {
-            "schema_version": "1",
+            "schema_version": "2",
             "id": "offline-normal",
             "capability": "records_current",
             "input": {},
             "fixtures": {},
             "expected_calls": [],
             "expected_output_schema": {"type": "object"},
+            "expected_error": None,
             "forbidden_fields": ["authorization", "cookie"],
+        },
+    )
+    operation_input = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["actor_id", "tenant_id"],
+        "properties": {
+            "actor_id": {"type": "string"},
+            "tenant_id": {"type": "string"},
+        },
+    }
+    _write_yaml(
+        project / "source-contracts" / "records.current.yaml",
+        {
+            "schema_version": "2",
+            "id": "records.current.contract",
+            "operation_id": "records.current",
+            "request_schema": operation_input,
+            "response_schema": output_schema,
+            "request_completeness": "complete",
+            "response_completeness": "complete",
+            "provenance": [],
+        },
+    )
+    _write_yaml(
+        project / "capability-quality" / "records_current.yaml",
+        {
+            "schema_version": "2",
+            "capability_id": "records_current",
+            "intent": {"action": "get", "resource_types": ["record"]},
+            "inputs": {},
+            "composition": {"failure_mode": "fail_fast"},
+            "output_budget": {"max_bytes": 65536},
         },
     )
     return project
@@ -440,7 +523,7 @@ async def test_baogao_jin_auth_shape_offline_candidate_isolates_a_b_c(
             assert runtime_info_response.json() == runtime_info.model_dump(mode="json")
             assert runtime_info.pack_sha256 == harness.pack_sha256
             assert runtime_info.project_id == PROJECT_ID
-            assert runtime_info.project_version == "0.1.0"
+            assert runtime_info.project_version == "2.0.0"
             assert runtime_info.transport == "streamable_http"
             assert set(runtime_info_response.json()) == {
                 "pack_sha256",
@@ -545,7 +628,7 @@ async def test_baogao_jin_auth_shape_offline_candidate_isolates_a_b_c(
             report = compile_project(project)
             assert report.ir is not None
             pack = build_pack(project, project / "offline.accpkg", compiled_ir=report.ir)
-            coverage = analyze_coverage(validate_project(project))
+            coverage = analyze_coverage(validate_project(project), _scope_inventory())
             manifest = load_pack_manifest(pack.path).to_dict()
             public_surfaces = {
                 "fixture_metadata": BAOGAO_JIN_FAKE,
@@ -706,7 +789,6 @@ async def test_stdio_and_http_context_have_identical_business_and_policy_output(
 @dataclass(frozen=True)
 class _OfflineCandidate:
     name: str
-    mode: Literal["legacy", "provider"]
     auth: Mapping[str, object] | None
     expected_authorization: str | None
     offline_candidate: Literal[True] = True
@@ -716,26 +798,17 @@ class _OfflineCandidate:
     "candidate",
     [
         _OfflineCandidate(
-            "crm-legacy-operation-credential-ref",
-            "legacy",
-            None,
-            "Bearer crm-legacy-private",
-        ),
-        _OfflineCandidate(
             "crm-new-provider-bearer",
-            "provider",
             {"kind": "bearer_secret", "token_ref": "CRM_NEW_TOKEN"},
             "Bearer crm-new-private",
         ),
         _OfflineCandidate(
             "warehouse-none",
-            "provider",
             {"kind": "none"},
             None,
         ),
         _OfflineCandidate(
             "warehouse-bearer",
-            "provider",
             {"kind": "bearer_secret", "token_ref": "WAREHOUSE_TOKEN"},
             "Bearer warehouse-private",
         ),
@@ -751,15 +824,8 @@ async def test_representative_provider_fixtures_compile_pack_and_execute_offline
     project_path = project / "project.yaml"
     project_document = yaml.safe_load(project_path.read_text(encoding="utf-8"))
     project_document["runtime"] = {"transport": ["stdio"]}
-    operation_path = project / "operations" / "records.current.yaml"
-    operation_document = yaml.safe_load(operation_path.read_text(encoding="utf-8"))
-    if candidate.mode == "legacy":
-        project_document["provider"].pop("auth")
-        operation_document["http"]["credential_ref"] = "CRM_LEGACY_TOKEN"
-    else:
-        project_document["provider"]["auth"] = candidate.auth
+    project_document["provider"]["auth"] = candidate.auth
     _write_yaml(project_path, project_document)
-    _write_yaml(operation_path, operation_document)
 
     validation = validate_project(project)
     assert validation.ok, validation.diagnostics
@@ -784,7 +850,6 @@ async def test_representative_provider_fixtures_compile_pack_and_execute_offline
 
     environment = {
         "OFFLINE_SOURCE_BASE_URL": "https://offline-source.test",
-        "CRM_LEGACY_TOKEN": "crm-legacy-private",
         "CRM_NEW_TOKEN": "crm-new-private",
         "WAREHOUSE_TOKEN": "warehouse-private",
         "ACC_PRINCIPAL_ID": "offline-principal",
@@ -816,7 +881,6 @@ async def test_representative_provider_fixtures_compile_pack_and_execute_offline
         },
         [],
         extra_secrets=(
-            "crm-legacy-private",
             "crm-new-private",
             "warehouse-private",
         ),
@@ -825,7 +889,6 @@ async def test_representative_provider_fixtures_compile_pack_and_execute_offline
         pack.path.read_bytes(),
         [],
         extra_secrets=(
-            "crm-legacy-private",
             "crm-new-private",
             "warehouse-private",
         ),

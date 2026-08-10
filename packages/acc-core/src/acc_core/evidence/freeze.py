@@ -12,7 +12,7 @@ from typing import Any, ClassVar
 from urllib.parse import urlsplit
 
 import yaml
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 
 from acc_core.io import (
     DEFAULT_MAX_FILE_BYTES,
@@ -28,6 +28,7 @@ from acc_core.io import (
 from acc_core.models import Evidence, Operation, Project
 
 _DOCUMENT_SUFFIXES = {".json", ".yaml", ".yml"}
+_OPERATION_ADAPTER: TypeAdapter[Operation] = TypeAdapter(Operation)
 
 
 class EvidenceFreezeError(ProjectIOError):
@@ -118,7 +119,7 @@ def _operation_document(
         if not entry.is_file() or entry.suffix.lower() not in _DOCUMENT_SUFFIXES:
             continue
         document = load_project_object(project_root, relative_path)
-        operation = Operation.model_validate(document)
+        operation = _OPERATION_ADAPTER.validate_python(document)
         if operation.id == operation_id:
             matches.append((relative_path, document, operation))
 

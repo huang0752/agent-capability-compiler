@@ -1,4 +1,4 @@
-"""Strict models for independent Coverage v2 quality axes."""
+"""Strict models for the independent current Coverage quality axes."""
 
 from __future__ import annotations
 

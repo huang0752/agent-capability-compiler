@@ -10,30 +10,24 @@ from pydantic import BaseModel, TypeAdapter
 from acc_core.contracts import SourceContract
 from acc_core.models import (
     Capability,
-    CapabilityV2,
     Eval,
     Evidence,
     Operation,
-    OperationV2,
     Policy,
     Project,
-    ProjectV2,
 )
 from acc_core.quality import CapabilityQuality
 from acc_core.scope import ScopeInventory
 
 JSON_SCHEMA_DRAFT_2020_12 = "https://json-schema.org/draft/2020-12/schema"
 MODEL_SCHEMAS: dict[str, type[BaseModel] | TypeAdapter[object]] = {
-    "capability": Capability,
+    "capability": TypeAdapter(Capability),
     "capability-quality": CapabilityQuality,
-    "capability-v2": TypeAdapter(CapabilityV2),
     "eval": Eval,
     "evidence": Evidence,
-    "operation": Operation,
-    "operation-v2": TypeAdapter(OperationV2),
+    "operation": TypeAdapter(Operation),
     "policy": Policy,
     "project": Project,
-    "project-v2": ProjectV2,
     "scope-inventory": ScopeInventory,
     "source-contract": SourceContract,
 }

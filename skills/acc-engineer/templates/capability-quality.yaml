@@ -1,0 +1,15 @@
+schema_version: "2"
+capability_id: REPLACE_WITH_CAPABILITY_ID
+intent:
+  action: get
+  resource_types: [REPLACE_WITH_RESOURCE_TYPE]
+inputs:
+  resource_id:
+    kind: resource_selector
+    resource_type: REPLACE_WITH_RESOURCE_TYPE
+    acquisition: caller
+composition:
+  failure_mode: fail_fast
+output_budget:
+  max_bytes: 65536
+  long_text_disclosures: []

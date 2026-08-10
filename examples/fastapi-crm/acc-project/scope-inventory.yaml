@@ -1,0 +1,89 @@
+schema_version: "2"
+scope:
+  mode: domain_complete
+  selected_domains: [crm]
+  exclusion_approval: {}
+discovery:
+  source_commit: sha256:fc9ef130276ca53951bf651ed6718469bf3db7267e499277e2072d945cb5c498
+  methods: [GET, HEAD, POST, PUT, PATCH, DELETE]
+  include_paths: [src/fastapi_crm_system]
+  evidence_sources: [crm-app]
+domains:
+  - {id: crm, status: selected}
+exclusion_rules: []
+routes:
+  - id: GET /customers
+    domain: crm
+    method: GET
+    kind: read
+    effect: read
+    path: /customers
+    evidence_sources: [crm-app]
+    eligibility: eligible
+    disposition: composed
+    operation_id: crm.search_customers
+    capability_ids: [search_customers]
+  - id: GET /customers/{customer_id}
+    domain: crm
+    method: GET
+    kind: read
+    effect: read
+    path: /customers/{customer_id}
+    evidence_sources: [crm-app]
+    eligibility: eligible
+    disposition: composed
+    operation_id: crm.get_customer
+    capability_ids: [get_customer_context]
+  - id: GET /customers/{customer_id}/contacts
+    domain: crm
+    method: GET
+    kind: read
+    effect: read
+    path: /customers/{customer_id}/contacts
+    evidence_sources: [crm-app]
+    eligibility: eligible
+    disposition: composed
+    operation_id: crm.list_customer_contacts
+    capability_ids: [get_customer_context]
+  - id: GET /customers/{customer_id}/followups
+    domain: crm
+    method: GET
+    kind: read
+    effect: read
+    path: /customers/{customer_id}/followups
+    evidence_sources: [crm-app]
+    eligibility: eligible
+    disposition: composed
+    operation_id: crm.list_customer_followups
+    capability_ids: [get_customer_context]
+  - id: GET /customers/{customer_id}/todos
+    domain: crm
+    method: GET
+    kind: read
+    effect: read
+    path: /customers/{customer_id}/todos
+    evidence_sources: [crm-app]
+    eligibility: eligible
+    disposition: composed
+    operation_id: crm.list_customer_todos
+    capability_ids: [get_customer_context]
+  - id: GET /followups/overdue
+    domain: crm
+    method: GET
+    kind: read
+    effect: read
+    path: /followups/overdue
+    evidence_sources: [crm-app]
+    eligibility: eligible
+    disposition: composed
+    operation_id: crm.find_overdue_followups
+    capability_ids: [find_overdue_followups]
+summary:
+  discovered_routes: 6
+  eligible_routes: 6
+  planned: 0
+  composed: 6
+  excluded: 0
+  blocked_on_evidence: 0
+  out_of_scope: 0
+  unresolved: 0

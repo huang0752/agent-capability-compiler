@@ -23,7 +23,8 @@ from verify_read_only_workspace import (
 
 from acc_core.scope import ScopeInventory
 
-SCOPE_MODES = {"pilot", "domain_complete", "system_readonly_complete"}
+SCOPE_MODES = {"pilot", "domain_complete", "system_complete"}
+SUPPORTED_METHODS = {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"}
 DISPOSITIONS = {
     "planned",
     "composed",
@@ -46,7 +47,7 @@ EXCLUSION_CATEGORIES = {
 SUBJECTIVE_EXCLUSION_CATEGORIES = {"operational_polling", "low_business_value"}
 SUMMARY_FIELDS = (
     "discovered_routes",
-    "eligible_read_routes",
+    "eligible_routes",
     "planned",
     "composed",
     "excluded",
@@ -195,7 +196,7 @@ def coverage_source_scope(source_scope: Mapping[str, object]) -> dict[str, objec
     if isinstance(planned, int) and isinstance(composed, int):
         planned_or_composed = planned + composed
     return {
-        "eligible_read_routes": source_scope.get("eligible_read_routes"),
+        "eligible_routes": source_scope.get("eligible_routes"),
         "planned_or_composed": planned_or_composed,
         "excluded": source_scope.get("excluded"),
         "blocked_on_evidence": source_scope.get("blocked_on_evidence"),
@@ -353,7 +354,7 @@ def audit_exclusion_rules(
             assigned_routes[route_id] = rule_id
 
     mode = string_at(mapping_at(document, "scope") or {}, "mode")
-    if mode == "system_readonly_complete":
+    if mode == "system_complete":
         for route_id, (index, route) in routes.items():
             if (
                 string_at(route, "eligibility") != "eligible"
@@ -395,7 +396,7 @@ def audit_route_exclusion_decision(
 
     diagnostics: list[dict[str, object]] = []
     scope = mapping_at(document, "scope") or {}
-    if string_at(scope, "mode") != "system_readonly_complete":
+    if string_at(scope, "mode") != "system_complete":
         return diagnostics
     raw_routes = document.get("routes")
     routes = raw_routes if isinstance(raw_routes, list) else []
@@ -550,11 +551,11 @@ def audit_inventory(
     """Validate scope mode, route dispositions, and recomputed summary counts."""
 
     diagnostics: list[dict[str, object]] = []
-    if string_at(document, "schema_version") != "1":
+    if string_at(document, "schema_version") != "2":
         add_issue(
             diagnostics,
             "ACC_SCOPE_SCHEMA_VERSION_INVALID",
-            'schema_version must be "1"',
+            'schema_version must be "2"',
             path=path,
             pointer="/schema_version",
         )
@@ -620,6 +621,18 @@ def audit_inventory(
                     path=path,
                     pointer=f"/scope/selected_domains/{index}",
                 )
+    discovery = mapping_at(document, "discovery")
+    methods = string_list_at(discovery, "methods") if discovery is not None else None
+    if mode in {"domain_complete", "system_complete"} and (
+        methods is None or len(methods) != len(set(methods)) or set(methods) != SUPPORTED_METHODS
+    ):
+        add_issue(
+            diagnostics,
+            "ACC_SCOPE_DISCOVERY_METHODS_INCOMPLETE",
+            "complete scope discovery must list every supported method exactly once",
+            path=path,
+            pointer="/discovery/methods",
+        )
 
     valid_structured_exclusions, structured_diagnostics = audit_structured_exclusion_authorities(
         document, path=path
@@ -645,7 +658,7 @@ def audit_inventory(
         eligible_route = string_at(route, "eligibility") == "eligible"
         if eligible_route:
             source_counters["discovered_routes"] += 1
-            source_counters["eligible_read_routes"] += 1
+            source_counters["eligible_routes"] += 1
         route_id = string_at(route, "id")
         if route_id is None or not route_id:
             counters["unresolved"] += 1
@@ -688,13 +701,39 @@ def audit_inventory(
                 pointer=f"{pointer}/path",
             )
 
-        if string_at(route, "method") not in {"GET", "HEAD"}:
+        if string_at(route, "method") not in {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"}:
             add_issue(
                 diagnostics,
                 "ACC_SCOPE_METHOD_INVALID",
-                "scope inventory permits GET or HEAD",
+                "scope inventory method is unsupported",
                 path=path,
                 pointer=f"{pointer}/method",
+            )
+        route_kind = string_at(route, "kind")
+        route_effect = string_at(route, "effect")
+        if route_kind not in {"read", "action"}:
+            add_issue(
+                diagnostics,
+                "ACC_SCOPE_KIND_INVALID",
+                "route kind must be read or action",
+                path=path,
+                pointer=f"{pointer}/kind",
+            )
+        if route_effect not in {"read", "create", "update", "delete", "transition", "execute"}:
+            add_issue(
+                diagnostics,
+                "ACC_SCOPE_EFFECT_INVALID",
+                "route effect must be explicitly declared",
+                path=path,
+                pointer=f"{pointer}/effect",
+            )
+        elif (route_kind == "read") != (route_effect == "read"):
+            add_issue(
+                diagnostics,
+                "ACC_SCOPE_KIND_EFFECT_MISMATCH",
+                "read routes require effect=read; action routes require a mutation effect",
+                path=path,
+                pointer=f"{pointer}/effect",
             )
         evidence = non_empty_string_list(route.get("evidence_sources"))
         if evidence is None:
@@ -727,7 +766,7 @@ def audit_inventory(
                 pointer=f"{pointer}/eligibility",
             )
         if eligibility == "eligible":
-            counters["eligible_read_routes"] += 1
+            counters["eligible_routes"] += 1
         disposition = string_at(route, "disposition")
         if disposition not in DISPOSITIONS:
             counters["unresolved"] += 1
@@ -778,7 +817,7 @@ def audit_inventory(
 
         reason = string_at(route, "reason")
         structured_reason_authority = (
-            mode == "system_readonly_complete"
+            mode == "system_complete"
             and eligibility == "eligible"
             and disposition == "excluded"
             and index in valid_structured_exclusions
@@ -807,7 +846,7 @@ def audit_inventory(
                 )
             else:
                 operation_ids.add(operation_id)
-        if mode == "system_readonly_complete" and disposition == "out_of_scope":
+        if mode == "system_complete" and disposition == "out_of_scope":
             add_issue(
                 diagnostics,
                 "ACC_SCOPE_OUT_OF_SCOPE_FORBIDDEN",
@@ -815,7 +854,7 @@ def audit_inventory(
                 path=path,
                 pointer=f"{pointer}/disposition",
             )
-        if mode == "system_readonly_complete" and disposition == "blocked_on_evidence":
+        if mode == "system_complete" and disposition == "blocked_on_evidence":
             add_issue(
                 diagnostics,
                 "ACC_SCOPE_EVIDENCE_BLOCKED",
@@ -1107,7 +1146,7 @@ def audit_subjective_exclusion_approval(
 ) -> list[dict[str, object]]:
     diagnostics: list[dict[str, object]] = []
     scope = mapping_at(inventory, "scope") or {}
-    if string_at(scope, "mode") != "system_readonly_complete":
+    if string_at(scope, "mode") != "system_complete":
         return diagnostics
     approved = approved_exclusion_route_ids(inventory)
     for route_id, (index, route) in index_routes(inventory).items():
@@ -1150,7 +1189,7 @@ def audit_frontend_used_exclusions(
             pointer=f"/routes/{index}/usage_evidence_sources",
             severity="warning",
         )
-        if mode == "system_readonly_complete" and route_id not in approved:
+        if mode == "system_complete" and route_id not in approved:
             add_issue(
                 diagnostics,
                 "ACC_SCOPE_FRONTEND_USED_ROUTE_EXCLUDED",
@@ -1167,7 +1206,7 @@ def audit_domain_capability_coverage(
     diagnostics: list[dict[str, object]] = []
     scope = mapping_at(inventory, "scope") or {}
     mode = string_at(scope, "mode")
-    if mode not in {"system_readonly_complete", "domain_complete"}:
+    if mode not in {"system_complete", "domain_complete"}:
         return diagnostics
     selected_domains = set(string_list_at(scope, "selected_domains") or [])
     routes_by_domain: dict[str, list[tuple[str, int, Mapping[str, object]]]] = defaultdict(list)
@@ -1265,7 +1304,7 @@ def audit_plan_scope_coverage(
 
     diagnostics: list[dict[str, object]] = []
     scope = mapping_at(inventory, "scope") or {}
-    if string_at(scope, "mode") != "system_readonly_complete":
+    if string_at(scope, "mode") != "system_complete":
         return diagnostics
     coverage = mapping_at(capability_plan, "coverage")
     if coverage is None:
@@ -1285,7 +1324,7 @@ def audit_plan_scope_coverage(
         )
         return diagnostics
     if (
-        string_at(coverage, "scope_mode") != "system_readonly_complete"
+        string_at(coverage, "scope_mode") != "system_complete"
         or string_at(coverage, "scope_inventory") != "scope-inventory.yaml"
     ):
         add_issue(

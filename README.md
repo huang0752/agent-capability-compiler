@@ -50,7 +50,7 @@ ACC 负责：
 
 - 稳定的 `acc` CLI、Schema 和结构化诊断；
 - Evidence 绑定、引用检查、Policy 校验和 Workflow 编译；
-- SourceContract、CapabilityQuality、Eval、Coverage v2 和可重复构建的 Capability Pack；
+- SourceContract、CapabilityQuality、Eval、九轴 Coverage 和可重复构建的 Capability Pack；
 - 固定通用 Runtime、MCP stdio、REST Provider、Provider 级认证和 SecretRef；
 - Adapter SDK 基础契约、测试工具和 Fake Adapter；
 - 面向 Coding Agent 的 ACC Engineer Skill。
@@ -63,7 +63,7 @@ ACC **不**负责：
 - 在 Runtime 中动态生成代码、HTTP 请求或工作流；
 - 生产级 Action 审批 UI、durable Action Store、集中审计控制面，以及插件市场、Kubernetes、Helm、OCI、SOAP、gRPC、数据库 Adapter、消息队列、RPA 或浏览器录制。
 
-当前稳定可执行入口支持 **v1 REST `GET/HEAD` 只读 Operation、Capability Pack、MCP stdio 和多用户 `streamable_http` Gateway**。v2 已具备 SourceContract、CapabilityQuality、Action 模型、编译证明、Pack/Loader 合同和直接 Runtime Action 状态机基础，但 Action 尚未接入通用 MCP 工具面，也没有生产 durable Store/审批签发实现。Gateway 是 Generic Runtime 的可选运行时适配层：它负责 HTTP 身份、会话隔离和请求级 `PrincipalContext`，不是用户/租户管理平台、权限源或 SaaS 控制面。
+当前唯一格式为 `2`。稳定可执行入口支持证据绑定的 Read Operation、Capability Pack、MCP stdio 和多用户 `streamable_http` Gateway。Action 已具备模型、编译证明、Pack/Loader 合同和直接 Runtime 状态机基础，但尚未接入通用 MCP 工具面，也没有生产 durable Store/审批签发实现。Gateway 是 Generic Runtime 的可选运行时适配层：它负责 HTTP 身份、会话隔离和请求级 `PrincipalContext`，不是用户/租户管理平台、权限源或 SaaS 控制面。
 
 ## 架构
 
@@ -83,7 +83,7 @@ ACC **不**负责：
 2. **AI 负责创造，ACC 负责约束**：分析和候选定义可以由 Agent 完成，最终有效性由确定性工具验证。
 3. **通用 Runtime**：每个系统只生成数据化的 Pack，不复制一套 Runtime 源码。
 4. **证据先于约束**：Evidence 通过 SourceContract provenance 支持 Operation Schema；观测样本不能证明业务上界。
-5. **默认拒绝写**：v1 永远只读；v2 Action 只有同时通过 effect/risk、部署 allowlist、Scope、审批、幂等和并发门禁才可能执行。
+5. **默认拒绝写**：Action 只有同时通过 effect/risk、部署 allowlist、Scope、审批、幂等和并发门禁才可能执行。
 6. **原系统源码只读**：所有生成物写入独立 ACC 项目；Engineer Skill 最终停在人工 Git Review 之前。
 
 详细设计决策见 `docs/architecture/adr/`。
@@ -105,7 +105,7 @@ uv sync --all-packages --group dev
 uv run acc --help
 ```
 
-当前稳定的 v1 只读接入流程如下：
+当前格式的接入流程如下：
 
 ```bash
 # 在独立目录创建 ACC 项目；不要在原系统目录中生成文件
@@ -119,7 +119,7 @@ acc doctor --json
 # 校验、编译和查看覆盖率
 acc validate --json
 acc compile --check --json
-acc coverage --version 1 --json
+acc coverage --json
 
 # 执行契约、Runtime 和端到端测试
 acc test contract --json
@@ -131,7 +131,7 @@ acc pack --json
 acc run example-crm-0.1.0.accpkg
 ```
 
-以上 v1 命令均已在当前检出版本实现；开发仓库中可以统一写成 `uv run acc ...`。Project v2 使用 `acc coverage --version 2 --json`（不显式指定时按项目版本选择），并要求项目根存在合法 `scope-inventory.yaml`。
+以上命令均已在当前检出版本实现；开发仓库中可以统一写成 `uv run acc ...`。Coverage 只提供当前九轴报告，并要求项目根存在合法 `scope-inventory.yaml`。
 
 ### 运行多用户 Gateway
 
@@ -151,7 +151,7 @@ uv run acc run build/my-system.accpkg \
   --workers 1
 ```
 
-`--allowed-host` 至少给出一个精确值；`--allowed-origin` 也是精确清单，不支持通配符。端口、TTL、容量、MCP idle timeout 和请求体上限均由部署方显式限定。Gateway v1 只支持单进程 `--workers 1`，因为 Gateway Session 与 MCP Session 均是进程内状态。明文 HTTP 只允许绑定 loopback；绑定非 loopback IP 必须同时提供 `--tls-certfile` 和 `--tls-keyfile`，或在受信反向代理后仅监听 loopback。
+`--allowed-host` 至少给出一个精确值；`--allowed-origin` 也是精确清单，不支持通配符。端口、TTL、容量、MCP idle timeout 和请求体上限均由部署方显式限定。Gateway 只支持单进程 `--workers 1`，因为 Gateway Session 与 MCP Session 均是进程内状态。明文 HTTP 只允许绑定 loopback；绑定非 loopback IP 必须同时提供 `--tls-certfile` 和 `--tls-keyfile`，或在受信反向代理后仅监听 loopback。
 
 Gateway 的 `acc run` 不加 `--json` 时启动并持续服务；加 `--json` 时只加载 Pack、验证 Gateway 组合并返回脱敏配置，不启动监听器。
 
@@ -250,10 +250,10 @@ my-system-acc/
 
 ### Project
 
-Project 绑定只读源码工作区和 HTTP Provider，但只保存凭据引用。下面是继续受支持的 v1 形状：
+Project 绑定只读源码工作区和 HTTP Provider，但只保存凭据引用。当前合同如下：
 
 ```yaml
-schema_version: "1"
+schema_version: "2"
 project:
   id: example-crm
   version: 0.1.0
@@ -268,6 +268,8 @@ provider:
   auth:
     kind: bearer_secret
     token_ref: CRM_USER_TOKEN
+quality:
+  profile: standard
 ```
 
 认证是 Provider 合同，不是 Operation 参数。新项目按目标系统选择以下互斥配置：
@@ -276,19 +278,17 @@ provider:
 - `bearer_secret`：从 `token_ref` 指向的部署环境变量读取既有 Bearer Secret；适合本地 `stdio` 的服务账号或测试账号。
 - `password_bearer`：调用配置的登录端点换取 JWT。`stdio` 只能使用环境中的账号/密码引用；`streamable_http` 只能使用 Gateway 会话提交的一次性登录材料，Pack 不保存用户账密或 JWT。
 
-旧项目的 Operation 级 `credential_ref` 仅保留为 `stdio` 迁移兼容合同。新项目必须使用 `provider.auth`，同一项目不得混用两种凭据位置。
-
-Project v1 保持只读兼容。Project v2 选择显式质量 profile，并为每个 Operation 配套 SourceContract、为每个 Capability 配套 CapabilityQuality；v2 文档不会让旧 Pack 或旧项目自动获得写权限。
+Operation 不得保存 `credential_ref`；认证只能通过 `provider.auth` 表达。Project 必须选择质量 profile，并为每个 Operation 配套 SourceContract、为每个 Capability 配套 CapabilityQuality。旧格式文档和 Pack 会被稳定拒绝，不做隐式迁移。
 
 ### Operation、Evidence 与 SourceContract
 
-Operation 是已有系统的原子 HTTP 操作。v1 只接受 `GET` 和 `HEAD`；正式 Operation 必须绑定 Evidence：
+Operation 是已有系统的原子 HTTP 操作。Read 必须显式声明 `effect: read`；`POST` 等非安全方法若用于查询，还必须提供证据分类，不能只凭 HTTP 方法猜测效果。正式 Operation 必须绑定 Evidence：
 
 ```yaml
-schema_version: "1"
+schema_version: "2"
 id: crm.get_customer
 title: 获取客户资料
-kind: http
+kind: read
 input_schema:
   type: object
   additionalProperties: false
@@ -320,13 +320,13 @@ evidence:
 
 Evidence 可以定位到文件和行号、JSON Pointer 或 OpenAPI Operation，并携带内容摘要。ACC 不允许用常识或模型猜测补全路径、字段、Scope 或租户规则。
 
-v2 SourceContract 将证据归一化为 `request_schema`、`response_schema`、完整性和 JSON Pointer 级 provenance。Action Operation 还必须提供证据绑定的 `action_semantics`，逐字段证明 method、effect、risk、reversibility、retry、idempotency 与 concurrency；仅运行观测不能作为安全降级依据。Operation 输入必须是源系统可接受请求的安全子集；Operation 输出必须覆盖源系统可能返回的响应。无法证明的 Schema 关系报告 `unknown`，证据冲突报告错误；运行观测不能用来伪造 `maxItems`、`maxLength` 等上界。
+SourceContract 将证据归一化为 `request_schema`、`response_schema`、完整性和 JSON Pointer 级 provenance。Action Operation 还必须提供证据绑定的 `action_semantics`，逐字段证明 method、effect、risk、reversibility、retry、idempotency 与 concurrency；仅运行观测不能作为安全降级依据。Operation 输入必须是源系统可接受请求的安全子集；Operation 输出必须覆盖源系统可能返回的响应。无法证明的 Schema 关系报告 `unknown`，证据冲突报告错误；运行观测不能用来伪造 `maxItems`、`maxLength` 等上界。
 
 如果源接口需要可信身份或租户值，Operation 用 `context_bindings` 声明注入位置，例如把 `tenant_id` 绑定到 `tenant_context.tenant_id`。绑定值只能由 Runtime 的不可变 `PrincipalContext` 提供，Agent 输入和 Workflow 参数都不能覆盖；Provider 还必须通过 `context_binding_allowlist` 显式允许租户路径。`PrincipalContext` 保存 principal、目标系统、有效 Scope 和受限租户上下文，但不公开 JWT、密码、Authorization Header 或内部认证状态。
 
 ### Capability、Policy 与 Eval
 
-Capability 是 Agent 看见的业务级工具，可以组合多个 Operation。v1/read Workflow 支持：
+Capability 是 Agent 看见的业务级工具，可以组合多个 Operation。Read Workflow 支持：
 
 ```text
 call  pick  map  filter  assert  redact
@@ -337,19 +337,19 @@ Workflow 不是任意代码执行环境：不支持 Python、JavaScript、shell�
 
 Policy 描述 required scopes、tenant mode、readable/denied fields 和 redaction rules。Eval 描述输入、Fake System 预置、期望调用、输出 Schema、期望错误以及禁止泄露的字段。每个 Capability 至少需要一个正常 Eval；涉及权限的 Capability 必须包含负例 Eval。
 
-v2 CapabilityQuality 另外记录业务 intent、selector acquisition、producer Capability、组合理由、失败模式和输出预算。单 Operation Capability 不是天然缺陷；search/list、detail、单 job monitor 都可能是正确边界。需要诊断的是不可构造 selector、无发现入口、无业务锚点的独立 fan-in、list 与强制 detail 耦合，以及无法证明或超预算的输出。Capability 输出只有经过可证明的 `pick/map/filter/redact` 或数据流投影才能窄于 Operation 输出。
+CapabilityQuality 另外记录业务 intent、selector acquisition、producer Capability、组合理由、失败模式和输出预算。单 Operation Capability 不是天然缺陷；search/list、detail、单 job monitor 都可能是正确边界。需要诊断的是不可构造 selector、无发现入口、无业务锚点的独立 fan-in、list 与强制 detail 耦合，以及无法证明或超预算的输出。Capability 输出只有经过可证明的 `pick/map/filter/redact` 或数据流投影才能窄于 Operation 输出。
 
-### v2 Action 状态机与当前边界
+### Action 状态机与当前边界
 
-v2 Action 使用显式 `prepare → approve → commit → status` 状态机。Action Operation 必须声明 effect、risk、reversibility、retry、idempotency 和 concurrency；编译器证明 preview 只读、commit 的变更拓扑受限，并按风险推导审批要求。部署策略默认 `allowed_effects={read}`，Pack 声明不能自行扩大部署权限。
+Action 使用显式 `prepare → approve → commit → status` 状态机。Action Operation 必须声明 effect、risk、reversibility、retry、idempotency 和 concurrency；编译器证明 preview 只读、commit 的变更拓扑受限，并按风险推导审批要求。部署策略默认 `allowed_effects={read}`，Pack 声明不能自行扩大部署权限。
 
-当前仓库已经有严格 v2 模型、证据绑定的 Action semantics、编译与 Runtime 双重证明、Pack/Loader 兼容、部署策略、Action Coordinator、secret-safe 审计合同和开发/测试内存 Store。普通 Generic Runtime 的 `tools()`/`call()` 仍会拒绝 Action 并要求专用生命周期，因此 MCP stdio 与 Streamable HTTP 尚未对 Agent 暴露 Action 工具。内存 Store 明确不是 durable 实现；生产 Action 仍缺少可信审批签发、durable Store、生产审计后端和完整 MCP/CLI 接线。不能通过允许任意 `POST` 绕过这些边界。
+当前仓库已经有严格的当前模型、证据绑定的 Action semantics、编译与 Runtime 双重证明、Pack/Loader 版本门禁、部署策略、Action Coordinator、secret-safe 审计合同和开发/测试内存 Store。普通 Generic Runtime 的 `tools()`/`call()` 仍会拒绝 Action 并要求专用生命周期，因此 MCP stdio 与 Streamable HTTP 尚未对 Agent 暴露 Action 工具。内存 Store 明确不是 durable 实现；生产 Action 仍缺少可信审批签发、durable Store、生产审计后端和完整 MCP/CLI 接线。不能通过允许任意 `POST` 绕过这些边界。
 
-### Scope callability 与 Coverage v2
+### Scope callability 与 Coverage
 
 部署 Scope ceiling 只会收紧 Pack 的 Scope 要求。`acc run` 在监听前报告每个 Capability 的 `callable`、`conditional`、`denied` 或 `unknown`；空 ceiling 默认拒绝，`--strict-scope` 可拒绝确定不可调用的部署，`--scope-ceiling-from-pack` 也不代表 Pack 自动获得源权限。登录前未知的用户源权限保持 `unknown`，登录后仍由源系统执行最终授权。
 
-Coverage v2 直接消费平台中立的 Scope Inventory，并分别报告 `route_disposition`、`operation_trace`、`scenario_coverage`、`constructability`、`discoverability_graph`、`composition`、`schema_fidelity`、`output_budget` 和 `live_observations`。它不生成总分，也不把“路由已分类”解释为“Capability 可用”。Coverage v1 继续作为兼容输出保留。
+Coverage 直接消费平台中立的 Scope Inventory，并分别报告 `route_disposition`、`operation_trace`、`scenario_coverage`、`constructability`、`discoverability_graph`、`composition`、`schema_fidelity`、`output_budget` 和 `live_observations`。它不生成总分，也不把“路由已分类”解释为“Capability 可用”。
 
 ### Capability Pack
 
@@ -366,7 +366,7 @@ evidence/
 pack.lock
 ```
 
-v2 Pack 还携带经过校验的 SourceContract、CapabilityQuality 和编译证明摘要；Loader 仍按版本白名单拒绝未知成员。Pack 不携带生产 Secret、原始审批材料或可执行客户代码。
+Pack 携带经过校验的 SourceContract、CapabilityQuality 和编译证明摘要；Loader 按当前格式白名单拒绝未知成员。Pack 不携带生产 Secret、原始审批材料或可执行客户代码。
 
 同样输入应生成完全一致的摘要。Loader 拒绝符号链接、路径穿越、未知额外文件和摘要不匹配；文件顺序和时间戳必须稳定或归一化。
 
@@ -375,7 +375,7 @@ v2 Pack 还携带经过校验的 SourceContract、CapabilityQuality 和编译证
 安全边界不是提示词约定，而是编译器和 Runtime 的强制约束：
 
 - **只读源工作区**：Engineer Skill 在 Preflight 检查写入风险，只能修改独立 ACC 项目。
-- **版本化效果边界**：v1 Operation 仅允许 `GET`/`HEAD` 且 effect 为 `read`；v2 也默认只允许 read，Action 必须经过显式模型、编译证明和部署授权。
+- **效果边界**：Read Operation 仅允许 `GET`/`HEAD` 且 effect 为 `read`；Action 必须经过显式模型、编译证明和部署授权。
 - **固定目标**：禁止绝对 URL、动态 Host、任意外部域名、路径穿越和工具参数覆盖 Header。
 - **凭据隔离**：工具输入不能携带 Token；Pack 的 Provider auth 只保存环境引用或 Gateway source 类型；Runtime 注入凭据且不得记录 Secret。
 - **严格 Schema**：公开模型禁止未知字段，Operation 输入输出和 Capability 输出均通过 JSON Schema Draft 2020-12 校验。
@@ -469,14 +469,14 @@ uv run ruff format packages tests skills
 | M6 | FastAPI CRM 端到端验收 | 已完成 |
 | M7 | Provider 级认证、PrincipalContext 与结构化范围治理 | 已完成 |
 | M8 | 可选多用户 Streamable HTTP Gateway | 已完成 |
-| M9 | v2 SourceContract、CapabilityQuality、Scope callability、Coverage v2 | 开发中：核心合同和聚焦测试已落地，尚未完成发布门禁 |
-| M10 | v2 Action 编译/Runtime 状态机与 Live 验证 | 开发中：基础实现存在，MCP Action、durable Store 和生产审批/审计尚未完成 |
+| M9 | SourceContract、CapabilityQuality、Scope callability、九轴 Coverage | 已完成 |
+| M10 | Action 编译/Runtime 状态机与 Live 验证 | 开发中：基础实现存在，MCP Action、durable Store 和生产审批/审计尚未完成 |
 
 更细的检出版本进度记录在 `docs/progress.md`。生产可用性必须以发布说明、对应 Pack/Runtime 测试证据和安全评审为准。
 
 ## 路线图原则
 
-后续版本继续完成 v2 质量发布门禁、Action MCP/CLI 接线、durable Store、可信审批与审计实现。在这些边界有明确实现和验证前，以下规则保持不变：运行期无 LLM、原系统源码零代码修改、正式 Operation 必须证据绑定、Runtime 通用且确定、部署默认只允许 read、不能宣称生产写入已可用。
+后续版本继续完成 Action MCP/CLI 接线、durable Store、可信审批与审计实现。在这些边界有明确实现和验证前，以下规则保持不变：运行期无 LLM、原系统源码零代码修改、正式 Operation 必须证据绑定、Runtime 通用且确定、部署默认只允许 read、不能宣称生产写入已可用。
 
 ## License
 

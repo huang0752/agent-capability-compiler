@@ -1,22 +1,127 @@
 {
   "command": "coverage",
-  "diagnostics": [],
+  "diagnostics": [
+    {
+      "code": "ACC_CAPABILITY_OUTPUT_BOUND_UNKNOWN",
+      "message": "Capability output size has no proven static upper bound.",
+      "severity": "warning"
+    }
+  ],
   "ok": true,
   "result": {
-    "capabilities_without_evals": [],
-    "capabilities_without_negative_evals": [],
-    "capabilities_without_permission_negative_evals": [],
-    "coverage_version": "1",
-    "one_interface_one_tool_risks": [
-      "find_overdue_followups",
-      "search_customers"
-    ],
-    "orphan_operations": [],
-    "summary": {
-      "capabilities": 3,
-      "evals": 9,
-      "findings": 2,
-      "operations": 6
+    "coverage_version": "2",
+    "route_disposition": {
+      "eligible_route_ids": [
+        "GET /customers",
+        "GET /customers/{customer_id}",
+        "GET /customers/{customer_id}/contacts",
+        "GET /customers/{customer_id}/followups",
+        "GET /customers/{customer_id}/todos",
+        "GET /followups/overdue"
+      ],
+      "planned": [],
+      "composed": [
+        "GET /customers",
+        "GET /customers/{customer_id}",
+        "GET /customers/{customer_id}/contacts",
+        "GET /customers/{customer_id}/followups",
+        "GET /customers/{customer_id}/todos",
+        "GET /followups/overdue"
+      ],
+      "excluded": [],
+      "blocked_on_evidence": [],
+      "out_of_scope": []
+    },
+    "operation_trace": {
+      "traced_route_ids": [
+        "GET /customers",
+        "GET /customers/{customer_id}",
+        "GET /customers/{customer_id}/contacts",
+        "GET /customers/{customer_id}/followups",
+        "GET /customers/{customer_id}/todos",
+        "GET /followups/overdue"
+      ],
+      "broken_route_ids": [],
+      "operations_without_routes": []
+    },
+    "scenario_coverage": {
+      "with_success": [
+        "find_overdue_followups",
+        "get_customer_context",
+        "search_customers"
+      ],
+      "without_success": [],
+      "with_negative": [
+        "find_overdue_followups",
+        "get_customer_context",
+        "search_customers"
+      ],
+      "without_negative": []
+    },
+    "constructability": {
+      "entrypoints": [
+        "find_overdue_followups",
+        "get_customer_context",
+        "search_customers"
+      ],
+      "reachable": [
+        "find_overdue_followups",
+        "get_customer_context",
+        "search_customers"
+      ],
+      "dead_ends": [],
+      "diagnostics": []
+    },
+    "discoverability_graph": {
+      "nodes": [
+        "find_overdue_followups",
+        "get_customer_context",
+        "search_customers"
+      ],
+      "edges": []
+    },
+    "composition": {
+      "components": {
+        "find_overdue_followups": 1,
+        "get_customer_context": 1,
+        "search_customers": 1
+      },
+      "diagnostics": []
+    },
+    "schema_fidelity": {
+      "analyzed_operation_ids": [
+        "crm.find_overdue_followups",
+        "crm.get_customer",
+        "crm.list_customer_contacts",
+        "crm.list_customer_followups",
+        "crm.list_customer_todos",
+        "crm.search_customers"
+      ],
+      "unanalyzed_operation_ids": [],
+      "diagnostics": []
+    },
+    "output_budget": {
+      "status_by_capability": {
+        "find_overdue_followups": "unknown",
+        "get_customer_context": "unknown",
+        "search_customers": "unknown"
+      },
+      "diagnostics": [
+        {
+          "code": "ACC_CAPABILITY_OUTPUT_BOUND_UNKNOWN",
+          "message": "Capability output size has no proven static upper bound.",
+          "severity": "warning"
+        }
+      ]
+    },
+    "live_observations": {
+      "status": "not_observed",
+      "observations": [],
+      "unobserved_capability_ids": [
+        "find_overdue_followups",
+        "get_customer_context",
+        "search_customers"
+      ]
     }
   }
 }

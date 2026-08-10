@@ -16,19 +16,19 @@
 5. 将敏感字段限制落实到 Policy、redact 和 Eval 的 `forbidden_fields`。
 6. 每次修改后检查写入路径和原系统只读基线。
 7. 为 CapabilityQuality 落实 selector acquisition、producer graph、failure isolation、output budget 与长文本披露。Capability 输出收紧必须由工作流的 pick/map/filter/redact/dataflow 可证明，不能靠手写 Schema 假设。
-8. v1 只创建 `GET`/`HEAD` read Operation。仅在显式 v2 Action 项目中实现 `prepare → approve → commit → status`；commit 使用不透明 approval handle，并落实 idempotency、concurrency 和 retry 合同。不得简单放开 POST。
+8. Read Operation 必须显式声明 `read` effect，不能从 HTTP 方法推断；仅在显式 Action 项目中实现 `prepare → approve → commit → status`。commit 使用不透明 approval handle，并落实 idempotency、concurrency 和 retry 合同。不得简单放开 POST。
 
 ## 门禁
 
 - 正式 Operation 均有 Evidence，且不存在绝对 URL、动态 Host、Token 参数、Header 覆盖或路径穿越。
-- v1 不包含写方法、动态代码、Shell、`eval`、任意导入或运行时生成请求。v2 Action 只能使用模型允许且有 Evidence 的显式方法和 effect。
+- Read Operation 不包含写方法、动态代码、Shell、`eval`、任意导入或运行时生成请求。Action 只能使用模型允许且有 Evidence 的显式方法和 effect。
 - 定义中只有 SecretRef 名称，没有生产 Secret；fixtures 不复制生产数据。
-- Provider auth 与 transport 组合合法；Operation 级 `credential_ref` 只用于 legacy `stdio`，新项目不得依赖。
+- Provider auth 与 transport 组合合法；Operation 不得保存 `credential_ref`。
 - `PrincipalContext`、JWT、密码和 Header 不属于公共 Schema；`context_bindings` 目标不能由 Agent 或 Workflow 覆盖。
 - 原系统文件、数据库、认证和部署修改数量为零。
 - 每个实现的 Operation 都可经 `scope_route_ids` 回溯到 `planned`/`composed` 路由。
 - Schema fidelity 无 evidence conflict；unknown 保持诊断，不通过伪造上界消除。
-- v2 Action 的 approval、幂等、并发、重试和状态查询合同完整，且没有把 Secret/Principal/approval grant 暴露为 Agent 输入。
+- Action 的 approval、幂等、并发、重试和状态查询合同完整，且没有把 Secret/Principal/approval grant 暴露为 Agent 输入。
 
 ## 输出
 

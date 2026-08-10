@@ -20,6 +20,8 @@ def _route(
     domain: str = "customer",
     disposition: str = "planned",
     method: str = "GET",
+    kind: str = "read",
+    effect: str = "read",
     evidence_sources: list[str] | None = None,
     reason: str | None = None,
     operation_id: str | None = "customer.search",
@@ -32,6 +34,8 @@ def _route(
         "id": route_id,
         "domain": domain,
         "method": method,
+        "kind": kind,
+        "effect": effect,
         "path": f"/api/{route_id.replace('.', '/')}",
         "evidence_sources": (["customer-routes"] if evidence_sources is None else evidence_sources),
         "eligibility": eligibility,
@@ -84,7 +88,7 @@ def _rule(
 def _summary(routes: list[object]) -> dict[str, int]:
     result = {
         "discovered_routes": len(routes),
-        "eligible_read_routes": 0,
+        "eligible_routes": 0,
         "planned": 0,
         "composed": 0,
         "excluded": 0,
@@ -97,7 +101,7 @@ def _summary(routes: list[object]) -> dict[str, int]:
             result["unresolved"] += 1
             continue
         if route.get("eligibility") == "eligible":
-            result["eligible_read_routes"] += 1
+            result["eligible_routes"] += 1
         disposition = route.get("disposition")
         if isinstance(disposition, str) and disposition in result:
             result[disposition] += 1
@@ -115,7 +119,7 @@ def _source_scope(routes: list[object]) -> dict[str, int]:
         ]
     )
     return {
-        "eligible_read_routes": summary["eligible_read_routes"],
+        "eligible_routes": summary["eligible_routes"],
         "planned_or_composed": summary["planned"] + summary["composed"],
         "excluded": summary["excluded"],
         "blocked_on_evidence": summary["blocked_on_evidence"],
@@ -126,7 +130,7 @@ def _source_scope(routes: list[object]) -> dict[str, int]:
 def _write_project(
     tmp_path: Path,
     *,
-    mode: str | None = "system_readonly_complete",
+    mode: str | None = "system_complete",
     user_confirmation: str | None = None,
     selected_domains: list[str] | None = None,
     declared_domains: list[str] | None = None,
@@ -159,8 +163,14 @@ def _write_project(
     summary = _summary(actual_routes)
     summary.update(summary_overrides or {})
     inventory = {
-        "schema_version": "1",
+        "schema_version": "2",
         "scope": scope,
+        "discovery": {
+            "source_commit": "git:0123456789abcdef",
+            "methods": ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"],
+            "include_paths": ["app"],
+            "evidence_sources": ["routes"],
+        },
         "domains": [
             {"id": domain}
             for domain in (
@@ -291,13 +301,13 @@ def _run(project: Path) -> tuple[subprocess.CompletedProcess[str], dict[str, Any
 
 
 def test_system_complete_accepts_a_fully_disposed_inventory(tmp_path: Path) -> None:
-    project = _write_project(tmp_path, mode="system_readonly_complete")
+    project = _write_project(tmp_path, mode="system_complete")
 
     completed, payload = _run(project)
 
     assert completed.returncode == 0
     assert payload["ok"] is True
-    assert payload["result"]["scope_mode"] == "system_readonly_complete"
+    assert payload["result"]["scope_mode"] == "system_complete"
 
 
 def test_pilot_requires_explicit_user_confirmation(tmp_path: Path) -> None:
@@ -392,7 +402,6 @@ def test_route_contract_violations_have_stable_codes(tmp_path: Path) -> None:
     assert completed.returncode == 3
     assert {item["code"] for item in payload["diagnostics"]} == {
         "ACC_SCOPE_ROUTE_DUPLICATE",
-        "ACC_SCOPE_METHOD_INVALID",
         "ACC_SCOPE_EVIDENCE_REQUIRED",
         "ACC_SCOPE_REASON_REQUIRED",
         "ACC_SCOPE_OPERATION_REQUIRED",
@@ -505,7 +514,7 @@ def test_ineligible_routes_are_not_counted_as_eligible(tmp_path: Path) -> None:
     completed, payload = _run(project)
 
     assert completed.returncode == 0
-    assert payload["result"]["source_scope"]["eligible_read_routes"] == 0
+    assert payload["result"]["source_scope"]["eligible_routes"] == 0
 
 
 def test_source_scope_counts_only_eligible_route_dispositions(
@@ -532,14 +541,14 @@ def test_source_scope_counts_only_eligible_route_dispositions(
 
     assert diagnostics == []
     assert inventory["summary"]["excluded"] == 1
-    assert result["source_scope"]["eligible_read_routes"] == 1
+    assert result["source_scope"]["eligible_routes"] == 1
     assert result["source_scope"]["planned"] == 1
     assert result["source_scope"]["composed"] == 0
     assert result["source_scope"]["excluded"] == 0
     assert result["source_scope"]["blocked_on_evidence"] == 0
     assert result["source_scope"]["unresolved"] == 0
     assert script["coverage_source_scope"](result["source_scope"]) == {
-        "eligible_read_routes": 1,
+        "eligible_routes": 1,
         "planned_or_composed": 1,
         "excluded": 0,
         "blocked_on_evidence": 0,
@@ -608,7 +617,7 @@ def test_coverage_baseline_source_scope_must_match_inventory_denominator(
     project = _write_project(
         tmp_path,
         baseline_source_scope={
-            "eligible_read_routes": 99,
+            "eligible_routes": 99,
             "planned_or_composed": 1,
             "excluded": 0,
             "blocked_on_evidence": 0,
@@ -702,7 +711,7 @@ def test_domain_complete_requires_outside_routes_to_be_explicitly_out_of_scope(
                 ),
             ],
         ),
-        ("system_readonly_complete", None, [], [_route("customer.search")]),
+        ("system_complete", None, [], [_route("customer.search")]),
     ],
 )
 def test_all_three_scope_modes_accept_consistent_artifacts(
@@ -773,7 +782,7 @@ def test_warning_diagnostic_is_non_blocking_and_preserves_result(tmp_path: Path)
 
     assert completed.returncode == 0
     assert payload["ok"] is True
-    assert payload["result"]["scope_mode"] == "system_readonly_complete"
+    assert payload["result"]["scope_mode"] == "system_complete"
     assert payload["diagnostics"] == [
         {
             "code": "ACC_SCOPE_HIGH_EXCLUSION_RATIO",
@@ -1765,7 +1774,7 @@ def test_system_complete_rejects_inexact_plan_route_dispositions(
         routes=[excluded, _route("customer.search")],
         exclusion_rules=[rule],
         plan_coverage={
-            "scope_mode": "system_readonly_complete",
+            "scope_mode": "system_complete",
             "scope_inventory": "scope-inventory.yaml",
             "route_dispositions": route_dispositions,
             "exclusion_decision_refs": ["/routes/0/exclusion_decision"],
@@ -1799,7 +1808,7 @@ def test_system_complete_rejects_inexact_exclusion_decision_refs(
         routes=[excluded, _route("customer.search")],
         exclusion_rules=[rule],
         plan_coverage={
-            "scope_mode": "system_readonly_complete",
+            "scope_mode": "system_complete",
             "scope_inventory": "scope-inventory.yaml",
             "route_dispositions": {
                 "planned": ["customer.search"],
@@ -1860,7 +1869,7 @@ def test_plan_coverage_diagnostic_does_not_echo_invalid_pointer_value(
     project = _write_project(
         tmp_path,
         plan_coverage={
-            "scope_mode": "system_readonly_complete",
+            "scope_mode": "system_complete",
             "scope_inventory": "scope-inventory.yaml",
             "route_dispositions": {
                 "planned": ["customer.search"],
@@ -1893,7 +1902,7 @@ def test_system_complete_plan_coverage_requires_exact_inventory_binding(
     tmp_path: Path, field: str, value: object
 ) -> None:
     coverage: dict[str, object] = {
-        "scope_mode": "system_readonly_complete",
+        "scope_mode": "system_complete",
         "scope_inventory": "scope-inventory.yaml",
         "route_dispositions": {
             "planned": ["customer.search"],

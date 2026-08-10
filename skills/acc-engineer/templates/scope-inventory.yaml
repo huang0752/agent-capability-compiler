@@ -1,7 +1,7 @@
 # Planning artifact: discovered source routes and their explicit scope dispositions.
-schema_version: "1"
+schema_version: "2"
 scope:
-  mode: system_readonly_complete
+  mode: system_complete
   user_confirmation: null
   selected_domains: []
   exclusion_approval:
@@ -9,7 +9,7 @@ scope:
     approval_text: null
 discovery:
   source_commit: "git:0123456789abcdef"
-  methods: [GET, HEAD]
+  methods: [GET, HEAD, POST, PUT, PATCH, DELETE]
   include_paths: [backend/app/api]
   evidence_sources: [api-router]
 domains:
@@ -19,13 +19,15 @@ exclusion_rules: []
 # For every eligible excluded route, add exactly one rule with:
 # id, category, route_ids, rationale, and evidence_sources. The route must
 # reference it through exclusion_rule_id and carry its own exclusion_decision.
-# A valid structured system-complete exclusion leaves legacy reason null.
-# Ineligible, blocked, out-of-scope, pilot/domain legacy exclusions still need reason.
+# A valid structured system-complete exclusion leaves reason null.
+# Ineligible, blocked, out-of-scope, pilot/domain exclusions still need reason.
 routes:
   - id: REPLACE_WITH_SCOPE_ROUTE_ID
     # Keep the established `domain` key; do not rename it to `domain_id`.
     domain: REPLACE_WITH_DOMAIN_ID
     method: GET
+    kind: read
+    effect: read
     path: /REPLACE_WITH_EVIDENCED_RESOURCE
     evidence_sources: [REPLACE_WITH_ROUTE_EVIDENCE_SOURCE]
     usage_evidence_sources: [REPLACE_WITH_NORMALIZED_USAGE_EVIDENCE_SOURCE]
@@ -38,7 +40,7 @@ routes:
     exclusion_decision: null
 summary:
   discovered_routes: 1
-  eligible_read_routes: 1
+  eligible_routes: 1
   planned: 1
   composed: 0
   excluded: 0

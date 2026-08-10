@@ -81,7 +81,7 @@ class AdapterHealth(StrictAdapterModel):
 class AdapterContract(StrictAdapterModel):
     """Versioned contract for one fixed, read-only adapter surface."""
 
-    schema_version: Literal["1"]
+    schema_version: Literal["2"]
     id: NonEmptyString
     version: NonEmptyString
     base_path: NonEmptyString

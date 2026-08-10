@@ -10,10 +10,10 @@ from acc_adapter_sdk.server import AdapterServer
 def _server() -> AdapterServer:
     contract = AdapterContract.model_validate(
         {
-            "schema_version": "1",
+            "schema_version": "2",
             "id": "test-adapter",
             "version": "0.1.0",
-            "base_path": "/adapter/v1",
+            "base_path": "/adapter/v2",
             "operations": [
                 {
                     "id": "items.list",

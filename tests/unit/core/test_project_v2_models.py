@@ -3,7 +3,16 @@ from __future__ import annotations
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
-from acc_core.models import Project, ProjectDocument, ProjectV2
+from acc_core.models import (
+    Capability,
+    CapabilityV2,
+    Operation,
+    OperationV2,
+    Project,
+    ProjectDocument,
+    ProjectV2,
+)
+from acc_core.schemas import MODEL_SCHEMAS
 
 
 def _project(version: str = "2") -> dict[str, object]:
@@ -23,13 +32,17 @@ def _project(version: str = "2") -> dict[str, object]:
     return document
 
 
-def test_project_document_dispatches_versions_without_widening_v1() -> None:
-    v1 = TypeAdapter(ProjectDocument).validate_python(_project("1"))
-    v2 = TypeAdapter(ProjectDocument).validate_python(_project("2"))
+def test_project_document_accepts_only_the_current_format() -> None:
+    with pytest.raises(ValidationError, match="schema_version"):
+        TypeAdapter(ProjectDocument).validate_python(_project("1"))
 
-    assert isinstance(v1, Project)
-    assert isinstance(v2, ProjectV2)
-    assert v2.quality.profile == "standard"
+    current = TypeAdapter(ProjectDocument).validate_python(_project("2"))
+
+    assert isinstance(current, Project)
+    assert Project is ProjectV2
+    assert TypeAdapter(Operation).json_schema() == TypeAdapter(OperationV2).json_schema()
+    assert TypeAdapter(Capability).json_schema() == TypeAdapter(CapabilityV2).json_schema()
+    assert current.quality.profile == "standard"
 
 
 def test_project_v2_requires_an_explicit_quality_profile() -> None:
@@ -40,9 +53,34 @@ def test_project_v2_requires_an_explicit_quality_profile() -> None:
         ProjectV2.model_validate(document)
 
 
-def test_project_v1_cannot_silently_accept_v2_quality_semantics() -> None:
-    document = _project("1")
-    document["quality"] = {"profile": "release"}
-
-    with pytest.raises(ValidationError, match="quality"):
-        Project.model_validate(document)
+def test_schema_exports_use_only_canonical_current_names() -> None:
+    assert set(MODEL_SCHEMAS) == {
+        "capability",
+        "capability-quality",
+        "eval",
+        "evidence",
+        "operation",
+        "policy",
+        "project",
+        "scope-inventory",
+        "source-contract",
+    }
+    for name in (
+        "capability",
+        "capability-quality",
+        "eval",
+        "operation",
+        "policy",
+        "project",
+        "scope-inventory",
+        "source-contract",
+    ):
+        schema = MODEL_SCHEMAS[name]
+        generated = (
+            schema.json_schema(mode="validation")
+            if isinstance(schema, TypeAdapter)
+            else schema.model_json_schema(mode="validation")
+        )
+        serialized = str(generated)
+        assert "'const': '1'" not in serialized
+        assert "'const': '2'" in serialized

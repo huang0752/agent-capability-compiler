@@ -5,7 +5,7 @@ from typing import cast
 
 from pydantic import JsonValue
 
-from acc_core.models import Capability, JsonObject
+from acc_core.models import ActionCapabilityV2, JsonObject, ReadCapabilityV2
 from acc_core.quality import CapabilityQuality
 from acc_core.quality.analyze import analyze_capability_quality
 
@@ -26,7 +26,7 @@ def _capability(
     *,
     properties: JsonObject | None = None,
     required: list[str] | None = None,
-) -> Capability:
+) -> ReadCapabilityV2:
     input_schema: JsonObject = {
         "type": "object",
         "additionalProperties": False,
@@ -34,9 +34,10 @@ def _capability(
     }
     if required:
         input_schema["required"] = cast(JsonValue, required)
-    return Capability.model_validate(
+    return ReadCapabilityV2.model_validate(
         {
-            "schema_version": "1",
+            "schema_version": "2",
+            "kind": "read",
             "id": capability_id,
             "title": capability_id,
             "description": capability_id,
@@ -76,6 +77,48 @@ def _quality(
             },
         }
     )
+
+
+def _action_capability(capability_id: str) -> ActionCapabilityV2:
+    return ActionCapabilityV2.model_validate(
+        {
+            "schema_version": "2",
+            "kind": "action",
+            "id": capability_id,
+            "title": capability_id,
+            "description": "Preview and commit one business action.",
+            "input_schema": {"type": "object", "properties": {}},
+            "output_schema": {"type": "object"},
+            "policy": "action-policy",
+            "evals": [f"{capability_id}-positive"],
+            "action": {
+                "execution_mode": "single",
+                "approval": {"mode": "required"},
+                "expires_in_seconds": 300,
+            },
+            "preview_workflow": [
+                _call("orders.get", {}, step_id="preview"),
+                {"emit": {"value": "$.steps.preview"}},
+            ],
+            "commit_workflow": [
+                _call("orders.update", {"preview": "$.prepared.preview"}, step_id="commit"),
+                {"emit": {"value": "$.steps.commit"}},
+            ],
+        }
+    )
+
+
+def test_action_preview_and_commit_form_one_lifecycle_composition() -> None:
+    capability = _action_capability("update_order")
+    quality = _quality("update_order", action="update", resources=["order"])
+
+    report = analyze_capability_quality(
+        {"update_order": capability},
+        {"update_order": quality},
+    )
+
+    assert report.composition_components == {"update_order": 1}
+    assert report.diagnostics == ()
 
 
 def _selector(

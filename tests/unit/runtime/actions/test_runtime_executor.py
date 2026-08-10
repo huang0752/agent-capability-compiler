@@ -252,7 +252,7 @@ def _ir() -> dict[str, Any]:
         },
         "policies": {
             "orders-write": {
-                "schema_version": "1",
+                "schema_version": "2",
                 "id": "orders-write",
                 "required_scopes": [],
                 "tenant_mode": "required",

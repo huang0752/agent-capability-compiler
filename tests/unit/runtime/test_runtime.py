@@ -39,10 +39,10 @@ from acc_runtime.runtime import (
 
 def _ir() -> dict[str, Any]:
     operation = {
-        "schema_version": "1",
+        "schema_version": "2",
+        "kind": "read",
         "id": "crm.get_customer",
         "title": "Get customer",
-        "kind": "http",
         "input_schema": {
             "type": "object",
             "additionalProperties": False,
@@ -58,22 +58,33 @@ def _ir() -> dict[str, Any]:
             "path": "/customers/{customer_id}",
             "path_parameters": {"customer_id": "customer_id"},
             "query_parameters": {},
-            "credential_ref": "CRM_TOKEN",
+            "request": None,
+            "success": {"statuses": [200], "body": "json"},
             "scopes": ["customer.read", "customer.detail"],
             "timeout_seconds": 15,
             "max_response_bytes": 1048576,
+            "safety": {
+                "effect": "read",
+                "risk": "low",
+                "reversibility": "reversible",
+                "retry": {"mode": "idempotent_only"},
+                "idempotency": {"mode": "unsupported"},
+                "concurrency": {"mode": "not_supported"},
+            },
         },
-        "safety": {"effect": "read"},
+        "context_bindings": {},
         "evidence": [
             {
                 "source_id": "crm",
-                "locator": "routes.py#L1-L5",
+                "kind": "source_file",
+                "path": "routes.py",
+                "json_pointer": "/get_customer",
                 "digest": f"sha256:{'a' * 64}",
             }
         ],
     }
     policy = {
-        "schema_version": "1",
+        "schema_version": "2",
         "id": "crm-read",
         "required_scopes": ["customer.read"],
         "tenant_mode": "required",
@@ -83,7 +94,8 @@ def _ir() -> dict[str, Any]:
         "redaction_rules": [],
     }
     capability = {
-        "schema_version": "1",
+        "schema_version": "2",
+        "kind": "read",
         "id": "get_customer",
         "title": "Get customer",
         "description": "Get one visible customer.",
@@ -111,13 +123,14 @@ def _ir() -> dict[str, Any]:
         "evals": ["normal", "forbidden"],
     }
     return {
-        "ir_version": "1",
+        "ir_version": "2",
         "project": {
-            "schema_version": "1",
-            "project": {"id": "crm", "version": "0.1.0"},
+            "schema_version": "2",
+            "project": {"id": "crm", "version": "2.0.0"},
             "source_workspace": {"path": "../system", "mode": "read_only"},
             "runtime": {"transport": ["stdio"]},
             "provider": {"kind": "http", "base_url_ref": "CRM_URL"},
+            "quality": {"profile": "standard"},
         },
         "operations": {"crm.get_customer": operation},
         "policies": {"crm-read": policy},
@@ -658,7 +671,6 @@ async def test_bound_principal_is_read_only_and_call_keeps_using_the_original_id
 
 def _authenticated_ir() -> dict[str, Any]:
     ir = _ir()
-    ir["operations"]["crm.get_customer"]["http"]["credential_ref"] = None
     ir["project"]["provider"]["auth"] = {"kind": "none"}
     return ir
 

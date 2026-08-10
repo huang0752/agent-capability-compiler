@@ -2,17 +2,23 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from acc_core.models import Capability, Operation, Policy
+from acc_core.models import (
+    ActionCapabilityV2,
+    ActionOperationV2,
+    Policy,
+    ReadCapabilityV2,
+    ReadOperationV2,
+)
 from acc_core.scope import CapabilityScopeRequirements, analyze_capability_scope_requirements
 
 
-def _operation(operation_id: str, *scopes: str) -> Operation:
-    return Operation.model_validate(
+def _operation(operation_id: str, *scopes: str) -> ReadOperationV2:
+    return ReadOperationV2.model_validate(
         {
-            "schema_version": "1",
+            "schema_version": "2",
+            "kind": "read",
             "id": operation_id,
             "title": operation_id,
-            "kind": "http",
             "input_schema": {
                 "type": "object",
                 "additionalProperties": False,
@@ -22,13 +28,30 @@ def _operation(operation_id: str, *scopes: str) -> Operation:
             "http": {
                 "method": "GET",
                 "path": f"/{operation_id}",
+                "path_parameters": {},
+                "query_parameters": {},
+                "request": None,
+                "success": {"statuses": [200], "body": "json"},
                 "scopes": list(scopes),
+                "timeout_seconds": 15,
+                "max_response_bytes": 65_536,
+                "safety": {
+                    "effect": "read",
+                    "risk": "low",
+                    "reversibility": "reversible",
+                    "retry": {"mode": "never"},
+                    "idempotency": {"mode": "unsupported"},
+                    "concurrency": {"mode": "not_supported"},
+                },
             },
-            "safety": {"effect": "read"},
+            "context_bindings": {},
             "evidence": [
                 {
                     "source_id": operation_id,
-                    "locator": f"routes.py#{operation_id}",
+                    "kind": "source_file",
+                    "path": "routes.py",
+                    "line_start": 1,
+                    "line_end": 20,
                     "digest": f"sha256:{'0' * 64}",
                 }
             ],
@@ -39,7 +62,7 @@ def _operation(operation_id: str, *scopes: str) -> Operation:
 def _policy(*scopes: str) -> Policy:
     return Policy.model_validate(
         {
-            "schema_version": "1",
+            "schema_version": "2",
             "id": "read-policy",
             "required_scopes": list(scopes),
             "tenant_mode": "none",
@@ -50,10 +73,23 @@ def _policy(*scopes: str) -> Policy:
     )
 
 
-def _capability(workflow: list[dict[str, object]]) -> Capability:
-    return Capability.model_validate(
+def _action_operation(operation_id: str, *scopes: str) -> ActionOperationV2:
+    document = _operation(operation_id, *scopes).model_dump(mode="python")
+    document["kind"] = "action"
+    http = document["http"]
+    assert isinstance(http, dict)
+    http["method"] = "POST"
+    safety = http["safety"]
+    assert isinstance(safety, dict)
+    safety["effect"] = "update"
+    return ActionOperationV2.model_validate(document)
+
+
+def _capability(workflow: list[dict[str, object]]) -> ReadCapabilityV2:
+    return ReadCapabilityV2.model_validate(
         {
-            "schema_version": "1",
+            "schema_version": "2",
+            "kind": "read",
             "id": "inspect_records",
             "title": "Inspect records",
             "description": "Inspect records through a deterministic workflow.",
@@ -72,7 +108,7 @@ def _capability(workflow: list[dict[str, object]]) -> Capability:
 
 def _analyze(
     workflow: list[dict[str, object]],
-    operations: Mapping[str, Operation],
+    operations: Mapping[str, ReadOperationV2],
     *,
     policy_scopes: tuple[str, ...] = ("policy.read",),
 ) -> CapabilityScopeRequirements:
@@ -104,6 +140,50 @@ def test_sequential_calls_and_policy_are_always_required() -> None:
     assert requirements.always_required == expected
     assert requirements.conditionally_required == frozenset()
     assert requirements.all_referenced == expected
+
+
+def test_action_completion_requires_preview_and_commit_scopes() -> None:
+    capability = ActionCapabilityV2.model_validate(
+        {
+            "schema_version": "2",
+            "kind": "action",
+            "id": "update_record",
+            "title": "Update record",
+            "description": "Preview and commit one record update.",
+            "input_schema": {"type": "object", "properties": {}},
+            "output_schema": {"type": "object"},
+            "policy": "read-policy",
+            "evals": ["normal"],
+            "action": {
+                "execution_mode": "single",
+                "approval": {"mode": "required"},
+                "expires_in_seconds": 300,
+            },
+            "preview_workflow": [
+                {"id": "preview", "call": {"operation": "preview", "arguments": {}}},
+                {"emit": {"value": "$.steps.preview"}},
+            ],
+            "commit_workflow": [
+                {"id": "commit", "call": {"operation": "commit", "arguments": {}}},
+                {"emit": {"value": "$.steps.commit"}},
+            ],
+        }
+    )
+    requirements = analyze_capability_scope_requirements(
+        capability=capability,
+        policy=_policy("records.policy"),
+        operations={
+            "preview": _operation("preview", "records.read"),
+            "commit": _action_operation("commit", "records.update"),
+        },
+    )
+
+    assert requirements.completion_alternatives == (
+        frozenset({"records.policy", "records.read", "records.update"}),
+    )
+    assert requirements.always_required == frozenset(
+        {"records.policy", "records.read", "records.update"}
+    )
 
 
 def test_branch_preserves_path_alternatives_and_separates_conditional_scopes() -> None:

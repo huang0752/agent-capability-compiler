@@ -19,12 +19,9 @@ from acc_core.models import (
     ActionCapabilityV2,
     ActionOperationV2,
     BearerSecretAuthConfig,
-    Capability,
     NoAuthConfig,
-    Operation,
     PasswordBearerAuthConfig,
     Policy,
-    Project,
     ProjectV2,
     ReadCapabilityV2,
     ReadOperationV2,
@@ -80,7 +77,7 @@ type _RuntimeOutcome = _RuntimeSuccess | _RuntimeFailure | _RuntimeCancelled
 
 
 class OperationProvider(Protocol):
-    """Legacy two-argument provider contract kept for embedded runtimes."""
+    """Two-argument provider contract for trusted embedded runtimes."""
 
     async def call(
         self,
@@ -114,7 +111,7 @@ class _PolicyOperationCaller:
         self.policy = policy
         self.principal_context = principal_context
         self.allowed_context_bindings = frozenset(allowed_context_bindings)
-        self.tenant_id = _legacy_tenant_id(principal_context)
+        self.tenant_id = _tenant_id(principal_context)
         self._provider_accepts_context = _accepts_principal_context(provider)
         self.enforcer = PolicyEnforcer()
         self.audit_observer = audit_observer
@@ -183,8 +180,8 @@ class _PolicyOperationCaller:
                 cast(Mapping[str, JsonValue], enriched),
                 principal_context=self.principal_context,
             )
-        legacy_provider = cast(OperationProvider, self.provider)
-        return await legacy_provider.call(
+        embedded_provider = cast(OperationProvider, self.provider)
+        return await embedded_provider.call(
             cast(Mapping[str, object], operation),
             cast(Mapping[str, JsonValue], enriched),
         )
@@ -212,6 +209,11 @@ class GenericRuntime:
         self._closed = False
         self._audit_collector = audit_collector
         self._operation_observer = operation_observer
+        if self.ir.get("ir_version") != "2":
+            raise RuntimeConfigurationError(
+                "compiled IR version is unsupported",
+                details={"reason": "ir_version_invalid"},
+            )
         self.project = self._load_project()
         if principal_context is None:
             principal_context = _stdio_principal_context(
@@ -275,25 +277,23 @@ class GenericRuntime:
         runtime._owned_auth_strategy = auth_strategy
         return runtime
 
-    def _load_project(self) -> Project | ProjectV2:
+    def _load_project(self) -> ProjectV2:
         return _load_project_document(self.ir.get("project"))
 
-    def _capability(self, capability_id: str) -> Capability | ReadCapabilityV2:
+    def _capability(self, capability_id: str) -> ReadCapabilityV2:
         compiled = self._compiled_capability(capability_id)
         definition = compiled.get("definition")
         try:
-            if isinstance(definition, Mapping) and definition.get("schema_version") == "2":
-                if definition.get("kind") == "action":
-                    action = ActionCapabilityV2.model_validate(definition)
-                    raise RuntimeConfigurationError(
-                        "Action capability requires the Action lifecycle",
-                        details={
-                            "capability_id": action.id,
-                            "reason": "action_lifecycle_required",
-                        },
-                    )
-                return ReadCapabilityV2.model_validate(definition)
-            return Capability.model_validate(definition)
+            if isinstance(definition, Mapping) and definition.get("kind") == "action":
+                action = ActionCapabilityV2.model_validate(definition)
+                raise RuntimeConfigurationError(
+                    "Action capability requires the Action lifecycle",
+                    details={
+                        "capability_id": action.id,
+                        "reason": "action_lifecycle_required",
+                    },
+                )
+            return ReadCapabilityV2.model_validate(definition)
         except RuntimeConfigurationError:
             raise
         except ValidationError:
@@ -337,11 +337,7 @@ class GenericRuntime:
                 raise RuntimeConfigurationError("capability ids must be strings")
             compiled = capabilities.get(capability_id)
             definition = compiled.get("definition") if isinstance(compiled, Mapping) else None
-            if (
-                isinstance(definition, Mapping)
-                and definition.get("schema_version") == "2"
-                and definition.get("kind") == "action"
-            ):
+            if isinstance(definition, Mapping) and definition.get("kind") == "action":
                 # Action capabilities are projected only by the explicit lifecycle
                 # runtime.  Keeping them out of the read surface prevents a mixed
                 # Pack from breaking or accidentally enabling mutations.
@@ -510,7 +506,7 @@ class GenericRuntime:
             )
         compiled = self._compiled_capability(capability_id)
         quality = compiled.get("quality")
-        if isinstance(quality, Mapping) and self.ir.get("ir_version") == "2":
+        if isinstance(quality, Mapping):
             limit = quality.get("max_output_bytes")
             if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
                 raise RuntimeConfigurationError(
@@ -606,29 +602,25 @@ class GenericRuntime:
         _raise_runtime_failure(failure)
 
 
-def _load_project_document(value: object) -> Project | ProjectV2:
+def _load_project_document(value: object) -> ProjectV2:
     try:
-        if isinstance(value, Mapping) and value.get("schema_version") == "2":
-            return ProjectV2.model_validate(value)
-        return Project.model_validate(value)
+        return ProjectV2.model_validate(value)
     except ValidationError:
         raise RuntimeConfigurationError("compiled project contract is invalid") from None
 
 
-def _load_operation(value: Mapping[str, object]) -> Operation | ReadOperationV2:
+def _load_operation(value: Mapping[str, object]) -> ReadOperationV2:
     try:
-        if value.get("schema_version") == "2":
-            if value.get("kind") == "action":
-                action = ActionOperationV2.model_validate(value)
-                raise RuntimeConfigurationError(
-                    "Action operation requires the Action lifecycle",
-                    details={
-                        "operation_id": action.id,
-                        "reason": "action_lifecycle_required",
-                    },
-                )
-            return ReadOperationV2.model_validate(value)
-        return Operation.model_validate(value)
+        if value.get("kind") == "action":
+            action = ActionOperationV2.model_validate(value)
+            raise RuntimeConfigurationError(
+                "Action operation requires the Action lifecycle",
+                details={
+                    "operation_id": action.id,
+                    "reason": "action_lifecycle_required",
+                },
+            )
+        return ReadOperationV2.model_validate(value)
     except RuntimeConfigurationError:
         raise
     except ValidationError:
@@ -683,7 +675,7 @@ def _accepts_principal_context(
     return True
 
 
-def _legacy_tenant_id(context: PrincipalContext) -> JsonValue | None:
+def _tenant_id(context: PrincipalContext) -> JsonValue | None:
     try:
         return resolve_context_binding(
             context,
@@ -695,7 +687,7 @@ def _legacy_tenant_id(context: PrincipalContext) -> JsonValue | None:
 
 
 def _stdio_principal_context(
-    project: Project | ProjectV2,
+    project: ProjectV2,
     *,
     environment: Mapping[str, str] | None,
     granted_scopes: Collection[str],
@@ -716,13 +708,13 @@ def _stdio_principal_context(
 
 
 def _auth_strategy_from_project(
-    project: Project | ProjectV2,
+    project: ProjectV2,
     *,
     environment: Mapping[str, str] | None,
 ) -> HttpAuthStrategy | None:
     auth = project.provider.auth
     if auth is None:
-        return None
+        return NoAuthStrategy()
     if isinstance(auth, NoAuthConfig):
         return NoAuthStrategy()
     if isinstance(auth, BearerSecretAuthConfig):
@@ -754,7 +746,7 @@ def _auth_strategy_from_project(
 
 
 def _authentication_base_url(
-    project: Project | ProjectV2,
+    project: ProjectV2,
     environment: Mapping[str, str] | None,
 ) -> str:
     source = os.environ if environment is None else environment

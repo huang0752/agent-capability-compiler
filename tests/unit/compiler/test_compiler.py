@@ -17,10 +17,10 @@ def _write_yaml(path: Path, value: object) -> None:
 
 def _operation(operation_id: str) -> dict[str, object]:
     return {
-        "schema_version": "1",
+        "schema_version": "2",
         "id": operation_id,
         "title": f"Call {operation_id}",
-        "kind": "http",
+        "kind": "read",
         "input_schema": {
             "properties": {
                 "z_field": {"type": "string"},
@@ -34,12 +34,22 @@ def _operation(operation_id: str) -> dict[str, object]:
             "method": "GET",
             "path": "/customers/{customer_id}",
             "path_parameters": {"customer_id": "customer_id"},
-            "credential_ref": "CRM_USER_TOKEN",
+            "query_parameters": {},
+            "request": None,
+            "success": {"statuses": [200], "body": "json"},
             "scopes": ["customer.read"],
             "timeout_seconds": 15,
             "max_response_bytes": 1_048_576,
+            "safety": {
+                "effect": "read",
+                "risk": "low",
+                "reversibility": "reversible",
+                "retry": {"mode": "idempotent_only"},
+                "idempotency": {"mode": "unsupported"},
+                "concurrency": {"mode": "not_supported"},
+            },
         },
-        "safety": {"effect": "read"},
+        "context_bindings": {},
         "evidence": [
             {
                 "source_id": "crm-backend",
@@ -56,18 +66,23 @@ def _make_project(root: Path) -> Path:
     _write_yaml(
         project / "project.yaml",
         {
-            "schema_version": "1",
+            "schema_version": "2",
             "project": {"id": "example-crm", "version": "0.1.0"},
             "source_workspace": {"path": "../system", "mode": "read_only"},
             "runtime": {"transport": ["stdio"]},
-            "provider": {"kind": "http", "base_url_ref": "CRM_BASE_URL"},
+            "provider": {
+                "kind": "http",
+                "base_url_ref": "CRM_BASE_URL",
+                "auth": {"kind": "bearer_secret", "token_ref": "CRM_USER_TOKEN"},
+            },
+            "quality": {"profile": "standard"},
         },
     )
     _write_yaml(project / "operations" / "crm.get_customer.yaml", _operation("crm.get_customer"))
     _write_yaml(
         project / "policies" / "crm-sales-read.yaml",
         {
-            "schema_version": "1",
+            "schema_version": "2",
             "id": "crm-sales-read",
             "required_scopes": ["customer.read"],
             "tenant_mode": "required",
@@ -80,7 +95,8 @@ def _make_project(root: Path) -> Path:
     _write_yaml(
         project / "capabilities" / "get_customer.yaml",
         {
-            "schema_version": "1",
+            "schema_version": "2",
+            "kind": "read",
             "id": "get_customer",
             "title": "Get customer context",
             "description": "Get one customer's context.",
@@ -108,7 +124,7 @@ def _make_project(root: Path) -> Path:
     _write_yaml(
         project / "evals" / "get-customer-normal.yaml",
         {
-            "schema_version": "1",
+            "schema_version": "2",
             "id": "get-customer-normal",
             "capability": "get_customer",
             "input": {"customer_id": "c-1"},
@@ -120,6 +136,36 @@ def _make_project(root: Path) -> Path:
             "forbidden_fields": ["internal_note"],
         },
     )
+    _write_yaml(
+        project / "source-contracts" / "crm.get_customer.yaml",
+        {
+            "schema_version": "2",
+            "id": "crm.get_customer.contract",
+            "operation_id": "crm.get_customer",
+            "request_schema": {"type": "object"},
+            "response_schema": {"type": "object"},
+            "request_completeness": "complete",
+            "response_completeness": "complete",
+            "provenance": [],
+        },
+    )
+    _write_yaml(
+        project / "capability-quality" / "get_customer.yaml",
+        {
+            "schema_version": "2",
+            "capability_id": "get_customer",
+            "intent": {"action": "get", "resource_types": ["customer"]},
+            "inputs": {
+                "customer_id": {
+                    "kind": "resource_selector",
+                    "resource_type": "customer",
+                    "acquisition": "caller",
+                }
+            },
+            "composition": {"failure_mode": "fail_fast"},
+            "output_budget": {"max_bytes": 65536},
+        },
+    )
     return project
 
 
@@ -129,6 +175,19 @@ def _load_capability(project: Path) -> dict[str, Any]:
     )
     assert isinstance(capability, dict)
     return capability
+
+
+def test_compiler_rejects_legacy_project_before_emitting_ir(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    path = project / "project.yaml"
+    document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    document["schema_version"] = "1"
+    _write_yaml(path, document)
+
+    report = compile_project(project)
+
+    assert report.ir is None
+    assert "ACC_FORMAT_VERSION_UNSUPPORTED" in {item.code for item in report.diagnostics}
 
 
 def _write_capability(project: Path, capability: dict[str, Any]) -> None:
@@ -158,10 +217,6 @@ def _configure_streamable_gateway_auth(
         auth["scope_mapping"] = scope_mapping
     document["provider"]["auth"] = auth
     _write_yaml(project_path, document)
-    operation_path = project / "operations" / "crm.get_customer.yaml"
-    operation = yaml.safe_load(operation_path.read_text(encoding="utf-8"))
-    operation["http"].pop("credential_ref")
-    _write_yaml(operation_path, operation)
 
 
 def _set_operation_context_binding(project: Path, target: str, source: str) -> None:
@@ -564,6 +619,19 @@ def test_compile_project_emits_normalized_json_ir_and_operation_dependencies(
 ) -> None:
     project = _make_project(tmp_path)
     _write_yaml(project / "operations" / "crm.a_related.yaml", _operation("crm.a_related"))
+    _write_yaml(
+        project / "source-contracts" / "crm.a_related.yaml",
+        {
+            "schema_version": "2",
+            "id": "crm.a_related.contract",
+            "operation_id": "crm.a_related",
+            "request_schema": {"type": "object"},
+            "response_schema": {"type": "object"},
+            "request_completeness": "complete",
+            "response_completeness": "complete",
+            "provenance": [],
+        },
+    )
     capability = _load_capability(project)
     capability["workflow"].insert(
         1,
@@ -580,11 +648,11 @@ def test_compile_project_emits_normalized_json_ir_and_operation_dependencies(
     report = compile_project(project)
 
     assert report.ok is True
-    assert [item.code for item in report.diagnostics] == ["ACC_AUTH_LEGACY_CREDENTIAL"]
+    assert [item.code for item in report.diagnostics] == ["ACC_CAPABILITY_OUTPUT_BOUND_UNKNOWN"]
     assert report.ir is not None
     assert json.loads(json.dumps(report.ir)) == report.ir
     ir = cast(dict[str, Any], report.ir)
-    assert ir["ir_version"] == "1"
+    assert ir["ir_version"] == "2"
     assert list(ir["operations"]) == ["crm.a_related", "crm.get_customer"]
     assert list(ir["operations"]["crm.a_related"]["input_schema"]["properties"]) == [
         "customer_id",
@@ -762,7 +830,8 @@ def test_compile_project_propagates_parallel_and_foreach_bounds(tmp_path: Path) 
     assert report.ok is False
     assert report.ir is None
     assert {item.code for item in report.diagnostics if item.severity == "error"} == {
-        "ACC_SCHEMA_INVALID"
+        "ACC_CAPABILITY_QUALITY_ORPHAN",
+        "ACC_SCHEMA_INVALID",
     }
     assert {item.pointer for item in report.diagnostics} >= {
         "/workflow/0/ParallelStep/parallel",

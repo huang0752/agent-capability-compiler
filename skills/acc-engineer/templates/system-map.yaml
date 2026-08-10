@@ -1,5 +1,5 @@
 # Planning artifact: do not place this file in operations/, capabilities/, policies/, or evals/.
-schema_version: "1"
+schema_version: "2"
 system:
   id: REPLACE_WITH_SYSTEM_ID
   name: REPLACE_WITH_SYSTEM_NAME

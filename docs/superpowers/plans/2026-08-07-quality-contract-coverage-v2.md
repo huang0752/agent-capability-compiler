@@ -37,6 +37,7 @@ class SchemaProvenance(StrictModel):
     evidence_schema_pointer: JsonPointer
     authority: Literal["contract", "implementation", "test", "observation"]
 
+
 class SourceContract(StrictModel):
     schema_version: Literal["2"]
     id: NonEmptyString
@@ -82,9 +83,11 @@ class CapabilityInputQuality(StrictModel):
     ]
     producers: list[NonEmptyString] = Field(default_factory=list)
 
+
 class OutputBudget(StrictModel):
     max_bytes: Annotated[int, Field(ge=1, le=100 * 1024 * 1024)]
     long_text_disclosures: list[LongTextDisclosure] = Field(default_factory=list)
+
 
 class CapabilityQuality(StrictModel):
     schema_version: Literal["2"]
@@ -141,8 +144,10 @@ class SchemaRelation(StrEnum):
     CONFLICT = "conflict"
     UNKNOWN = "unknown"
 
+
 def compare_operation_input(declared: JsonObject, source: JsonObject) -> RelationReport:
     """Prove declared_request is a subset of source_accepted."""
+
 
 def compare_operation_output(source: JsonObject, declared: JsonObject) -> RelationReport:
     """Prove source_possible is a subset of declared_output."""

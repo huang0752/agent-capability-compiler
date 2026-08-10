@@ -6,20 +6,12 @@ from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 
-from pydantic import ValidationError
-
 from acc_core.models import (
-    Capability,
-    Operation,
     PasswordBearerAuthConfig,
-    Policy,
-    Project,
     ProjectV2,
-    load_project_document,
 )
 from acc_core.scope import (
     CapabilityScopeRequirements,
-    analyze_capability_scope_requirements,
 )
 from acc_runtime.context import PrincipalContext, map_effective_scopes
 
@@ -88,7 +80,7 @@ def analyze_scope_callability(
 
     ceiling = _normalize_scopes(deployment_scope_ceiling, reason="deployment_scope_invalid")
     ir_version = ir.get("ir_version")
-    if not isinstance(ir_version, str) or not ir_version:
+    if ir_version != "2":
         raise CallabilityAnalysisError("ir_version_invalid")
     requirements = (
         _validated_typed_requirements(requirements_by_capability)
@@ -195,59 +187,14 @@ def _requirements_from_ir(
     if not isinstance(raw_capabilities, Mapping):
         raise CallabilityAnalysisError("capabilities_invalid")
     requirements: dict[str, CapabilityScopeRequirements] = {}
-    v1_inputs: list[tuple[str, Mapping[str, object]]] = []
     for capability_id, raw_compiled in raw_capabilities.items():
         if not isinstance(capability_id, str) or not isinstance(raw_compiled, Mapping):
             raise CallabilityAnalysisError("capabilities_invalid")
-        if "scope_requirements" in raw_compiled:
-            requirements[capability_id] = _requirements_from_mapping(
-                capability_id,
-                raw_compiled.get("scope_requirements"),
-            )
-        else:
-            v1_inputs.append((capability_id, raw_compiled))
-    if v1_inputs:
-        requirements.update(_requirements_from_v1(ir, v1_inputs))
+        requirements[capability_id] = _requirements_from_mapping(
+            capability_id,
+            raw_compiled.get("scope_requirements"),
+        )
     return requirements
-
-
-def _requirements_from_v1(
-    ir: Mapping[str, object],
-    capabilities: list[tuple[str, Mapping[str, object]]],
-) -> dict[str, CapabilityScopeRequirements]:
-    raw_operations = ir.get("operations")
-    raw_policies = ir.get("policies")
-    if not isinstance(raw_operations, Mapping) or not isinstance(raw_policies, Mapping):
-        raise CallabilityAnalysisError("v1_definitions_invalid")
-    try:
-        operations = {
-            operation_id: Operation.model_validate(raw_operation)
-            for operation_id, raw_operation in raw_operations.items()
-            if isinstance(operation_id, str)
-        }
-        policies = {
-            policy_id: Policy.model_validate(raw_policy)
-            for policy_id, raw_policy in raw_policies.items()
-            if isinstance(policy_id, str)
-        }
-        result: dict[str, CapabilityScopeRequirements] = {}
-        for capability_id, compiled in capabilities:
-            capability = Capability.model_validate(compiled.get("definition"))
-            if capability.id != capability_id:
-                raise CallabilityAnalysisError("capability_id_mismatch")
-            policy = policies.get(capability.policy)
-            if policy is None:
-                raise CallabilityAnalysisError("policy_missing")
-            result[capability_id] = analyze_capability_scope_requirements(
-                capability=capability,
-                policy=policy,
-                operations=operations,
-            )
-        return result
-    except CallabilityAnalysisError:
-        raise
-    except (TypeError, ValueError, ValidationError):
-        raise CallabilityAnalysisError("v1_definitions_invalid") from None
 
 
 def _requirements_from_mapping(
@@ -322,10 +269,10 @@ def _normalize_scopes(value: Collection[str], *, reason: str) -> ScopeSet:
     return frozenset(value)
 
 
-def _project_from_ir(ir: Mapping[str, object]) -> Project | ProjectV2:
+def _project_from_ir(ir: Mapping[str, object]) -> ProjectV2:
     try:
-        return load_project_document(ir.get("project"))
-    except (TypeError, ValueError, ValidationError):
+        return ProjectV2.model_validate(ir.get("project"))
+    except (TypeError, ValueError):
         raise CallabilityAnalysisError("project_invalid") from None
 
 

@@ -152,6 +152,11 @@ def _parse_compiled_ir(
     *,
     format_version: int,
 ) -> dict[str, object]:
+    if format_version != 2:
+        raise RuntimeIRFormatError(
+            "compiled IR requires the current pack format",
+            details={"path": _COMPILED_IR_PATH, "reason": "version_mismatch"},
+        )
     try:
         text = contents.decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -177,7 +182,7 @@ def _parse_compiled_ir(
             details={"path": _COMPILED_IR_PATH, "reason": "not_an_object"},
         )
     ir_version = value.get("ir_version")
-    if ir_version != str(format_version) and not (format_version == 1 and ir_version is None):
+    if ir_version != "2":
         raise RuntimeIRFormatError(
             "compiled IR version does not match the pack format",
             details={"path": _COMPILED_IR_PATH, "reason": "version_mismatch"},

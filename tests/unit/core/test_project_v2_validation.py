@@ -114,7 +114,7 @@ def _v2_project(tmp_path: Path, *, sidecars: bool = True) -> Path:
     _write(
         project / "policies" / "orders-read.yaml",
         {
-            "schema_version": "1",
+            "schema_version": "2",
             "id": "orders-read",
             "required_scopes": ["orders.read"],
             "tenant_mode": "none",
@@ -127,7 +127,7 @@ def _v2_project(tmp_path: Path, *, sidecars: bool = True) -> Path:
     _write(
         project / "evals" / "orders-inspect-success.yaml",
         {
-            "schema_version": "1",
+            "schema_version": "2",
             "id": "orders-inspect-success",
             "capability": "orders.inspect",
             "input": {"order_id": "order-1"},
@@ -311,7 +311,7 @@ def _add_action(project: Path) -> None:
     _write(
         project / "evals" / "orders-approve-success.yaml",
         {
-            "schema_version": "1",
+            "schema_version": "2",
             "id": "orders-approve-success",
             "capability": "orders.approve",
             "input": {"order_id": "order-1"},
@@ -334,6 +334,33 @@ def test_validate_project_loads_a_closed_v2_quality_project(tmp_path: Path) -> N
     assert isinstance(report.project, ProjectV2)
     assert set(report.source_contracts) == {"orders.get"}
     assert set(report.capability_quality) == {"orders.inspect"}
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "project.yaml",
+        "operations/orders.get.yaml",
+        "capabilities/orders.inspect.yaml",
+        "policies/orders-read.yaml",
+        "evals/orders-inspect-success.yaml",
+    ],
+)
+def test_validate_project_rejects_every_legacy_top_level_document(
+    tmp_path: Path,
+    relative_path: str,
+) -> None:
+    project = _v2_project(tmp_path)
+    path = project / relative_path
+    document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    document["schema_version"] = "1"
+    _write(path, document)
+
+    report = validate_project(project)
+
+    diagnostic = next(item for item in report.diagnostics if item.path == relative_path)
+    assert diagnostic.code == "ACC_FORMAT_VERSION_UNSUPPORTED"
+    assert diagnostic.pointer == "/schema_version"
 
 
 def test_validate_project_v2_reports_each_missing_quality_sidecar(tmp_path: Path) -> None:
@@ -620,7 +647,7 @@ def test_v2_coverage_requires_the_typed_scope_inventory(
     assert payload["diagnostics"][0]["code"] == "ACC_COVERAGE_SCOPE_INVENTORY_INVALID"
 
 
-def test_v2_action_project_rejects_explicit_v1_coverage_without_a_traceback(
+def test_coverage_rejects_removed_version_selector_without_a_traceback(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -631,7 +658,7 @@ def test_v2_action_project_rejects_explicit_v1_coverage_without_a_traceback(
     captured = capsys.readouterr()
     payload = yaml.safe_load(captured.out)
 
-    assert exit_code == 3
+    assert exit_code == 2
     assert captured.err == ""
     assert payload == {
         "ok": False,
@@ -639,11 +666,11 @@ def test_v2_action_project_rejects_explicit_v1_coverage_without_a_traceback(
         "result": None,
         "diagnostics": [
             {
-                "code": "ACC_COVERAGE_VERSION_UNSUPPORTED",
+                "code": "ACC_CLI_USAGE",
                 "severity": "error",
-                "message": "Coverage v1 supports only Project v1.",
-                "path": "project.yaml",
-                "pointer": "/schema_version",
+                "message": "unrecognized arguments: --version 1",
+                "path": None,
+                "pointer": None,
             }
         ],
     }

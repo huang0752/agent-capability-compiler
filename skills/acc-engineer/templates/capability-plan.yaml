@@ -1,5 +1,5 @@
 # Planning artifact: every capability remains blocked until its operations and policy have evidence.
-schema_version: "1"
+schema_version: "2"
 goal: REPLACE_WITH_USER_OUTCOME
 
 capabilities:
@@ -36,7 +36,7 @@ capabilities:
     status: blocked_on_evidence
 
 coverage:
-  scope_mode: system_readonly_complete
+  scope_mode: system_complete
   scope_inventory: scope-inventory.yaml
   route_dispositions:
     planned:

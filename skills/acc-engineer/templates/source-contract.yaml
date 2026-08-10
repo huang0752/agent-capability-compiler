@@ -1,0 +1,29 @@
+schema_version: "2"
+id: REPLACE_WITH_OPERATION_ID.contract
+operation_id: REPLACE_WITH_OPERATION_ID
+
+# These schemas describe what the source system accepts and may return. Do not
+# narrow them from observations; bind every assertion to captured evidence.
+request_schema:
+  type: object
+response_schema:
+  type: object
+request_completeness: complete
+response_completeness: complete
+provenance:
+  - target_pointer: /request_schema
+    evidence:
+      source_id: REPLACE_WITH_EVIDENCE_SOURCE_ID
+      kind: source_file
+      path: REPLACE_WITH_SOURCE_RELATIVE_PATH
+      digest: "{{ CAPTURED_SHA256_DIGEST }}"
+    evidence_schema_pointer: /
+    authority: implementation
+  - target_pointer: /response_schema
+    evidence:
+      source_id: REPLACE_WITH_EVIDENCE_SOURCE_ID
+      kind: source_file
+      path: REPLACE_WITH_SOURCE_RELATIVE_PATH
+      digest: "{{ CAPTURED_SHA256_DIGEST }}"
+    evidence_schema_pointer: /
+    authority: implementation

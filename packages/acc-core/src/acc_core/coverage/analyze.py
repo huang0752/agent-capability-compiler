@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-from typing import Literal, cast
+from typing import Literal
 
 from acc_core.contracts.fidelity import analyze_operation_schema_fidelity
 from acc_core.coverage.models import (
@@ -22,12 +22,9 @@ from acc_core.coverage.models import (
 )
 from acc_core.diagnostics import Diagnostic
 from acc_core.models import (
-    ActionCapabilityV2,
     BranchStep,
     CallStep,
-    Capability,
     ForeachStep,
-    Operation,
     ParallelStep,
     ReadCapabilityV2,
     WorkflowStep,
@@ -53,109 +50,16 @@ def _called_operations(steps: Iterable[WorkflowStep]) -> set[str]:
     return dependencies
 
 
-def _is_permission_negative(code: str, status: int | None) -> bool:
-    if status in {401, 403}:
-        return True
-    normalized = code.upper()
-    return any(
-        token in normalized for token in ("AUTH", "FORBIDDEN", "PERMISSION", "SCOPE", "TENANT")
-    )
-
-
-def analyze_coverage_v1(report: ValidationReport) -> dict[str, object]:
-    """Return stable JSON data for the coverage risks visible in ``report``.
-
-    Only evals both declared by a capability and pointing back to that same
-    capability count as linked coverage. This prevents an unrelated or orphaned
-    eval from hiding a missing scenario.
-    """
-
-    dependencies_by_capability = {
-        capability_id: _called_operations(cast(Capability, capability).workflow)
-        for capability_id, capability in sorted(report.capabilities.items())
-    }
-    used_operations = set().union(*dependencies_by_capability.values())
-    orphan_operations = sorted(set(report.operations) - used_operations)
-
-    capabilities_without_evals: list[str] = []
-    capabilities_without_negative_evals: list[str] = []
-    capabilities_without_permission_negative_evals: list[str] = []
-    one_interface_one_tool_risks: list[str] = []
-
-    for capability_id, capability in sorted(report.capabilities.items()):
-        linked_evals = [
-            report.evals[eval_id]
-            for eval_id in capability.evals
-            if eval_id in report.evals and report.evals[eval_id].capability == capability_id
-        ]
-        negative_evals = [item for item in linked_evals if item.expected_error is not None]
-
-        if not linked_evals:
-            capabilities_without_evals.append(capability_id)
-        if not negative_evals:
-            capabilities_without_negative_evals.append(capability_id)
-
-        policy = report.policies.get(capability.policy)
-        permission_protected = policy is not None and (
-            bool(policy.required_scopes) or policy.tenant_mode == "required"
-        )
-        has_permission_negative = any(
-            item.expected_error is not None
-            and _is_permission_negative(item.expected_error.code, item.expected_error.status)
-            for item in negative_evals
-        )
-        if permission_protected and not has_permission_negative:
-            capabilities_without_permission_negative_evals.append(capability_id)
-
-        if len(dependencies_by_capability[capability_id]) == 1:
-            one_interface_one_tool_risks.append(capability_id)
-
-    finding_count = sum(
-        len(items)
-        for items in (
-            orphan_operations,
-            capabilities_without_evals,
-            capabilities_without_negative_evals,
-            capabilities_without_permission_negative_evals,
-            one_interface_one_tool_risks,
-        )
-    )
-    return {
-        "coverage_version": "1",
-        "summary": {
-            "operations": len(report.operations),
-            "capabilities": len(report.capabilities),
-            "evals": len(report.evals),
-            "findings": finding_count,
-        },
-        "orphan_operations": orphan_operations,
-        "capabilities_without_evals": capabilities_without_evals,
-        "capabilities_without_negative_evals": capabilities_without_negative_evals,
-        "capabilities_without_permission_negative_evals": (
-            capabilities_without_permission_negative_evals
-        ),
-        "one_interface_one_tool_risks": one_interface_one_tool_risks,
-    }
-
-
-def analyze_coverage(report: ValidationReport) -> dict[str, object]:
-    """Compatibility name for the exact Coverage v1 document."""
-
-    return analyze_coverage_v1(report)
-
-
-def _normalized_capabilities(report: ValidationReport) -> dict[str, Capability]:
-    normalized: dict[str, Capability] = {}
+def _normalized_capabilities(report: ValidationReport) -> dict[str, ReadCapabilityV2]:
+    normalized: dict[str, ReadCapabilityV2] = {}
     for capability_id, capability in report.capabilities.items():
-        if isinstance(capability, Capability):
+        if isinstance(capability, ReadCapabilityV2):
             normalized[capability_id] = capability
             continue
-        if isinstance(capability, ReadCapabilityV2):
-            workflow = capability.workflow
-        elif isinstance(capability, ActionCapabilityV2):
-            workflow = [*capability.preview_workflow, *capability.commit_workflow]
-        normalized[capability_id] = Capability.model_construct(
-            schema_version="1",
+        workflow = [*capability.preview_workflow, *capability.commit_workflow]
+        normalized[capability_id] = ReadCapabilityV2.model_construct(
+            schema_version="2",
+            kind="read",
             id=capability.id,
             title=capability.title,
             description=capability.description,
@@ -187,7 +91,7 @@ def _route_disposition(inventory: ScopeInventory) -> RouteDispositionCoverage:
 def _operation_trace(
     report: ValidationReport,
     inventory: ScopeInventory,
-    capabilities: dict[str, Capability],
+    capabilities: dict[str, ReadCapabilityV2],
 ) -> OperationTraceCoverage:
     dependencies = {
         capability_id: _called_operations(capability.workflow)
@@ -206,6 +110,8 @@ def _operation_trace(
             operation is not None
             and operation.http.method == route.method
             and operation.http.path == route.path
+            and operation.kind == route.kind
+            and operation.http.safety.effect == route.effect
         )
         if operation_id is not None and has_exact_http_mapping:
             referenced_operations.add(operation_id)
@@ -234,7 +140,7 @@ def _operation_trace(
 
 def _scenario_coverage(
     report: ValidationReport,
-    capabilities: dict[str, Capability],
+    capabilities: dict[str, ReadCapabilityV2],
 ) -> ScenarioCoverage:
     with_success: list[str] = []
     with_negative: list[str] = []
@@ -259,7 +165,7 @@ def _scenario_coverage(
 
 def _quality_axes(
     report: ValidationReport,
-    capabilities: dict[str, Capability],
+    capabilities: dict[str, ReadCapabilityV2],
     *,
     operation_budget: int,
 ) -> tuple[
@@ -312,7 +218,7 @@ def _schema_fidelity(report: ValidationReport) -> SchemaFidelityCoverage:
         diagnostic
         for operation_id in analyzed
         for diagnostic in analyze_operation_schema_fidelity(
-            cast(Operation, report.operations[operation_id]),
+            report.operations[operation_id],
             report.source_contracts[operation_id],
             operation_path=report.operation_paths.get(operation_id),
         )
@@ -327,7 +233,7 @@ def _schema_fidelity(report: ValidationReport) -> SchemaFidelityCoverage:
 
 def _output_budget(
     report: ValidationReport,
-    capabilities: dict[str, Capability],
+    capabilities: dict[str, ReadCapabilityV2],
 ) -> OutputBudgetCoverage:
     statuses: dict[
         str,
@@ -389,7 +295,7 @@ def _live_observations(
     )
 
 
-def analyze_coverage_v2(
+def analyze_coverage(
     report: ValidationReport,
     scope_inventory: ScopeInventory,
     *,
@@ -418,4 +324,4 @@ def analyze_coverage_v2(
     )
 
 
-__all__ = ["analyze_coverage", "analyze_coverage_v1", "analyze_coverage_v2"]
+__all__ = ["analyze_coverage"]

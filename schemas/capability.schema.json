@@ -1,5 +1,143 @@
 {
   "$defs": {
+    "ActionCapabilityV2": {
+      "additionalProperties": false,
+      "description": "Separate preview and commit workflows for a business Action.\n\nThe compiler later proves that preview is read-only, commit contains the\npermitted mutation topology, and references such as ``$.prepared`` cannot\nbe supplied by an Agent.",
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/ActionContractV2"
+        },
+        "commit_workflow": {
+          "items": {
+            "$ref": "#/$defs/WorkflowStep"
+          },
+          "minItems": 1,
+          "title": "Commit Workflow",
+          "type": "array"
+        },
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "evals": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evals",
+          "type": "array"
+        },
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "input_schema": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Input Schema",
+          "type": "object"
+        },
+        "kind": {
+          "const": "action",
+          "title": "Kind",
+          "type": "string"
+        },
+        "output_schema": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Output Schema",
+          "type": "object"
+        },
+        "policy": {
+          "minLength": 1,
+          "title": "Policy",
+          "type": "string"
+        },
+        "preview_workflow": {
+          "items": {
+            "$ref": "#/$defs/WorkflowStep"
+          },
+          "minItems": 1,
+          "title": "Preview Workflow",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "2",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "id",
+        "title",
+        "description",
+        "input_schema",
+        "output_schema",
+        "policy",
+        "evals",
+        "kind",
+        "action",
+        "preview_workflow",
+        "commit_workflow"
+      ],
+      "title": "ActionCapabilityV2",
+      "type": "object"
+    },
+    "ActionContractV2": {
+      "additionalProperties": false,
+      "description": "Lifecycle controls that every Action Capability must state explicitly.",
+      "properties": {
+        "approval": {
+          "$ref": "#/$defs/ApprovalContractV2"
+        },
+        "execution_mode": {
+          "$ref": "#/$defs/ExecutionMode"
+        },
+        "expires_in_seconds": {
+          "maximum": 86400,
+          "minimum": 1,
+          "title": "Expires In Seconds",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "execution_mode",
+        "approval",
+        "expires_in_seconds"
+      ],
+      "title": "ActionContractV2",
+      "type": "object"
+    },
+    "ApprovalContractV2": {
+      "additionalProperties": false,
+      "description": "Declare whether a trusted approval grant is required before commit.",
+      "properties": {
+        "mode": {
+          "enum": [
+            "required",
+            "not_required"
+          ],
+          "title": "Mode",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "title": "ApprovalContractV2",
+      "type": "object"
+    },
     "AssertAction": {
       "additionalProperties": false,
       "description": "Assert a declarative condition without executing code.",
@@ -197,6 +335,14 @@
       ],
       "title": "EmitStep",
       "type": "object"
+    },
+    "ExecutionMode": {
+      "enum": [
+        "single",
+        "source_transaction",
+        "saga"
+      ],
+      "type": "string"
     },
     "FilterAction": {
       "additionalProperties": false,
@@ -450,6 +596,87 @@
       "title": "PickStep",
       "type": "object"
     },
+    "ReadCapabilityV2": {
+      "additionalProperties": false,
+      "description": "One deterministic read workflow.",
+      "properties": {
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "evals": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evals",
+          "type": "array"
+        },
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "input_schema": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Input Schema",
+          "type": "object"
+        },
+        "kind": {
+          "const": "read",
+          "title": "Kind",
+          "type": "string"
+        },
+        "output_schema": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Output Schema",
+          "type": "object"
+        },
+        "policy": {
+          "minLength": 1,
+          "title": "Policy",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "2",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "workflow": {
+          "items": {
+            "$ref": "#/$defs/WorkflowStep"
+          },
+          "minItems": 1,
+          "title": "Workflow",
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "id",
+        "title",
+        "description",
+        "input_schema",
+        "output_schema",
+        "policy",
+        "evals",
+        "kind",
+        "workflow"
+      ],
+      "title": "ReadCapabilityV2",
+      "type": "object"
+    },
     "RedactAction": {
       "additionalProperties": false,
       "description": "Remove fields from a workflow value.",
@@ -536,77 +763,19 @@
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "additionalProperties": false,
-  "description": "An Agent-facing business capability composed from operations.",
-  "properties": {
-    "description": {
-      "minLength": 1,
-      "title": "Description",
-      "type": "string"
+  "discriminator": {
+    "mapping": {
+      "action": "#/$defs/ActionCapabilityV2",
+      "read": "#/$defs/ReadCapabilityV2"
     },
-    "evals": {
-      "items": {
-        "minLength": 1,
-        "type": "string"
-      },
-      "minItems": 1,
-      "title": "Evals",
-      "type": "array"
-    },
-    "id": {
-      "minLength": 1,
-      "title": "Id",
-      "type": "string"
-    },
-    "input_schema": {
-      "additionalProperties": {
-        "$ref": "#/$defs/JsonValue"
-      },
-      "title": "Input Schema",
-      "type": "object"
-    },
-    "output_schema": {
-      "additionalProperties": {
-        "$ref": "#/$defs/JsonValue"
-      },
-      "title": "Output Schema",
-      "type": "object"
-    },
-    "policy": {
-      "minLength": 1,
-      "title": "Policy",
-      "type": "string"
-    },
-    "schema_version": {
-      "const": "1",
-      "title": "Schema Version",
-      "type": "string"
-    },
-    "title": {
-      "minLength": 1,
-      "title": "Title",
-      "type": "string"
-    },
-    "workflow": {
-      "items": {
-        "$ref": "#/$defs/WorkflowStep"
-      },
-      "minItems": 1,
-      "title": "Workflow",
-      "type": "array"
-    }
+    "propertyName": "kind"
   },
-  "required": [
-    "schema_version",
-    "id",
-    "title",
-    "description",
-    "input_schema",
-    "output_schema",
-    "workflow",
-    "policy",
-    "evals"
-  ],
-  "title": "Capability",
-  "type": "object"
+  "oneOf": [
+    {
+      "$ref": "#/$defs/ReadCapabilityV2"
+    },
+    {
+      "$ref": "#/$defs/ActionCapabilityV2"
+    }
+  ]
 }

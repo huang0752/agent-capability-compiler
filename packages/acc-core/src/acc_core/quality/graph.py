@@ -9,11 +9,13 @@ from dataclasses import dataclass
 from pydantic import JsonValue
 
 from acc_core.models import (
+    ActionCapabilityV2,
     BranchStep,
     CallStep,
     Capability,
     ForeachStep,
     ParallelStep,
+    ReadCapabilityV2,
     WorkflowStep,
 )
 from acc_core.quality.models import CapabilityQuality
@@ -27,6 +29,7 @@ class WorkflowCallNode:
     """One normalized Operation call and the values connecting it to other calls."""
 
     index: int
+    phase: str
     operation_id: str
     step_id: str | None
     input_references: tuple[str, ...]
@@ -85,6 +88,7 @@ def _references(value: JsonValue) -> tuple[set[str], set[str]]:
 def _walk_calls(
     workflow: Iterable[WorkflowStep],
     *,
+    phase: str,
     inherited_steps: frozenset[str] = frozenset(),
     conditional: bool = False,
 ) -> list[WorkflowCallNode]:
@@ -95,6 +99,7 @@ def _walk_calls(
             calls.append(
                 WorkflowCallNode(
                     index=-1,
+                    phase=phase,
                     operation_id=step.call.operation,
                     step_id=step.id,
                     input_references=tuple(sorted(inputs)),
@@ -108,6 +113,7 @@ def _walk_calls(
             calls.extend(
                 _walk_calls(
                     step.branch.then_steps,
+                    phase=phase,
                     inherited_steps=frozenset(inherited),
                     conditional=True,
                 )
@@ -115,6 +121,7 @@ def _walk_calls(
             calls.extend(
                 _walk_calls(
                     step.branch.else_steps,
+                    phase=phase,
                     inherited_steps=frozenset(inherited),
                     conditional=True,
                 )
@@ -123,6 +130,7 @@ def _walk_calls(
             calls.extend(
                 _walk_calls(
                     step.parallel,
+                    phase=phase,
                     inherited_steps=inherited_steps,
                     conditional=conditional,
                 )
@@ -132,6 +140,7 @@ def _walk_calls(
             calls.extend(
                 _walk_calls(
                     step.foreach.workflow,
+                    phase=phase,
                     inherited_steps=frozenset(inherited_steps | item_steps),
                     conditional=True,
                 )
@@ -139,6 +148,7 @@ def _walk_calls(
     return [
         WorkflowCallNode(
             index=index,
+            phase=call.phase,
             operation_id=call.operation_id,
             step_id=call.step_id,
             input_references=call.input_references,
@@ -172,16 +182,41 @@ def build_workflow_composition_graph(
 ) -> WorkflowCompositionGraph:
     """Connect calls only through actual step flow or a shared resource selector."""
 
-    calls = _walk_calls(capability.workflow)
+    workflows: tuple[tuple[str, list[WorkflowStep]], ...]
+    if isinstance(capability, ReadCapabilityV2):
+        workflows = (("read", capability.workflow),)
+    elif isinstance(capability, ActionCapabilityV2):
+        workflows = (
+            ("preview", capability.preview_workflow),
+            ("commit", capability.commit_workflow),
+        )
+    else:  # pragma: no cover - the discriminated public union is closed
+        raise TypeError("unsupported capability kind")
+    calls = [
+        WorkflowCallNode(
+            index=index,
+            phase=call.phase,
+            operation_id=call.operation_id,
+            step_id=call.step_id,
+            input_references=call.input_references,
+            step_references=call.step_references,
+            conditional=call.conditional,
+        )
+        for index, call in enumerate(
+            call for phase, workflow in workflows for call in _walk_calls(workflow, phase=phase)
+        )
+    ]
     disjoint = _DisjointSet(len(calls))
-    calls_by_step = {call.step_id: call.index for call in calls if call.step_id is not None}
+    calls_by_step = {
+        (call.phase, call.step_id): call.index for call in calls if call.step_id is not None
+    }
     selector_names = {
         name for name, metadata in quality.inputs.items() if metadata.kind == "resource_selector"
     }
     calls_by_selector: dict[str, list[int]] = {}
     for call in calls:
         for step_id in call.step_references:
-            producer = calls_by_step.get(step_id)
+            producer = calls_by_step.get((call.phase, step_id))
             if producer is not None:
                 disjoint.union(producer, call.index)
         for input_name in set(call.input_references) & selector_names:
@@ -189,6 +224,11 @@ def build_workflow_composition_graph(
     for indexes in calls_by_selector.values():
         for index in indexes[1:]:
             disjoint.union(indexes[0], index)
+    if isinstance(capability, ActionCapabilityV2):
+        preview = next((call.index for call in calls if call.phase == "preview"), None)
+        commit = next((call.index for call in calls if call.phase == "commit"), None)
+        if preview is not None and commit is not None:
+            disjoint.union(preview, commit)
 
     components: dict[int, list[int]] = {}
     for call in calls:

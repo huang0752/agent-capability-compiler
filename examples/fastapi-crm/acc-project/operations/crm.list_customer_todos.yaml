@@ -1,7 +1,7 @@
-schema_version: '1'
+schema_version: '2'
 id: crm.list_customer_todos
 title: List customer todos
-kind: http
+kind: read
 input_schema:
   type: object
   additionalProperties: false
@@ -52,8 +52,16 @@ http:
   - todo.read
   timeout_seconds: 5
   max_response_bytes: 32768
-safety:
-  effect: read
+  request: null
+  success: {statuses: [200], body: json}
+  safety:
+    effect: read
+    risk: low
+    reversibility: reversible
+    retry: {mode: idempotent_only}
+    idempotency: {mode: unsupported}
+    concurrency: {mode: not_supported}
+context_bindings: {tenant_id: tenant_context.tenant_id}
 evidence:
 - source_id: crm-app-todos
   kind: source_file

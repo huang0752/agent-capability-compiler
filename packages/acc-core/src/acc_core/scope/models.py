@@ -8,6 +8,8 @@ from pydantic import Field, model_validator
 
 from acc_core.models import NonEmptyString, StrictModel
 
+SUPPORTED_METHODS = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"})
+
 
 class ExclusionApproval(StrictModel):
     """Explicit approval for exact excluded route identifiers."""
@@ -19,7 +21,7 @@ class ExclusionApproval(StrictModel):
 class ScopeSelection(StrictModel):
     """Declared route-discovery scope."""
 
-    mode: Literal["pilot", "domain_complete", "system_readonly_complete"]
+    mode: Literal["pilot", "domain_complete", "system_complete"]
     user_confirmation: NonEmptyString | None = None
     selected_domains: list[NonEmptyString] = Field(default_factory=list)
     exclusion_approval: ExclusionApproval = Field(default_factory=ExclusionApproval)
@@ -29,7 +31,7 @@ class ScopeDiscovery(StrictModel):
     """Evidence sources used to establish the route denominator."""
 
     source_commit: NonEmptyString
-    methods: list[Literal["GET", "HEAD"]]
+    methods: list[Literal["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]]
     include_paths: list[NonEmptyString]
     evidence_sources: list[NonEmptyString]
 
@@ -61,11 +63,13 @@ class ExclusionRule(StrictModel):
 
 
 class ScopeRoute(StrictModel):
-    """One discovered GET/HEAD route and its exact disposition."""
+    """One discovered source route with evidence-declared effect and disposition."""
 
     id: NonEmptyString
     domain: NonEmptyString
-    method: Literal["GET", "HEAD"]
+    method: Literal["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]
+    kind: Literal["read", "action"]
+    effect: Literal["read", "create", "update", "delete", "transition", "execute"]
     path: NonEmptyString
     evidence_sources: list[NonEmptyString]
     usage_evidence_sources: list[NonEmptyString] = Field(default_factory=list)
@@ -86,6 +90,10 @@ class ScopeRoute(StrictModel):
                 raise ValueError("operation_id is required for planned or composed routes")
             if not self.capability_ids:
                 raise ValueError("capability_ids are required for planned or composed routes")
+        if (self.kind == "read") != (self.effect == "read"):
+            raise ValueError(
+                "read routes require effect=read; action routes require a mutation effect"
+            )
         return self
 
 
@@ -93,7 +101,7 @@ class ScopeSummary(StrictModel):
     """Deterministic counters derived from routes."""
 
     discovered_routes: int = Field(ge=0)
-    eligible_read_routes: int = Field(ge=0)
+    eligible_routes: int = Field(ge=0)
     planned: int = Field(ge=0)
     composed: int = Field(ge=0)
     excluded: int = Field(ge=0)
@@ -105,7 +113,7 @@ class ScopeSummary(StrictModel):
 class ScopeInventory(StrictModel):
     """Typed source-route denominator shared by Core and the Engineer Skill."""
 
-    schema_version: Literal["1"]
+    schema_version: Literal["2"]
     scope: ScopeSelection
     discovery: ScopeDiscovery | None = None
     domains: list[ScopeDomain]
@@ -117,9 +125,17 @@ class ScopeInventory(StrictModel):
     def validate_summary(self) -> ScopeInventory:
         """Reject hand-maintained counters that diverge from route facts."""
 
+        if self.scope.mode in {"domain_complete", "system_complete"}:
+            if self.discovery is None:
+                raise ValueError("complete scope requires discovery metadata")
+            if len(self.discovery.methods) != len(set(self.discovery.methods)):
+                raise ValueError("complete scope discovery methods must be unique")
+            if set(self.discovery.methods) != SUPPORTED_METHODS:
+                raise ValueError("complete scope discovery must include every supported method")
+
         expected = {
             "discovered_routes": len(self.routes),
-            "eligible_read_routes": sum(route.eligibility == "eligible" for route in self.routes),
+            "eligible_routes": sum(route.eligibility == "eligible" for route in self.routes),
             "planned": sum(route.disposition == "planned" for route in self.routes),
             "composed": sum(route.disposition == "composed" for route in self.routes),
             "excluded": sum(route.disposition == "excluded" for route in self.routes),
@@ -135,6 +151,7 @@ class ScopeInventory(StrictModel):
 
 
 __all__ = [
+    "SUPPORTED_METHODS",
     "ExclusionApproval",
     "ExclusionRule",
     "ScopeDiscovery",

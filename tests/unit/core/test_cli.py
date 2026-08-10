@@ -26,18 +26,23 @@ JSON_SCHEMA_DRAFT_2020_12 = "https://json-schema.org/draft/2020-12/schema"
 EXPORTED_SCHEMAS = {
     "capability.schema.json",
     "capability-quality.schema.json",
-    "capability-v2.schema.json",
     "eval.schema.json",
     "evidence.schema.json",
     "operation.schema.json",
-    "operation-v2.schema.json",
     "policy.schema.json",
     "project.schema.json",
-    "project-v2.schema.json",
     "scope-inventory.schema.json",
     "source-contract.schema.json",
 }
-PROJECT_DIRECTORIES = {"capabilities", "evals", "evidence", "operations", "policies"}
+PROJECT_DIRECTORIES = {
+    "capabilities",
+    "capability-quality",
+    "evals",
+    "evidence",
+    "operations",
+    "policies",
+    "source-contracts",
+}
 
 
 class _FakeRuntime:
@@ -97,9 +102,17 @@ class _FakeGatewayComposition:
 
 
 def _minimal_ir(project: Mapping[str, object]) -> dict[str, object]:
+    provider = dict(cast(Mapping[str, object], project["provider"]))
+    provider.setdefault("auth", {"kind": "none"})
+    normalized_project = {
+        **project,
+        "schema_version": "2",
+        "provider": provider,
+        "quality": {"profile": "standard"},
+    }
     return {
-        "ir_version": "1",
-        "project": project,
+        "ir_version": "2",
+        "project": normalized_project,
         "operations": {},
         "policies": {},
         "capabilities": {},
@@ -125,7 +138,7 @@ def _scoped_ir(project: Mapping[str, object]) -> dict[str, object]:
 
 def _gateway_project() -> dict[str, object]:
     return {
-        "schema_version": "1",
+        "schema_version": "2",
         "project": {"id": "fake-gateway", "version": "0.1.0"},
         "source_workspace": {"path": "../system", "mode": "read_only"},
         "runtime": {"transport": ["streamable_http"]},
@@ -146,6 +159,7 @@ def _gateway_project() -> dict[str, object]:
                 },
             },
         },
+        "quality": {"profile": "standard"},
     }
 
 
@@ -154,7 +168,7 @@ def _v2_project(*, transport: str) -> dict[str, object]:
         _gateway_project()
         if transport == "streamable_http"
         else {
-            "schema_version": "1",
+            "schema_version": "2",
             "project": {"id": "fake-v2", "version": "0.2.0"},
             "source_workspace": {"path": "../system", "mode": "read_only"},
             "runtime": {"transport": ["stdio"]},
@@ -202,11 +216,16 @@ def _patch_run_composition(
     import acc_runtime.mcp
 
     project = {
-        "schema_version": "1",
+        "schema_version": "2",
         "project": {"id": "fake-runtime", "version": "0.1.0"},
         "source_workspace": {"path": "../system", "mode": "read_only"},
         "runtime": {"transport": ["stdio"]},
-        "provider": {"kind": "http", "base_url_ref": "FAKE_BASE_URL"},
+        "provider": {
+            "kind": "http",
+            "base_url_ref": "FAKE_BASE_URL",
+            "auth": {"kind": "none"},
+        },
+        "quality": {"profile": "standard"},
     }
 
     class FakeGenericRuntime:
@@ -807,20 +826,25 @@ def _make_valid_project(root: Path) -> Path:
     _write_yaml(
         project / "project.yaml",
         {
-            "schema_version": "1",
+            "schema_version": "2",
             "project": {"id": "example-crm", "version": "0.1.0"},
             "source_workspace": {"path": "../system", "mode": "read_only"},
             "runtime": {"transport": ["stdio"]},
-            "provider": {"kind": "http", "base_url_ref": "CRM_BASE_URL"},
+            "provider": {
+                "kind": "http",
+                "base_url_ref": "CRM_BASE_URL",
+                "auth": {"kind": "none"},
+            },
+            "quality": {"profile": "standard"},
         },
     )
     _write_yaml(
         project / "operations" / "crm.get_customer.yaml",
         {
-            "schema_version": "1",
+            "schema_version": "2",
             "id": "crm.get_customer",
             "title": "Get customer",
-            "kind": "http",
+            "kind": "read",
             "input_schema": {
                 "type": "object",
                 "additionalProperties": False,
@@ -832,16 +856,29 @@ def _make_valid_project(root: Path) -> Path:
                 "method": "GET",
                 "path": "/customers/{customer_id}",
                 "path_parameters": {"customer_id": "customer_id"},
-                "credential_ref": "CRM_USER_TOKEN",
+                "query_parameters": {},
                 "scopes": ["customer.read"],
                 "timeout_seconds": 15,
                 "max_response_bytes": 1_048_576,
+                "request": None,
+                "success": {"statuses": [200], "body": "json"},
+                "safety": {
+                    "effect": "read",
+                    "risk": "low",
+                    "reversibility": "reversible",
+                    "retry": {"mode": "idempotent_only"},
+                    "idempotency": {"mode": "unsupported"},
+                    "concurrency": {"mode": "not_supported"},
+                },
             },
-            "safety": {"effect": "read"},
+            "context_bindings": {},
             "evidence": [
                 {
                     "source_id": "crm-backend",
-                    "locator": "app/api/customers.py#L42-L68",
+                    "kind": "source_file",
+                    "path": "app/api/customers.py",
+                    "line_start": 42,
+                    "line_end": 68,
                     "digest": f"sha256:{'a' * 64}",
                 }
             ],
@@ -850,7 +887,7 @@ def _make_valid_project(root: Path) -> Path:
     _write_yaml(
         project / "policies" / "crm-sales-read.yaml",
         {
-            "schema_version": "1",
+            "schema_version": "2",
             "id": "crm-sales-read",
             "required_scopes": ["customer.read"],
             "tenant_mode": "required",
@@ -863,7 +900,8 @@ def _make_valid_project(root: Path) -> Path:
     _write_yaml(
         project / "capabilities" / "get_customer.yaml",
         {
-            "schema_version": "1",
+            "schema_version": "2",
+            "kind": "read",
             "id": "get_customer",
             "title": "Get customer context",
             "description": "Get one customer's context.",
@@ -891,7 +929,7 @@ def _make_valid_project(root: Path) -> Path:
     _write_yaml(
         project / "evals" / "get-customer-normal.yaml",
         {
-            "schema_version": "1",
+            "schema_version": "2",
             "id": "get-customer-normal",
             "capability": "get_customer",
             "input": {"customer_id": "c-1"},
@@ -901,6 +939,84 @@ def _make_valid_project(root: Path) -> Path:
             ],
             "expected_output_schema": {"type": "object"},
             "forbidden_fields": ["internal_note"],
+        },
+    )
+    _write_yaml(
+        project / "source-contracts" / "crm.get_customer.yaml",
+        {
+            "schema_version": "2",
+            "id": "crm.get_customer.contract",
+            "operation_id": "crm.get_customer",
+            "request_schema": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["customer_id"],
+                "properties": {"customer_id": {"type": "string"}},
+            },
+            "response_schema": {"type": "object"},
+            "request_completeness": "complete",
+            "response_completeness": "complete",
+            "provenance": [],
+        },
+    )
+    _write_yaml(
+        project / "capability-quality" / "get_customer.yaml",
+        {
+            "schema_version": "2",
+            "capability_id": "get_customer",
+            "intent": {"action": "get", "resource_types": ["customer"]},
+            "inputs": {
+                "customer_id": {
+                    "kind": "resource_selector",
+                    "resource_type": "customer",
+                    "acquisition": "caller",
+                }
+            },
+            "composition": {"failure_mode": "fail_fast"},
+            "output_budget": {"max_bytes": 65_536, "long_text_disclosures": []},
+        },
+    )
+    _write_yaml(
+        project / "scope-inventory.yaml",
+        {
+            "schema_version": "2",
+            "scope": {
+                "mode": "system_complete",
+                "selected_domains": [],
+                "exclusion_approval": {},
+            },
+            "discovery": {
+                "source_commit": "git:0123456789abcdef",
+                "methods": ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"],
+                "include_paths": ["app"],
+                "evidence_sources": ["routes"],
+            },
+            "domains": [{"id": "crm", "status": "selected"}],
+            "routes": [
+                {
+                    "id": "GET /customers/{customer_id}",
+                    "domain": "crm",
+                    "method": "GET",
+                    "kind": "read",
+                    "effect": "read",
+                    "path": "/customers/{customer_id}",
+                    "evidence_sources": ["routes"],
+                    "eligibility": "eligible",
+                    "disposition": "composed",
+                    "operation_id": "crm.get_customer",
+                    "capability_ids": ["get_customer"],
+                }
+            ],
+            "summary": {
+                "discovered_routes": 1,
+                "eligible_routes": 1,
+                "planned": 0,
+                "composed": 1,
+                "excluded": 0,
+                "blocked_on_evidence": 0,
+                "out_of_scope": 0,
+                "unresolved": 0,
+            },
         },
     )
     return project
@@ -1039,6 +1155,8 @@ def test_init_creates_minimal_project_and_never_overwrites(tmp_path: Path) -> No
     assert Path(payload["result"]["path"]) == project.resolve()
     assert (project / "project.yaml").is_file()
     project_document = yaml.safe_load((project / "project.yaml").read_text(encoding="utf-8"))
+    assert project_document["schema_version"] == "2"
+    assert project_document["quality"] == {"profile": "standard"}
     assert project_document["provider"]["auth"] == {"kind": "none"}
     assert {entry.name for entry in project.iterdir() if entry.is_dir()} >= PROJECT_DIRECTORIES
 
@@ -1070,7 +1188,9 @@ def test_doctor_reports_environment_and_project_checks(tmp_path: Path) -> None:
     assert {"python", "project"} <= checks.keys()
     assert checks["python"]["ok"] is True
     assert checks["project"]["ok"] is True
-    assert [item["code"] for item in payload["diagnostics"]] == ["ACC_AUTH_LEGACY_CREDENTIAL"]
+    assert [item["code"] for item in payload["diagnostics"]] == [
+        "ACC_CAPABILITY_OUTPUT_BOUND_UNKNOWN"
+    ]
 
 
 def test_schema_exports_all_models_as_draft_2020_12(tmp_path: Path) -> None:
@@ -1106,7 +1226,9 @@ def test_schema_exports_all_models_as_draft_2020_12(tmp_path: Path) -> None:
     assert allowlist_schema["items"]["pattern"].startswith("^tenant_context")
 
     operation_schema = json.loads((output / "operation.schema.json").read_text(encoding="utf-8"))
-    binding_schema = operation_schema["properties"]["context_bindings"]["additionalProperties"]
+    binding_schema = operation_schema["$defs"]["ReadOperationV2"]["properties"]["context_bindings"][
+        "additionalProperties"
+    ]
     assert "principal_id" in binding_schema["pattern"]
     assert "tenant_context" in binding_schema["pattern"]
 
@@ -1117,7 +1239,7 @@ def test_schema_exports_all_models_as_draft_2020_12(tmp_path: Path) -> None:
     scope_inventory_schema = json.loads(
         (output / "scope-inventory.schema.json").read_text(encoding="utf-8")
     )
-    assert scope_inventory_schema["properties"]["schema_version"]["const"] == "1"
+    assert scope_inventory_schema["properties"]["schema_version"]["const"] == "2"
 
 
 def test_validate_accepts_an_evidence_bound_project(tmp_path: Path) -> None:
@@ -1139,21 +1261,12 @@ def test_validate_accepts_an_evidence_bound_project(tmp_path: Path) -> None:
         "policies": 1,
         "evals": 1,
     }
-    assert payload["diagnostics"] == [
-        {
-            "code": "ACC_AUTH_LEGACY_CREDENTIAL",
-            "severity": "warning",
-            "message": (
-                "Legacy Operation-level credentials remain supported for stdio; "
-                "migrate authentication to provider.auth."
-            ),
-            "path": "project.yaml",
-            "pointer": "/provider",
-        }
+    assert [item["code"] for item in payload["diagnostics"]] == [
+        "ACC_CAPABILITY_OUTPUT_BOUND_UNKNOWN"
     ]
 
 
-def test_compile_check_preserves_legacy_auth_warning(tmp_path: Path) -> None:
+def test_compile_check_preserves_quality_warning(tmp_path: Path) -> None:
     project = _make_valid_project(tmp_path)
 
     completed = _run_acc("compile", "--check", "--json", cwd=project)
@@ -1165,7 +1278,9 @@ def test_compile_check_preserves_legacy_auth_warning(tmp_path: Path) -> None:
         ok=True,
         allow_warnings=True,
     )
-    assert [item["code"] for item in payload["diagnostics"]] == ["ACC_AUTH_LEGACY_CREDENTIAL"]
+    assert [item["code"] for item in payload["diagnostics"]] == [
+        "ACC_CAPABILITY_OUTPUT_BOUND_UNKNOWN"
+    ]
 
 
 def test_successful_default_output_writes_warnings_to_stderr(tmp_path: Path) -> None:
@@ -1175,7 +1290,7 @@ def test_successful_default_output_writes_warnings_to_stderr(tmp_path: Path) -> 
 
     assert completed.returncode == 0
     assert "validate: ok" in completed.stdout
-    assert "ACC_AUTH_LEGACY_CREDENTIAL" in completed.stderr
+    assert "ACC_CAPABILITY_OUTPUT_BOUND_UNKNOWN" in completed.stderr
 
 
 @pytest.mark.parametrize("json_output", [False, True])
@@ -1198,10 +1313,12 @@ def test_pack_success_preserves_compile_warnings(
             ok=True,
             allow_warnings=True,
         )
-        assert [item["code"] for item in payload["diagnostics"]] == ["ACC_AUTH_LEGACY_CREDENTIAL"]
+        assert [item["code"] for item in payload["diagnostics"]] == [
+            "ACC_CAPABILITY_OUTPUT_BOUND_UNKNOWN"
+        ]
     else:
         assert "pack: ok" in completed.stdout
-        assert "ACC_AUTH_LEGACY_CREDENTIAL" in completed.stderr
+        assert "ACC_CAPABILITY_OUTPUT_BOUND_UNKNOWN" in completed.stderr
 
 
 def test_coverage_success_preserves_validation_warning(tmp_path: Path) -> None:
@@ -1216,7 +1333,9 @@ def test_coverage_success_preserves_validation_warning(tmp_path: Path) -> None:
         ok=True,
         allow_warnings=True,
     )
-    assert [item["code"] for item in payload["diagnostics"]] == ["ACC_AUTH_LEGACY_CREDENTIAL"]
+    assert [item["code"] for item in payload["diagnostics"]] == [
+        "ACC_CAPABILITY_OUTPUT_BOUND_UNKNOWN"
+    ]
 
 
 def test_validate_rejects_an_operation_without_evidence(tmp_path: Path) -> None:
@@ -1257,6 +1376,9 @@ def test_adapter_init_creates_isolated_read_only_adapter_skeleton(tmp_path: Path
     assert payload["result"]["path"] == str(target.resolve())
     assert (target / "pyproject.toml").is_file()
     assert (target / "contract.yaml").is_file()
+    contract = yaml.safe_load((target / "contract.yaml").read_text(encoding="utf-8"))
+    assert contract["schema_version"] == "2"
+    assert contract["base_path"] == "/adapter/v2"
     main = (target / "src" / "customer_adapter" / "main.py").read_text(encoding="utf-8")
     assert "AdapterServer" in main
     assert "POST" not in main

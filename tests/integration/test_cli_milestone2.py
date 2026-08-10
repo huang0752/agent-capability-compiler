@@ -66,20 +66,26 @@ def _make_project(root: Path) -> Path:
     _write_yaml(
         project / "project.yaml",
         {
-            "schema_version": "1",
+            "schema_version": "2",
             "project": {"id": "example-crm", "version": "0.1.0"},
             "source_workspace": {"path": "../system", "mode": "read_only"},
             "runtime": {"transport": ["stdio"]},
-            "provider": {"kind": "http", "base_url_ref": "CRM_BASE_URL"},
+            "provider": {
+                "kind": "http",
+                "base_url_ref": "CRM_BASE_URL",
+                "auth": {"kind": "bearer_secret", "token_ref": "CRM_USER_TOKEN"},
+                "context_binding_allowlist": ["tenant_context.tenant_id"],
+            },
+            "quality": {"profile": "standard"},
         },
     )
     _write_yaml(
         project / "operations" / "crm.get_customer.yaml",
         {
-            "schema_version": "1",
+            "schema_version": "2",
             "id": "crm.get_customer",
             "title": "Get customer",
-            "kind": "http",
+            "kind": "read",
             "input_schema": {
                 "type": "object",
                 "additionalProperties": False,
@@ -93,16 +99,29 @@ def _make_project(root: Path) -> Path:
                 "method": "GET",
                 "path": "/customers/{customer_id}",
                 "path_parameters": {"customer_id": "customer_id"},
-                "credential_ref": "CRM_USER_TOKEN",
+                "query_parameters": {"tenant_id": "tenant_id"},
                 "scopes": ["customer.read"],
                 "timeout_seconds": 15,
                 "max_response_bytes": 1048576,
+                "request": None,
+                "success": {"statuses": [200], "body": "json"},
+                "safety": {
+                    "effect": "read",
+                    "risk": "low",
+                    "reversibility": "reversible",
+                    "retry": {"mode": "idempotent_only"},
+                    "idempotency": {"mode": "unsupported"},
+                    "concurrency": {"mode": "not_supported"},
+                },
             },
-            "safety": {"effect": "read"},
+            "context_bindings": {"tenant_id": "tenant_context.tenant_id"},
             "evidence": [
                 {
                     "source_id": "crm-backend",
-                    "locator": "routes.py#L1-L1",
+                    "kind": "source_file",
+                    "path": "routes.py",
+                    "line_start": 1,
+                    "line_end": 1,
                     "digest": f"sha256:{'0' * 64}",
                 }
             ],
@@ -111,7 +130,7 @@ def _make_project(root: Path) -> Path:
     _write_yaml(
         project / "policies" / "crm-read.yaml",
         {
-            "schema_version": "1",
+            "schema_version": "2",
             "id": "crm-read",
             "required_scopes": ["customer.read"],
             "tenant_mode": "required",
@@ -124,7 +143,8 @@ def _make_project(root: Path) -> Path:
     _write_yaml(
         project / "capabilities" / "get_customer.yaml",
         {
-            "schema_version": "1",
+            "schema_version": "2",
+            "kind": "read",
             "id": "get_customer",
             "title": "Get customer",
             "description": "Get one visible customer.",
@@ -176,7 +196,7 @@ def _make_project(root: Path) -> Path:
         _write_yaml(
             project / "evals" / f"{eval_id}.yaml",
             {
-                "schema_version": "1",
+                "schema_version": "2",
                 "id": eval_id,
                 "capability": "get_customer",
                 "input": {"customer_id": "c-1"},
@@ -186,6 +206,82 @@ def _make_project(root: Path) -> Path:
                 **expected,
             },
         )
+    _write_yaml(
+        project / "source-contracts" / "crm.get_customer.yaml",
+        {
+            "schema_version": "2",
+            "id": "crm.get_customer.contract",
+            "operation_id": "crm.get_customer",
+            "request_schema": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "customer_id": {"type": "string"},
+                    "tenant_id": {"type": "string"},
+                },
+            },
+            "response_schema": {"type": "object"},
+            "request_completeness": "complete",
+            "response_completeness": "complete",
+            "provenance": [],
+        },
+    )
+    _write_yaml(
+        project / "capability-quality" / "get_customer.yaml",
+        {
+            "schema_version": "2",
+            "capability_id": "get_customer",
+            "intent": {"action": "get", "resource_types": ["customer"]},
+            "inputs": {
+                "customer_id": {
+                    "kind": "resource_selector",
+                    "resource_type": "customer",
+                    "acquisition": "caller",
+                }
+            },
+            "composition": {"failure_mode": "fail_fast"},
+            "output_budget": {"max_bytes": 65536, "long_text_disclosures": []},
+        },
+    )
+    _write_yaml(
+        project / "scope-inventory.yaml",
+        {
+            "schema_version": "2",
+            "scope": {"mode": "system_complete", "exclusion_approval": {}},
+            "discovery": {
+                "source_commit": "git:0123456789abcdef",
+                "methods": ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"],
+                "include_paths": ["routes.py"],
+                "evidence_sources": ["routes.py"],
+            },
+            "domains": [{"id": "crm", "status": "selected"}],
+            "routes": [
+                {
+                    "id": "GET /customers/{customer_id}",
+                    "domain": "crm",
+                    "method": "GET",
+                    "kind": "read",
+                    "effect": "read",
+                    "path": "/customers/{customer_id}",
+                    "evidence_sources": ["routes.py"],
+                    "eligibility": "eligible",
+                    "disposition": "composed",
+                    "operation_id": "crm.get_customer",
+                    "capability_ids": ["get_customer"],
+                }
+            ],
+            "summary": {
+                "discovered_routes": 1,
+                "eligible_routes": 1,
+                "planned": 0,
+                "composed": 1,
+                "excluded": 0,
+                "blocked_on_evidence": 0,
+                "out_of_scope": 0,
+                "unresolved": 0,
+            },
+        },
+    )
     return project
 
 
@@ -201,7 +297,9 @@ def test_milestone_two_cli_compiles_analyzes_packs_diffs_and_freezes(tmp_path: P
     assert ir_path.is_file()
 
     coverage = _payload(_run_acc("coverage", "--json", cwd=project))
-    assert coverage["result"]["summary"]["capabilities"] == 1
+    assert coverage["result"]["operation_trace"]["traced_route_ids"] == [
+        "GET /customers/{customer_id}"
+    ]
 
     diffed = _payload(_run_acc("diff", str(ir_path), str(ir_path), "--json", cwd=project))
     assert diffed["result"]["has_changes"] is False
@@ -532,7 +630,7 @@ def test_run_inspects_streamable_http_gateway_without_starting_server(tmp_path: 
     _write_yaml(project_path, document)
     operation_path = project / "operations" / "crm.get_customer.yaml"
     operation = yaml.safe_load(operation_path.read_text(encoding="utf-8"))
-    operation["http"].pop("credential_ref")
+    operation["http"].pop("credential_ref", None)
     _write_yaml(operation_path, operation)
     packed = _payload(_run_acc("pack", "--output", "gateway.accpkg", "--json", cwd=project))
 
@@ -710,7 +808,7 @@ def _use_provider_auth(project: Path, auth_kind: str) -> None:
     _write_yaml(project_path, document)
     operation_path = project / "operations" / "crm.get_customer.yaml"
     operation = yaml.safe_load(operation_path.read_text(encoding="utf-8"))
-    operation["http"].pop("credential_ref")
+    operation["http"].pop("credential_ref", None)
     _write_yaml(operation_path, operation)
 
 

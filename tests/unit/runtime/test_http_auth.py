@@ -8,7 +8,7 @@ from typing import Any
 import httpx
 import pytest
 
-from acc_core.models import Operation
+from acc_core.models import ReadOperationV2
 from acc_runtime.auth import (
     AuthAttempt,
     AuthenticationResult,
@@ -21,23 +21,33 @@ from acc_runtime.errors import RuntimeError as ACCRuntimeError
 from acc_runtime.providers import HttpProvider
 
 
-def _operation(**http_overrides: Any) -> Operation:
+def _operation(**http_overrides: Any) -> ReadOperationV2:
     http = {
         "method": "GET",
         "path": "/customers/{customer_id}",
         "path_parameters": {"customer_id": "customer_id"},
         "query_parameters": {},
+        "request": None,
+        "success": {"statuses": [200], "body": "json"},
         "scopes": ["customer.read"],
         "timeout_seconds": 15,
         "max_response_bytes": 1_048_576,
+        "safety": {
+            "effect": "read",
+            "risk": "low",
+            "reversibility": "reversible",
+            "retry": {"mode": "idempotent_only"},
+            "idempotency": {"mode": "unsupported"},
+            "concurrency": {"mode": "not_supported"},
+        },
     }
     http.update(http_overrides)
-    return Operation.model_validate(
+    return ReadOperationV2.model_validate(
         {
-            "schema_version": "1",
+            "schema_version": "2",
+            "kind": "read",
             "id": "crm.get_customer",
             "title": "Get customer",
-            "kind": "http",
             "input_schema": {
                 "type": "object",
                 "additionalProperties": False,
@@ -50,11 +60,13 @@ def _operation(**http_overrides: Any) -> Operation:
                 "properties": {"id": {"type": "string"}},
             },
             "http": http,
-            "safety": {"effect": "read"},
+            "context_bindings": {},
             "evidence": [
                 {
                     "source_id": "crm",
-                    "locator": "openapi.json#/customers/{customer_id}",
+                    "kind": "openapi",
+                    "path": "openapi.json",
+                    "json_pointer": "/paths/~1customers~1{id}/get",
                     "digest": f"sha256:{'0' * 64}",
                 }
             ],

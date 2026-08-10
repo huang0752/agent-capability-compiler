@@ -6,16 +6,12 @@ from pathlib import Path
 
 import pytest
 import yaml
+from pydantic import TypeAdapter
 
 from acc_core.compiler import CompilationReport
 from acc_core.compiler.diff import semantic_diff
 from acc_core.contracts import SourceContract
-from acc_core.coverage import (
-    LiveObservation,
-    analyze_coverage,
-    analyze_coverage_v1,
-    analyze_coverage_v2,
-)
+from acc_core.coverage import LiveObservation, analyze_coverage
 from acc_core.evidence import EvidenceFreezeError, freeze_operation_evidence
 from acc_core.io import InvalidProjectPathError, ProjectFileTooLargeError, ProjectSymlinkError
 from acc_core.models import Capability, Eval, Operation, Policy
@@ -26,25 +22,41 @@ from acc_core.validation import ValidationReport
 
 
 def _operation(identifier: str) -> Operation:
-    return Operation.model_validate(
+    return TypeAdapter(Operation).validate_python(
         {
-            "schema_version": "1",
+            "schema_version": "2",
             "id": identifier,
             "title": identifier,
-            "kind": "http",
+            "kind": "read",
             "input_schema": {"type": "object"},
             "output_schema": {"type": "object"},
             "http": {
                 "method": "GET",
                 "path": "/customers",
-                "credential_ref": "CRM_TOKEN",
+                "path_parameters": {},
+                "query_parameters": {},
+                "request": None,
+                "success": {"statuses": [200], "body": "json"},
                 "scopes": ["customer.read"],
+                "timeout_seconds": 15,
+                "max_response_bytes": 1_048_576,
+                "safety": {
+                    "effect": "read",
+                    "risk": "low",
+                    "reversibility": "reversible",
+                    "retry": {"mode": "idempotent_only"},
+                    "idempotency": {"mode": "unsupported"},
+                    "concurrency": {"mode": "not_supported"},
+                },
             },
-            "safety": {"effect": "read"},
+            "context_bindings": {},
             "evidence": [
                 {
                     "source_id": "crm",
-                    "locator": "api/customers.py#L1-L10",
+                    "kind": "source_file",
+                    "path": "api/customers.py",
+                    "line_start": 1,
+                    "line_end": 10,
                     "digest": f"sha256:{'0' * 64}",
                 }
             ],
@@ -53,9 +65,10 @@ def _operation(identifier: str) -> Operation:
 
 
 def _capability(identifier: str, operation: str, eval_ids: list[str]) -> Capability:
-    return Capability.model_validate(
+    return TypeAdapter(Capability).validate_python(
         {
-            "schema_version": "1",
+            "schema_version": "2",
+            "kind": "read",
             "id": identifier,
             "title": identifier,
             "description": identifier,
@@ -74,7 +87,7 @@ def _capability(identifier: str, operation: str, eval_ids: list[str]) -> Capabil
 def _policy() -> Policy:
     return Policy.model_validate(
         {
-            "schema_version": "1",
+            "schema_version": "2",
             "id": "customer-read",
             "required_scopes": ["customer.read"],
             "tenant_mode": "required",
@@ -88,7 +101,7 @@ def _policy() -> Policy:
 
 def _eval(identifier: str, capability: str, *, error_status: int | None = None) -> Eval:
     document: dict[str, object] = {
-        "schema_version": "1",
+        "schema_version": "2",
         "id": identifier,
         "capability": capability,
         "input": {},
@@ -106,92 +119,36 @@ def _eval(identifier: str, capability: str, *, error_status: int | None = None) 
     return Eval.model_validate(document)
 
 
-def test_coverage_reports_stable_analysis_findings() -> None:
-    report = ValidationReport(
-        operations={
-            "crm.get_customer": _operation("crm.get_customer"),
-            "crm.orphan": _operation("crm.orphan"),
-        },
-        capabilities={
-            "get_customer": _capability(
-                "get_customer", "crm.get_customer", ["get-customer-positive"]
-            ),
-            "missing_eval": _capability("missing_eval", "crm.get_customer", ["not-created"]),
-        },
-        policies={"customer-read": _policy()},
-        evals={
-            "get-customer-positive": _eval("get-customer-positive", "get_customer"),
-            "unlinked-negative": _eval("unlinked-negative", "get_customer", error_status=403),
-        },
-    )
-
-    result = analyze_coverage(report)
-
-    assert result == {
-        "coverage_version": "1",
-        "summary": {
-            "operations": 2,
-            "capabilities": 2,
-            "evals": 2,
-            "findings": 8,
-        },
-        "orphan_operations": ["crm.orphan"],
-        "capabilities_without_evals": ["missing_eval"],
-        "capabilities_without_negative_evals": ["get_customer", "missing_eval"],
-        "capabilities_without_permission_negative_evals": ["get_customer", "missing_eval"],
-        "one_interface_one_tool_risks": ["get_customer", "missing_eval"],
-    }
-    assert json.dumps(result, sort_keys=True, separators=(",", ":")) == json.dumps(
-        analyze_coverage(report), sort_keys=True, separators=(",", ":")
-    )
-
-
-def test_coverage_recognizes_a_linked_permission_negative_eval() -> None:
-    report = ValidationReport(
-        operations={"crm.get_customer": _operation("crm.get_customer")},
-        capabilities={
-            "get_customer": _capability(
-                "get_customer",
-                "crm.get_customer",
-                ["get-customer-positive", "get-customer-forbidden"],
-            )
-        },
-        policies={"customer-read": _policy()},
-        evals={
-            "get-customer-positive": _eval("get-customer-positive", "get_customer"),
-            "get-customer-forbidden": _eval(
-                "get-customer-forbidden", "get_customer", error_status=403
-            ),
-        },
-    )
-
-    result = analyze_coverage(report)
-
-    assert result["capabilities_without_negative_evals"] == []
-    assert result["capabilities_without_permission_negative_evals"] == []
-
-
 def _scope_inventory(
     *,
     operation_id: str = "crm.get_customer",
     method: str = "GET",
     path: str = "/customers",
+    kind: str = "read",
+    effect: str = "read",
 ) -> ScopeInventory:
     return ScopeInventory.model_validate(
         {
-            "schema_version": "1",
+            "schema_version": "2",
             "scope": {
                 "mode": "domain_complete",
                 "selected_domains": ["crm"],
                 "exclusion_approval": {},
             },
-            "discovery": None,
+            "discovery": {
+                "source_commit": "git:0123456789abcdef",
+                "methods": ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"],
+                "include_paths": ["app"],
+                "evidence_sources": ["routes.py"],
+            },
             "domains": [{"id": "crm", "status": "selected"}],
             "routes": [
                 {
                     "id": f"{method} {path}",
                     "domain": "crm",
                     "method": method,
+                    "kind": kind,
+                    "effect": effect,
                     "path": path,
                     "evidence_sources": ["routes.py"],
                     "eligibility": "eligible",
@@ -203,6 +160,8 @@ def _scope_inventory(
                     "id": "GET /internal/export",
                     "domain": "crm",
                     "method": "GET",
+                    "kind": "read",
+                    "effect": "read",
                     "path": "/internal/export",
                     "evidence_sources": ["routes.py"],
                     "eligibility": "ineligible",
@@ -212,7 +171,7 @@ def _scope_inventory(
             ],
             "summary": {
                 "discovered_routes": 2,
-                "eligible_read_routes": 1,
+                "eligible_routes": 1,
                 "planned": 0,
                 "composed": 1,
                 "excluded": 1,
@@ -252,22 +211,7 @@ def _source_contract(operation: Operation) -> SourceContract:
     )
 
 
-def test_coverage_v1_named_api_preserves_the_exact_legacy_document() -> None:
-    report = ValidationReport(
-        operations={"crm.get_customer": _operation("crm.get_customer")},
-        capabilities={
-            "get_customer": _capability(
-                "get_customer", "crm.get_customer", ["get-customer-positive"]
-            )
-        },
-        policies={"customer-read": _policy()},
-        evals={"get-customer-positive": _eval("get-customer-positive", "get_customer")},
-    )
-
-    assert analyze_coverage_v1(report) == analyze_coverage(report)
-
-
-def test_coverage_v2_reports_independent_axes_without_a_total_score() -> None:
+def test_coverage_reports_independent_axes_without_a_total_score() -> None:
     operation = _operation("crm.get_customer")
     report = ValidationReport(
         operations={operation.id: operation},
@@ -280,7 +224,7 @@ def test_coverage_v2_reports_independent_axes_without_a_total_score() -> None:
         evals={"get-customer-positive": _eval("get-customer-positive", "get_customer")},
     )
 
-    result = analyze_coverage_v2(report, _scope_inventory())
+    result = analyze_coverage(report, _scope_inventory())
     document = result.model_dump(mode="json")
 
     assert list(document) == [
@@ -313,7 +257,7 @@ def test_coverage_v2_reports_independent_axes_without_a_total_score() -> None:
     assert result.live_observations.unobserved_capability_ids == ["get_customer"]
 
 
-def test_coverage_v2_does_not_treat_route_disposition_as_usable() -> None:
+def test_coverage_does_not_treat_route_disposition_as_usable() -> None:
     operation = _operation("crm.get_customer")
     report = ValidationReport(
         operations={operation.id: operation},
@@ -325,7 +269,7 @@ def test_coverage_v2_does_not_treat_route_disposition_as_usable() -> None:
         evals={"get-customer-positive": _eval("get-customer-positive", "get_customer")},
     )
 
-    result = analyze_coverage_v2(
+    result = analyze_coverage(
         report,
         _scope_inventory(operation_id="crm.operation_not_compiled"),
     )
@@ -342,7 +286,7 @@ def test_coverage_v2_does_not_treat_route_disposition_as_usable() -> None:
         ("GET", "/customers/{customer_id}"),
     ],
 )
-def test_coverage_v2_marks_route_broken_when_http_mapping_is_not_exact(
+def test_coverage_marks_route_broken_when_http_mapping_is_not_exact(
     method: str,
     path: str,
 ) -> None:
@@ -357,7 +301,7 @@ def test_coverage_v2_marks_route_broken_when_http_mapping_is_not_exact(
         evals={"get-customer-positive": _eval("get-customer-positive", "get_customer")},
     )
 
-    result = analyze_coverage_v2(
+    result = analyze_coverage(
         report,
         _scope_inventory(method=method, path=path),
     )
@@ -367,7 +311,28 @@ def test_coverage_v2_marks_route_broken_when_http_mapping_is_not_exact(
     assert result.operation_trace.broken_route_ids == [route_id]
 
 
-def test_coverage_v2_keeps_live_observations_separate_from_static_output_bounds() -> None:
+def test_coverage_rejects_action_route_traced_to_read_operation() -> None:
+    operation = _operation("crm.get_customer")
+    report = ValidationReport(
+        operations={operation.id: operation},
+        capabilities={
+            "get_customer": _capability("get_customer", operation.id, ["get-customer-positive"])
+        },
+        capability_quality={"get_customer": _capability_quality()},
+        policies={"customer-read": _policy()},
+        evals={"get-customer-positive": _eval("get-customer-positive", "get_customer")},
+    )
+
+    result = analyze_coverage(
+        report,
+        _scope_inventory(method="POST", kind="action", effect="transition"),
+    )
+
+    assert result.operation_trace.traced_route_ids == []
+    assert result.operation_trace.broken_route_ids == ["POST /customers"]
+
+
+def test_coverage_keeps_live_observations_separate_from_static_output_bounds() -> None:
     operation = _operation("crm.get_customer")
     report = ValidationReport(
         operations={operation.id: operation},
@@ -387,7 +352,7 @@ def test_coverage_v2_keeps_live_observations_separate_from_static_output_bounds(
         response_bytes_max=8_192,
     )
 
-    result = analyze_coverage_v2(report, _scope_inventory(), live_observations=[observation])
+    result = analyze_coverage(report, _scope_inventory(), live_observations=[observation])
 
     assert result.output_budget.status_by_capability == {"get_customer": "unknown"}
     assert result.live_observations.status == "observed"
@@ -458,18 +423,23 @@ def _write_freeze_project(root: Path, locator: str = "api/customers.py#L1-L2") -
     (project / "project.yaml").write_text(
         yaml.safe_dump(
             {
-                "schema_version": "1",
+                "schema_version": "2",
                 "project": {"id": "crm", "version": "0.1.0"},
                 "source_workspace": {"path": "../source", "mode": "read_only"},
                 "runtime": {"transport": ["stdio"]},
-                "provider": {"kind": "http", "base_url_ref": "CRM_URL"},
+                "provider": {
+                    "kind": "http",
+                    "base_url_ref": "CRM_URL",
+                    "auth": {"kind": "none"},
+                },
+                "quality": {"profile": "standard"},
             },
             sort_keys=False,
         ),
         encoding="utf-8",
     )
     operation = _operation("crm.get_customer").model_dump(mode="json", by_alias=True)
-    operation["evidence"][0]["locator"] = locator
+    operation["evidence"][0]["path"] = locator.split("#", maxsplit=1)[0]
     (project / "operations" / "get-customer.yaml").write_text(
         yaml.safe_dump(operation, sort_keys=False), encoding="utf-8"
     )

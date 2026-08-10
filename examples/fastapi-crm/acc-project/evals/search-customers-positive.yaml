@@ -1,4 +1,4 @@
-schema_version: "1"
+schema_version: "2"
 id: search-customers-positive
 capability: search_customers
 input: {query: acme}

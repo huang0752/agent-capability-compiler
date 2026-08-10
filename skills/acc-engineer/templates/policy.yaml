@@ -1,4 +1,4 @@
-schema_version: "1"
+schema_version: "2"
 id: REPLACE_WITH_POLICY_ID
 
 required_scopes:

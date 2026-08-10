@@ -167,8 +167,8 @@ def _make_project(
     _write_yaml(
         project / "project.yaml",
         {
-            "schema_version": "1",
-            "project": {"id": "generic-auth-offline", "version": "0.1.0"},
+            "schema_version": "2",
+            "project": {"id": "generic-auth-offline", "version": "2.0.0"},
             "source_workspace": {"path": "../system", "mode": "read_only"},
             "runtime": {"transport": ["stdio"]},
             "provider": {
@@ -180,15 +180,16 @@ def _make_project(
                 ),
                 "context_binding_allowlist": ["tenant_context.tenant_id"],
             },
+            "quality": {"profile": "standard"},
         },
     )
     _write_yaml(
         project / "operations" / "offline.current_item.yaml",
         {
-            "schema_version": "1",
+            "schema_version": "2",
+            "kind": "read",
             "id": "offline.current_item",
             "title": "Current item",
-            "kind": "http",
             "input_schema": {
                 "type": "object",
                 "additionalProperties": False,
@@ -213,15 +214,26 @@ def _make_project(
                 "path": "/items/current",
                 "path_parameters": {},
                 "query_parameters": {"actor": "actor_id", "tenant": "tenant_id"},
+                "request": None,
+                "success": {"statuses": [200], "body": "json"},
                 "scopes": ["item.read"],
                 "timeout_seconds": 5,
                 "max_response_bytes": 4096,
+                "safety": {
+                    "effect": "read",
+                    "risk": "low",
+                    "reversibility": "reversible",
+                    "retry": {"mode": "idempotent_only"},
+                    "idempotency": {"mode": "unsupported"},
+                    "concurrency": {"mode": "not_supported"},
+                },
             },
-            "safety": {"effect": "read"},
             "evidence": [
                 {
                     "source_id": "offline-route",
-                    "locator": "routes.py#L1-L1",
+                    "kind": "source_file",
+                    "path": "routes.py",
+                    "json_pointer": None,
                     "digest": f"sha256:{'0' * 64}",
                 }
             ],
@@ -230,7 +242,7 @@ def _make_project(
     _write_yaml(
         project / "policies" / "offline-read.yaml",
         {
-            "schema_version": "1",
+            "schema_version": "2",
             "id": "offline-read",
             "required_scopes": ["item.read"],
             "tenant_mode": "none",
@@ -242,7 +254,8 @@ def _make_project(
     _write_yaml(
         project / "capabilities" / "get_current_item.yaml",
         {
-            "schema_version": "1",
+            "schema_version": "2",
+            "kind": "read",
             "id": "get_current_item",
             "title": "Get current item",
             "description": "Read one item through an offline fake source.",
@@ -264,14 +277,54 @@ def _make_project(
     _write_yaml(
         project / "evals" / "offline-normal.yaml",
         {
-            "schema_version": "1",
+            "schema_version": "2",
             "id": "offline-normal",
             "capability": "get_current_item",
             "input": {},
             "fixtures": {},
             "expected_calls": [],
             "expected_output_schema": {"type": "object"},
+            "expected_error": None,
             "forbidden_fields": ["authorization"],
+        },
+    )
+    operation_input = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["actor_id", "tenant_id"],
+        "properties": {
+            "actor_id": {"type": "string"},
+            "tenant_id": {"type": "string"},
+        },
+    }
+    operation_output = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["ok"],
+        "properties": {"ok": {"type": "boolean"}},
+    }
+    _write_yaml(
+        project / "source-contracts" / "offline.current_item.yaml",
+        {
+            "schema_version": "2",
+            "id": "offline.current_item.contract",
+            "operation_id": "offline.current_item",
+            "request_schema": operation_input,
+            "response_schema": operation_output,
+            "request_completeness": "complete",
+            "response_completeness": "complete",
+            "provenance": [],
+        },
+    )
+    _write_yaml(
+        project / "capability-quality" / "get_current_item.yaml",
+        {
+            "schema_version": "2",
+            "capability_id": "get_current_item",
+            "intent": {"action": "get", "resource_types": ["item"]},
+            "inputs": {},
+            "composition": {"failure_mode": "fail_fast"},
+            "output_budget": {"max_bytes": 65536},
         },
     )
     return project

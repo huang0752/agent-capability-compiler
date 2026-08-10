@@ -1,6 +1,6 @@
 """Capability coverage analysis."""
 
-from acc_core.coverage.analyze import analyze_coverage, analyze_coverage_v1, analyze_coverage_v2
+from acc_core.coverage.analyze import analyze_coverage
 from acc_core.coverage.models import (
     CompositionCoverage,
     ConstructabilityCoverage,
@@ -30,6 +30,4 @@ __all__ = [
     "ScenarioCoverage",
     "SchemaFidelityCoverage",
     "analyze_coverage",
-    "analyze_coverage_v1",
-    "analyze_coverage_v2",
 ]

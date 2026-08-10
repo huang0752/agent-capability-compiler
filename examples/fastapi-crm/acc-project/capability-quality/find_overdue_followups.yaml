@@ -1,0 +1,7 @@
+schema_version: "2"
+capability_id: find_overdue_followups
+intent: {action: search, resource_types: [followup]}
+inputs:
+  as_of: {kind: filter, acquisition: caller}
+composition: {failure_mode: fail_fast}
+output_budget: {max_bytes: 65536, long_text_disclosures: []}

@@ -28,7 +28,7 @@ from acc_runtime.loader import (
 )
 
 _SAMPLE_IR: dict[str, Any] = {
-    "ir_version": "1",
+    "ir_version": "2",
     "project": {"id": "example-crm", "version": "0.1.0"},
     "operations": {
         "crm.get_customer": {
@@ -51,11 +51,12 @@ def _build_pack(tmp_path: Path, *, compiled_ir: object = _SAMPLE_IR) -> Path:
     (project / "project.yaml").write_text(
         json.dumps(
             {
-                "schema_version": "1",
-                "project": {"id": "example-crm", "version": "0.1.0"},
+                "schema_version": "2",
+                "project": {"id": "example-crm", "version": "2.0.0"},
                 "source_workspace": {"path": "../crm", "mode": "read_only"},
                 "runtime": {"transport": ["stdio"]},
                 "provider": {"kind": "http", "base_url_ref": "CRM_BASE_URL"},
+                "quality": {"profile": "standard"},
             }
         ),
         encoding="utf-8",
@@ -177,6 +178,19 @@ def test_load_pack_verifies_and_exposes_manifest_ir_and_lookups(tmp_path: Path) 
     assert loaded.ir == _SAMPLE_IR
     assert loaded.capability("get_customer") == _SAMPLE_IR["capabilities"]["get_customer"]
     assert loaded.operation("crm.get_customer") == _SAMPLE_IR["operations"]["crm.get_customer"]
+
+
+def test_load_pack_rejects_legacy_ir_with_a_stable_reason(tmp_path: Path) -> None:
+    pack_path = _build_pack(tmp_path)
+    _replace_compiled_ir(pack_path, b'{"ir_version":"1"}\n')
+
+    with pytest.raises(RuntimeIRFormatError) as caught:
+        load_pack(pack_path)
+
+    assert caught.value.details == {
+        "path": "compiled/ir.json",
+        "reason": "version_mismatch",
+    }
 
 
 def test_load_pack_calls_core_verification_before_loading_ir(

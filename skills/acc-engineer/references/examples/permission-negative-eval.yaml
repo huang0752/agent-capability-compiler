@@ -1,5 +1,5 @@
 # Pair with templates/eval.yaml after replacing identifiers and synthetic input.
-schema_version: "1"
+schema_version: "2"
 id: replace_capability_permission_denied
 capability: REPLACE_WITH_CAPABILITY_ID
 

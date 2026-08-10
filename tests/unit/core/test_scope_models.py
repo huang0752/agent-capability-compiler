@@ -8,9 +8,9 @@ from acc_core.scope import ScopeInventory
 
 def _inventory() -> dict[str, object]:
     return {
-        "schema_version": "1",
+        "schema_version": "2",
         "scope": {
-            "mode": "system_readonly_complete",
+            "mode": "system_complete",
             "user_confirmation": None,
             "selected_domains": [],
             "exclusion_approval": {
@@ -20,7 +20,7 @@ def _inventory() -> dict[str, object]:
         },
         "discovery": {
             "source_commit": "git:0123456789abcdef",
-            "methods": ["GET", "HEAD"],
+            "methods": ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"],
             "include_paths": ["backend/app/api"],
             "evidence_sources": ["api-router"],
         },
@@ -31,6 +31,8 @@ def _inventory() -> dict[str, object]:
                 "id": "crm.route.list_customers",
                 "domain": "customers",
                 "method": "GET",
+                "kind": "read",
+                "effect": "read",
                 "path": "/api/customers",
                 "evidence_sources": ["api-router"],
                 "usage_evidence_sources": ["frontend/api/customers.ts:10"],
@@ -45,7 +47,7 @@ def _inventory() -> dict[str, object]:
         ],
         "summary": {
             "discovered_routes": 1,
-            "eligible_read_routes": 1,
+            "eligible_routes": 1,
             "planned": 1,
             "composed": 0,
             "excluded": 0,
@@ -59,9 +61,9 @@ def _inventory() -> dict[str, object]:
 def test_scope_inventory_parses_the_platform_neutral_route_denominator() -> None:
     inventory = ScopeInventory.model_validate(_inventory())
 
-    assert inventory.scope.mode == "system_readonly_complete"
+    assert inventory.scope.mode == "system_complete"
     assert inventory.routes[0].operation_id == "crm.list_customers"
-    assert inventory.summary.eligible_read_routes == 1
+    assert inventory.summary.eligible_routes == 1
 
 
 def test_scope_inventory_rejects_unknown_fields() -> None:
@@ -72,13 +74,38 @@ def test_scope_inventory_rejects_unknown_fields() -> None:
         ScopeInventory.model_validate(value)
 
 
-def test_scope_inventory_rejects_non_read_discovery_methods_in_v1() -> None:
+def test_scope_inventory_accepts_action_discovery_methods() -> None:
     value = _inventory()
     discovery = value["discovery"]
     assert isinstance(discovery, dict)
-    discovery["methods"] = ["GET", "POST"]
+    discovery["methods"] = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]
 
-    with pytest.raises(ValidationError, match="POST"):
+    inventory = ScopeInventory.model_validate(value)
+    assert inventory.discovery is not None
+    assert inventory.discovery.methods == ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]
+
+
+def test_scope_inventory_accepts_evidence_declared_action_effect() -> None:
+    value = _inventory()
+    routes = value["routes"]
+    assert isinstance(routes, list)
+    route = routes[0]
+    assert isinstance(route, dict)
+    route.update(method="POST", kind="action", effect="transition")
+
+    inventory = ScopeInventory.model_validate(value)
+    assert inventory.routes[0].effect == "transition"
+
+
+def test_scope_inventory_rejects_kind_effect_mismatch() -> None:
+    value = _inventory()
+    routes = value["routes"]
+    assert isinstance(routes, list)
+    route = routes[0]
+    assert isinstance(route, dict)
+    route.update(kind="action", effect="read")
+
+    with pytest.raises(ValidationError, match="mutation effect"):
         ScopeInventory.model_validate(value)
 
 
@@ -104,11 +131,13 @@ def test_scope_inventory_rejects_summary_that_does_not_match_routes() -> None:
         ScopeInventory.model_validate(value)
 
 
-def test_scope_inventory_accepts_the_existing_minimal_v1_document_shape() -> None:
+def test_scope_inventory_accepts_the_minimal_current_document_shape() -> None:
     value = _inventory()
     value.pop("discovery")
     scope = value["scope"]
     assert isinstance(scope, dict)
+    scope["mode"] = "pilot"
+    scope["user_confirmation"] = "Approved pilot."
     scope.pop("exclusion_approval")
     value["domains"] = [{"id": "customers"}]
 

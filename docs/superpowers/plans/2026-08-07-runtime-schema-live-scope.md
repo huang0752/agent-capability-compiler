@@ -131,6 +131,7 @@ class ScopeRequirements:
     alternatives: tuple[frozenset[str], ...]
     all_referenced_scopes: frozenset[str]
 
+
 def analyze_scope_requirements(
     capability: Capability,
     policy: Policy,

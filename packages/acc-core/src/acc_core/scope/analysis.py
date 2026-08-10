@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from acc_core.models import (
+    ActionCapabilityV2,
     BranchStep,
     CallStep,
     Capability,
@@ -51,13 +52,21 @@ _EMPTY_PATH = _PathRequirements(
 
 def analyze_capability_scope_requirements(
     *,
-    capability: Capability | ReadCapabilityV2,
+    capability: Capability,
     policy: Policy,
     operations: Mapping[str, Operation | OperationV2],
 ) -> CapabilityScopeRequirements:
     """Analyze scope alternatives without flattening mutually exclusive branches."""
 
-    workflow = _analyze_steps(capability.workflow, operations)
+    if isinstance(capability, ReadCapabilityV2):
+        workflow = _analyze_steps(capability.workflow, operations)
+    elif isinstance(capability, ActionCapabilityV2):
+        workflow = _combine_required(
+            _analyze_steps(capability.preview_workflow, operations),
+            _analyze_steps(capability.commit_workflow, operations),
+        )
+    else:  # pragma: no cover - the discriminated public union is closed
+        raise TypeError("unsupported capability kind")
     policy_scopes = frozenset(policy.required_scopes)
     alternatives = _minimal_antichain(
         tuple(alternative | policy_scopes for alternative in workflow.alternatives)

@@ -1,0 +1,12 @@
+schema_version: "2"
+capability_id: get_customer_context
+intent: {action: inspect, resource_types: [customer]}
+inputs:
+  customer_id:
+    kind: resource_selector
+    resource_type: customer
+    acquisition: caller
+composition:
+  failure_mode: fail_fast
+  justification: Compose the evidenced customer detail resources into one business context.
+output_budget: {max_bytes: 131072, long_text_disclosures: []}

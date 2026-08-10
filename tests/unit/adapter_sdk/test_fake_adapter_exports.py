@@ -40,10 +40,10 @@ async def test_fake_adapter_is_a_deployable_read_only_example() -> None:
         base_url="http://adapter.test",
     ) as client:
         health = await client.get("/healthz")
-        record = await client.get("/adapter/v1/records/r-1")
-        exists = await client.head("/adapter/v1/records/r-1")
-        missing = await client.get("/adapter/v1/records/missing")
-        write = await client.delete("/adapter/v1/records/r-1")
+        record = await client.get("/adapter/v2/records/r-1")
+        exists = await client.head("/adapter/v2/records/r-1")
+        missing = await client.get("/adapter/v2/records/missing")
+        write = await client.delete("/adapter/v2/records/r-1")
 
     assert health.status_code == 200
     assert health.json()["adapter"] == {

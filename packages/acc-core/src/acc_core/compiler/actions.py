@@ -1,4 +1,4 @@
-"""Pure safety proofs and derived inventory for v2 Action Capabilities."""
+"""Pure safety proofs and derived inventory for current Action Capabilities."""
 
 from __future__ import annotations
 

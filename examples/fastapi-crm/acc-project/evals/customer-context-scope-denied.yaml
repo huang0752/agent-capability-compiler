@@ -1,4 +1,4 @@
-schema_version: "1"
+schema_version: "2"
 id: customer-context-scope-denied
 capability: get_customer_context
 input: {customer_id: cust-a-001}

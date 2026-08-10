@@ -148,7 +148,7 @@ class GatewaySettings(_StrictModel):
     @model_validator(mode="after")
     def _validate_listener(self) -> GatewaySettings:
         if self.worker_count != 1:
-            raise ValueError("Gateway v1 requires exactly one worker")
+            raise ValueError("Gateway requires exactly one worker")
         try:
             listen_address = ipaddress.ip_address(self.listen_host)
         except ValueError as exc:

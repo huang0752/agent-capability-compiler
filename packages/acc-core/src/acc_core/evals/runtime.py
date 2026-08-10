@@ -63,6 +63,17 @@ class RuntimeEvalRunner:
         compiled_ir: Mapping[str, Any],
         eval_ids: Iterable[str] | None = None,
     ) -> EvalReport:
+        if compiled_ir.get("ir_version") != "2":
+            return EvalReport(
+                kind="runtime",
+                cases=(),
+                diagnostics=(
+                    EvalDiagnostic(
+                        code="ACC_EVAL_IR_INVALID",
+                        message="Eval accepts only current compiled IR version 2.",
+                    ),
+                ),
+            )
         raw_evals = _mapping(compiled_ir.get("evals"))
         if raw_evals is None:
             return EvalReport(

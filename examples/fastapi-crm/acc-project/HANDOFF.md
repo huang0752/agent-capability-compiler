@@ -12,14 +12,14 @@ evidence-bound REST Operations:
 
 The source system is `../system`; the isolated ACC project is this directory. Runtime configuration
 uses Provider-level `bearer_secret` through the `CRM_DEMO_TOKEN` environment reference, plus
-`CRM_BASE_URL`, deployment scopes, and tenant context. All six Operations omit legacy
+`CRM_BASE_URL`, deployment scopes, and tenant context. All six Operations omit
 `credential_ref`. Credential values, tenant, base URL, and authorization headers are not Agent tool
 inputs.
 
-This candidate does not declare `context_bindings`. Its hidden `tenant_id` is injected through the
-required-tenant Policy compatibility path from the fixed stdio `PrincipalContext`. That verifies
-legacy tenant injection, not the explicit context-binding contract. `streamable_http` Gateway and
-request-level multi-user identity were not exercised by this example.
+All six Operations declare the trusted `tenant_id -> tenant_context.tenant_id` context binding;
+tenant identity is restored from the fixed stdio `PrincipalContext`, never accepted from Agent
+input. `streamable_http` Gateway and request-level multi-user identity were not exercised by this
+example.
 
 ## Evidence and source integrity
 
@@ -69,6 +69,6 @@ generic HTTP transport boundary. These are documented limits, not production ass
 1. Review `system-map.yaml`, `analysis-report.md`, and `evidence/` against `../system`.
 2. Review Operations, Policies, and the composed `get_customer_context` workflow.
 3. Review all nine Evals and the machine-readable reports.
-4. Review `candidate.diff`, rerun the commands in `../README.md`, and decide whether to merge.
+4. Review the Git diff, rerun the commands in `../README.md`, and decide whether to merge.
 
 No deployment or push was performed.

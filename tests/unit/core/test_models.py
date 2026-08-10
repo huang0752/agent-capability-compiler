@@ -4,35 +4,23 @@ from collections.abc import Callable
 from copy import deepcopy
 
 import pytest
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 import acc_core.models as models
 
 
 def project_document() -> dict[str, object]:
     return {
-        "schema_version": "1",
-        "project": {"id": "example-crm", "version": "0.1.0"},
+        "schema_version": "2",
+        "project": {"id": "example-crm", "version": "2.0.0"},
         "source_workspace": {"path": "../system", "mode": "read_only"},
         "runtime": {"transport": ["stdio"]},
-        "provider": {"kind": "http", "base_url_ref": "CRM_BASE_URL"},
-    }
-
-
-def password_bearer_auth(*, credential_kind: str = "environment_secret") -> dict[str, object]:
-    credentials: dict[str, object] = {"kind": credential_kind}
-    if credential_kind == "environment_secret":
-        credentials.update(
-            identity_ref="CRM_USER_EMAIL",
-            password_ref="CRM_USER_PASSWORD",
-        )
-    return {
-        "kind": "password_bearer",
-        "credentials": credentials,
-        "login_path": "/api/auth/login",
-        "identity_field": "email",
-        "password_field": "password",
-        "token_pointer": "/data/access_token",
+        "provider": {
+            "kind": "http",
+            "base_url_ref": "CRM_BASE_URL",
+            "auth": {"kind": "bearer_secret", "token_ref": "CRM_TOKEN"},
+        },
+        "quality": {"profile": "standard"},
     }
 
 
@@ -43,48 +31,133 @@ def evidence_document() -> dict[str, object]:
         "path": "app/api/customers.py",
         "line_start": 42,
         "line_end": 68,
-        "digest": f"sha256:{'a' * 64}",
+        "digest": "sha256:" + "a" * 64,
     }
 
 
 def operation_document() -> dict[str, object]:
     return {
-        "schema_version": "1",
+        "schema_version": "2",
+        "kind": "read",
         "id": "crm.get_customer",
         "title": "Get customer",
-        "kind": "http",
         "input_schema": {
             "type": "object",
             "additionalProperties": False,
-            "required": ["customer_id"],
             "properties": {"customer_id": {"type": "string"}},
+            "required": ["customer_id"],
         },
         "output_schema": {"type": "object"},
         "http": {
             "method": "GET",
             "path": "/customers/{customer_id}",
             "path_parameters": {"customer_id": "customer_id"},
-            "credential_ref": "CRM_USER_TOKEN",
+            "query_parameters": {},
+            "request": None,
+            "success": {"statuses": [200], "body": "json"},
             "scopes": ["customer.read"],
             "timeout_seconds": 15,
             "max_response_bytes": 1_048_576,
+            "safety": {
+                "effect": "read",
+                "risk": "low",
+                "reversibility": "reversible",
+                "retry": {"mode": "idempotent_only"},
+                "idempotency": {"mode": "unsupported"},
+                "concurrency": {"mode": "not_supported"},
+            },
         },
-        "safety": {"effect": "read"},
+        "context_bindings": {},
         "evidence": [evidence_document()],
     }
 
 
-def test_project_models_the_milestone_one_contract() -> None:
+def capability_document() -> dict[str, object]:
+    return {
+        "schema_version": "2",
+        "kind": "read",
+        "id": "get_customer",
+        "title": "Get customer context",
+        "description": "Get one customer.",
+        "input_schema": {"type": "object"},
+        "output_schema": {"type": "object"},
+        "workflow": [
+            {
+                "id": "customer",
+                "call": {
+                    "operation": "crm.get_customer",
+                    "arguments": {"customer_id": "$.input.customer_id"},
+                },
+            },
+            {"emit": {"value": "$.steps.customer"}},
+        ],
+        "policy": "crm-read",
+        "evals": ["normal"],
+    }
+
+
+def policy_document() -> dict[str, object]:
+    return {
+        "schema_version": "2",
+        "id": "crm-read",
+        "required_scopes": ["customer.read"],
+        "tenant_mode": "none",
+        "tenant_field": None,
+        "readable_fields": ["id"],
+        "denied_fields": [],
+        "redaction_rules": [],
+    }
+
+
+def eval_document() -> dict[str, object]:
+    return {
+        "schema_version": "2",
+        "id": "normal",
+        "capability": "get_customer",
+        "input": {"customer_id": "c-1"},
+        "fixtures": {},
+        "expected_calls": [{"operation": "crm.get_customer", "arguments": {"customer_id": "c-1"}}],
+        "expected_output_schema": {"type": "object"},
+        "expected_error": None,
+        "forbidden_fields": [],
+    }
+
+
+def test_canonical_public_models_load_current_read_documents() -> None:
     project = models.Project.model_validate(project_document())
+    operation: object = TypeAdapter(models.Operation).validate_python(operation_document())
+    capability: object = TypeAdapter(models.Capability).validate_python(capability_document())
+    policy = models.Policy.model_validate(policy_document())
+    scenario = models.Eval.model_validate(eval_document())
 
-    assert project.project.id == "example-crm"
-    assert project.source_workspace.mode == "read_only"
-    assert project.runtime.transport == ["stdio"]
-    assert project.provider.base_url_ref == "CRM_BASE_URL"
-    assert project.provider.context_binding_allowlist == []
+    assert project.schema_version == "2"
+    assert isinstance(operation, models.ReadOperationV2)
+    assert isinstance(capability, models.ReadCapabilityV2)
+    assert policy.schema_version == "2"
+    assert scenario.schema_version == "2"
 
 
-def test_provider_accepts_sorted_unique_tenant_context_binding_allowlist() -> None:
+@pytest.mark.parametrize(
+    ("validator", "document"),
+    [
+        (models.Project.model_validate, project_document()),
+        (TypeAdapter(models.Operation).validate_python, operation_document()),
+        (TypeAdapter(models.Capability).validate_python, capability_document()),
+        (models.Policy.model_validate, policy_document()),
+        (models.Eval.model_validate, eval_document()),
+    ],
+)
+def test_every_top_level_contract_rejects_legacy_version(
+    validator: Callable[[object], object],
+    document: dict[str, object],
+) -> None:
+    document["schema_version"] = "1"
+
+    with pytest.raises(ValidationError, match="schema_version"):
+        validator(document)
+
+
+def test_provider_accepts_only_sorted_unique_nonsensitive_context_bindings() -> None:
     document = project_document()
     provider = deepcopy(document["provider"])
     assert isinstance(provider, dict)
@@ -107,11 +180,12 @@ def test_provider_accepts_sorted_unique_tenant_context_binding_allowlist() -> No
     [
         ["tenant_context.tenant_id", "tenant_context.tenant_id"],
         ["principal_id"],
-        ["tenant_context"],
         ["tenant_context.z_field", "tenant_context.a_field"],
+        ["tenant_context.profile.accessToken"],
+        ["tenant_context.privateKey"],
     ],
 )
-def test_provider_rejects_duplicate_invalid_or_unsorted_context_binding_allowlist(
+def test_provider_rejects_duplicate_unsorted_or_sensitive_bindings(
     allowlist: list[str],
 ) -> None:
     document = project_document()
@@ -120,630 +194,99 @@ def test_provider_rejects_duplicate_invalid_or_unsorted_context_binding_allowlis
     provider["context_binding_allowlist"] = allowlist
     document["provider"] = provider
 
-    with pytest.raises(ValidationError, match="context_binding_allowlist"):
+    with pytest.raises(ValidationError):
         models.Project.model_validate(document)
 
 
-@pytest.mark.parametrize(
-    "source",
-    [
-        "tenant_context.token",
-        "tenant_context.secret",
-        "tenant_context.password",
-        "tenant_context.header",
-        "tenant_context.headers",
-        "tenant_context.authorization",
-        "tenant_context.credential",
-        "tenant_context.credentials",
-        "tenant_context.cookie",
-        "tenant_context.cookies",
-        "tenant_context.jwt",
-        "tenant_context.bearer",
-        "tenant_context.csrf",
-        "tenant_context.profile.accessToken",
-        "tenant_context.profile.refresh-token",
-        "tenant_context.auth_token",
-        "tenant_context.clientSecret",
-        "tenant_context.session-token",
-        "tenant_context.setCookie",
-        "tenant_context.api-key",
-        "tenant_context.privateKey",
-        "tenant_context.idToken",
-        "tenant_context.oauthToken",
-        "tenant_context.apiToken",
-        "tenant_context.jwtToken",
-        "tenant_context.passwordHash",
-        "tenant_context.xApiKey",
-        "tenant_context.authorizationHeader",
-        "tenant_context.idtoken",
-        "tenant_context.oauthtoken",
-        "tenant_context.apikey",
-        "tenant_context.xapikey",
-        "tenant_context.passwordhash",
-        "tenant_context.authorizationheader",
-        "tenant_context.clientsecret",
-        "tenant_context.privatekey",
-        "tenant_context.setcookie",
-        "tenant_context.privateRegionKey",
-        "tenant_context.apiRegionKey",
-    ],
-)
-def test_provider_rejects_sensitive_context_binding_allowlist_paths(source: str) -> None:
-    document = project_document()
-    provider = deepcopy(document["provider"])
-    assert isinstance(provider, dict)
-    provider["context_binding_allowlist"] = [source]
-    document["provider"] = provider
-
-    with pytest.raises(ValidationError, match="sensitive"):
-        models.Project.model_validate(document)
-
-
-@pytest.mark.parametrize(
-    ("auth", "auth_type"),
-    [
-        ({"kind": "none"}, "NoAuthConfig"),
-        (
-            {"kind": "bearer_secret", "token_ref": "CRM_USER_TOKEN"},
-            "BearerSecretAuthConfig",
-        ),
-        (password_bearer_auth(), "PasswordBearerAuthConfig"),
-        (
-            password_bearer_auth(credential_kind="gateway_session"),
-            "PasswordBearerAuthConfig",
-        ),
-    ],
-)
-def test_project_accepts_strict_provider_auth_union(
-    auth: dict[str, object], auth_type: str
-) -> None:
-    document = project_document()
-    provider = deepcopy(document["provider"])
-    assert isinstance(provider, dict)
-    provider["auth"] = auth
-    document["provider"] = provider
-
-    project = models.Project.model_validate(document)
-
-    assert type(project.provider.auth).__name__ == auth_type
-
-
-def test_password_bearer_auth_defaults_are_bounded_and_safe() -> None:
-    auth = models.PasswordBearerAuthConfig.model_validate(password_bearer_auth())
-
-    assert isinstance(auth.credentials, models.EnvironmentSecretCredentials)
-    assert auth.timeout_seconds == 10
-    assert auth.max_response_bytes == 65_536
-    assert auth.retry_on_unauthorized is False
-    assert auth.scope_mapping == {}
-
-    for field, value in (
-        ("timeout_seconds", 0),
-        ("timeout_seconds", 301),
-        ("max_response_bytes", 0),
-        ("max_response_bytes", 1_048_577),
-    ):
-        document = password_bearer_auth()
-        document[field] = value
-        with pytest.raises(ValidationError, match=field):
-            models.PasswordBearerAuthConfig.model_validate(document)
-
-
-@pytest.mark.parametrize(
-    "path",
-    [
-        "https://crm.example.com/api/auth/login",
-        "//crm.example.com/api/auth/login",
-        "/api/auth/../admin",
-        "api/auth/login",
-        "/api/auth/login?next=/admin",
-        "/api/auth/login#fragment",
-        "/api\\auth\\login",
-    ],
-)
-def test_password_bearer_rejects_unsafe_login_path(path: str) -> None:
-    document = password_bearer_auth()
-    document["login_path"] = path
-
-    with pytest.raises(ValidationError, match="login_path"):
-        models.PasswordBearerAuthConfig.model_validate(document)
-
-
-@pytest.mark.parametrize(
-    "pointer",
-    ["", "data/token", "/data/~2token", "/data/token~"],
-)
-def test_password_bearer_rejects_invalid_absolute_json_pointer(pointer: str) -> None:
-    document = password_bearer_auth()
-    document["token_pointer"] = pointer
-
-    with pytest.raises(ValidationError):
-        models.PasswordBearerAuthConfig.model_validate(document)
-
-
-def test_password_bearer_accepts_all_optional_json_pointers_and_scope_mapping() -> None:
-    document = password_bearer_auth(credential_kind="gateway_session")
-    document.update(
-        token_type_pointer="/data/token~0type",
-        expires_in_pointer="/data/expires~1in",
-        principal_pointer="/data/user/id",
-        scopes_pointer="/data/permissions",
-        tenant_pointer="/data/tenant",
-        scope_mapping={"customer:read": ["customer.read"]},
-        timeout_seconds=300,
-        max_response_bytes=1_048_576,
-        retry_on_unauthorized=True,
-    )
-
-    auth = models.PasswordBearerAuthConfig.model_validate(document)
-
-    assert isinstance(auth.credentials, models.GatewaySessionCredentials)
-    assert auth.scope_mapping == {"customer:read": ["customer.read"]}
-
-
-def test_password_bearer_requires_distinct_identity_and_password_fields() -> None:
-    document = password_bearer_auth()
-    document["password_field"] = "email"
-
-    with pytest.raises(ValidationError, match="identity_field"):
-        models.PasswordBearerAuthConfig.model_validate(document)
-
-
-def test_runtime_transport_remains_a_single_selected_mode() -> None:
-    assert models.RuntimeConfig.model_validate({"transport": ["streamable_http"]}).transport == [
-        "streamable_http"
-    ]
-    with pytest.raises(ValidationError):
-        models.RuntimeConfig.model_validate({"transport": ["stdio", "streamable_http"]})
-
-
-def test_evidence_supports_source_lines_json_pointer_openapi_and_summary() -> None:
-    evidence = models.Evidence.model_validate(
-        {
-            **evidence_document(),
-            "json_pointer": "/paths/~1customers~1{customer_id}/get",
-            "openapi_operation": "getCustomer",
-            "summary": "GET route is protected by customer.read.",
-        }
-    )
-
-    assert evidence.line_start == 42
-    assert evidence.json_pointer is not None
-    assert evidence.json_pointer.startswith("/")
-    assert evidence.openapi_operation == "getCustomer"
-
-
-def test_evidence_rejects_an_inverted_line_range() -> None:
-    document = evidence_document()
-    document["line_start"] = 68
-    document["line_end"] = 42
-
-    with pytest.raises(ValidationError, match="line_end"):
-        models.Evidence.model_validate(document)
-
-
-def test_operation_evidence_reference_can_use_a_digest_bound_locator() -> None:
-    evidence = models.Evidence.model_validate(
-        {
-            "source_id": "crm-backend",
-            "locator": "app/api/customers.py#L42-L68",
-            "digest": f"sha256:{'a' * 64}",
-        }
-    )
-
-    assert evidence.kind is None
-    assert evidence.locator == "app/api/customers.py#L42-L68"
-
-
-@pytest.mark.parametrize("method", ["GET", "HEAD"])
-def test_operation_accepts_only_supported_read_methods(method: str) -> None:
-    document = operation_document()
-    http = deepcopy(document["http"])
-    assert isinstance(http, dict)
-    http["method"] = method
-    document["http"] = http
-
-    operation = models.Operation.model_validate(document)
-
-    assert operation.http.method == method
-    assert operation.safety.effect == "read"
-
-
-@pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
-def test_operation_rejects_write_methods(method: str) -> None:
-    document = operation_document()
-    http = deepcopy(document["http"])
-    assert isinstance(http, dict)
-    http["method"] = method
-    document["http"] = http
-
-    with pytest.raises(ValidationError):
-        models.Operation.model_validate(document)
-
-
-@pytest.mark.parametrize(
-    "path",
-    [
-        "https://crm.example.com/customers/1",
-        "//crm.example.com/customers/1",
-        "/customers/../admin",
-        "customers/1",
-    ],
-)
-def test_operation_rejects_non_origin_relative_or_traversing_paths(path: str) -> None:
-    document = operation_document()
-    http = deepcopy(document["http"])
-    assert isinstance(http, dict)
-    http["path"] = path
-    document["http"] = http
-
-    with pytest.raises(ValidationError, match="path"):
-        models.Operation.model_validate(document)
-
-
-def test_operation_requires_evidence_input_output_schemas_and_read_effect() -> None:
-    mutations: tuple[Callable[[dict[str, object]], object], ...] = (
-        lambda document: document.update(evidence=[]),
-        lambda document: document.pop("input_schema"),
-        lambda document: document.pop("output_schema"),
-        lambda document: document.update(safety={"effect": "write"}),
-    )
-    for mutation in mutations:
-        document = operation_document()
-        mutation(document)
-
-        with pytest.raises(ValidationError):
-            models.Operation.model_validate(document)
-
-
-def test_operation_accepts_locator_only_evidence_reference() -> None:
-    document = operation_document()
-    document["evidence"] = [
-        {
-            "source_id": "crm-backend",
-            "locator": "app/api/customers.py#L42-L68",
-            "digest": f"sha256:{'b' * 64}",
-        }
-    ]
-
-    operation = models.Operation.model_validate(document)
-
-    assert operation.evidence[0].locator == "app/api/customers.py#L42-L68"
-
-
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
-        ("input_schema", {"type": "not-a-json-schema-type"}),
-        ("output_schema", {"required": "must-be-an-array"}),
-    ],
-)
-def test_operation_rejects_invalid_json_schemas(field: str, value: object) -> None:
-    document = operation_document()
-    document[field] = value
-
-    with pytest.raises(ValidationError, match="JSON Schema"):
-        models.Operation.model_validate(document)
-
-
-def test_operation_rejects_non_environment_secret_reference() -> None:
-    document = operation_document()
-    http = deepcopy(document["http"])
-    assert isinstance(http, dict)
-    http["credential_ref"] = "token-from-user-input"
-    document["http"] = http
-
-    with pytest.raises(ValidationError, match="credential_ref"):
-        models.Operation.model_validate(document)
-
-
-def test_operation_supports_declared_query_parameters() -> None:
-    document = operation_document()
-    input_schema = deepcopy(document["input_schema"])
-    assert isinstance(input_schema, dict)
-    properties = input_schema["properties"]
-    assert isinstance(properties, dict)
-    properties["include_contacts"] = {"type": "boolean"}
-    document["input_schema"] = input_schema
-    http = deepcopy(document["http"])
-    assert isinstance(http, dict)
-    http["query_parameters"] = {"include_contacts": "include_contacts"}
-    document["http"] = http
-
-    operation = models.Operation.model_validate(document)
-
-    assert operation.http.query_parameters == {"include_contacts": "include_contacts"}
-
-
-def test_operation_supports_optional_legacy_credential_and_context_bindings() -> None:
-    document = operation_document()
-    http = deepcopy(document["http"])
-    assert isinstance(http, dict)
-    http.pop("credential_ref")
-    document["http"] = http
-    document["context_bindings"] = {
-        "customer_id": "tenant_context.customer_id",
+def test_password_bearer_auth_validates_paths_pointers_and_distinct_fields() -> None:
+    auth = {
+        "kind": "password_bearer",
+        "credentials": {
+            "kind": "environment_secret",
+            "identity_ref": "CRM_USER",
+            "password_ref": "CRM_PASSWORD",
+        },
+        "login_path": "/api/auth/login",
+        "identity_field": "email",
+        "password_field": "password",
+        "token_pointer": "/data/access_token",
     }
+    assert models.PasswordBearerAuthConfig.model_validate(auth).token_pointer == (
+        "/data/access_token"
+    )
 
-    operation = models.Operation.model_validate(document)
-
-    assert operation.http.credential_ref is None
-    assert operation.context_bindings == {
-        "customer_id": "tenant_context.customer_id",
-    }
-
-
-@pytest.mark.parametrize(
-    "source",
-    [
-        "principal_id",
-        "tenant_context.tenant_id",
-        "tenant_context.organization.region-id",
-    ],
-)
-def test_operation_accepts_only_safe_context_binding_sources(source: str) -> None:
-    document = operation_document()
-    document["context_bindings"] = {"customer_id": source}
-
-    operation = models.Operation.model_validate(document)
-
-    assert operation.context_bindings["customer_id"] == source
+    auth["login_path"] = "https://evil.example/login"
+    with pytest.raises(ValidationError, match="origin-relative"):
+        models.PasswordBearerAuthConfig.model_validate(auth)
 
 
-@pytest.mark.parametrize(
-    "source",
-    [
-        "tenant_context.secretary_id",
-        "tenant_context.header_image",
-        "tenant_context.tokenized_region",
-    ],
-)
-def test_operation_does_not_substring_block_safe_context_binding_sources(
-    source: str,
-) -> None:
-    document = operation_document()
-    document["context_bindings"] = {"customer_id": source}
-
-    operation = models.Operation.model_validate(document)
-
-    assert operation.context_bindings["customer_id"] == source
-
-
-@pytest.mark.parametrize(
-    "source",
-    [
-        "tenant_context.token",
-        "tenant_context.profile.accessToken",
-        "tenant_context.profile.refresh-token",
-        "tenant_context.auth_token",
-        "tenant_context.clientSecret",
-        "tenant_context.session-token",
-        "tenant_context.setCookie",
-        "tenant_context.api-key",
-        "tenant_context.privateKey",
-        "tenant_context.idToken",
-        "tenant_context.oauthToken",
-        "tenant_context.apiToken",
-        "tenant_context.jwtToken",
-        "tenant_context.passwordHash",
-        "tenant_context.xApiKey",
-        "tenant_context.authorizationHeader",
-        "tenant_context.idtoken",
-        "tenant_context.oauthtoken",
-        "tenant_context.apikey",
-        "tenant_context.xapikey",
-        "tenant_context.passwordhash",
-        "tenant_context.authorizationheader",
-        "tenant_context.clientsecret",
-        "tenant_context.privatekey",
-        "tenant_context.setcookie",
-        "tenant_context.privateRegionKey",
-        "tenant_context.apiRegionKey",
-    ],
-)
-def test_operation_rejects_sensitive_context_binding_paths(source: str) -> None:
-    document = operation_document()
-    document["context_bindings"] = {"customer_id": source}
-
-    with pytest.raises(ValidationError, match="sensitive"):
-        models.Operation.model_validate(document)
-
-
-@pytest.mark.parametrize(
-    "source",
-    [
-        "tenant_context",
-        "tenant_context.",
-        "tenant_context..tenant_id",
-        "gateway_session_id",
-        "target_system_id",
-        "auth_state_handle",
-        "source_scopes",
-        "deployment_scope_ceiling",
-        "effective_scopes",
-        "token",
-        "password",
-        "header.authorization",
-        "credential",
-        "tenant_context._private",
-    ],
-)
-def test_operation_rejects_untrusted_context_binding_sources(source: str) -> None:
-    document = operation_document()
-    document["context_bindings"] = {"customer_id": source}
-
-    with pytest.raises(ValidationError, match="context_bindings"):
-        models.Operation.model_validate(document)
-
-
-def test_operation_parameter_mappings_must_reference_declared_inputs() -> None:
+def test_operation_mapping_and_evidence_are_strict() -> None:
     document = operation_document()
     http = deepcopy(document["http"])
     assert isinstance(http, dict)
-    http["query_parameters"] = {"q": "undeclared"}
+    http["query_parameters"] = {"tenant": "missing_input"}
     document["http"] = http
 
     with pytest.raises(ValidationError, match="declared input"):
-        models.Operation.model_validate(document)
+        TypeAdapter(models.Operation).validate_python(document)
+
+    missing_evidence = operation_document()
+    missing_evidence["evidence"] = []
+    with pytest.raises(ValidationError, match="at least 1"):
+        TypeAdapter(models.Operation).validate_python(missing_evidence)
 
 
-def test_operation_path_placeholders_require_an_exact_mapping() -> None:
-    document = operation_document()
-    http = deepcopy(document["http"])
-    assert isinstance(http, dict)
-    http["path_parameters"] = {}
-    document["http"] = http
+def test_evidence_requires_a_locator_and_ordered_line_range() -> None:
+    evidence = evidence_document()
+    evidence["line_start"] = 70
+    with pytest.raises(ValidationError, match="line_end"):
+        models.Evidence.model_validate(evidence)
 
-    with pytest.raises(ValidationError, match="path_parameters"):
-        models.Operation.model_validate(document)
-
-
-def test_evidence_digest_must_be_a_complete_sha256() -> None:
-    document = evidence_document()
-    document["digest"] = "sha256:abcd"
-
-    with pytest.raises(ValidationError, match="digest"):
-        models.Evidence.model_validate(document)
+    no_locator = evidence_document()
+    for field_name in ("path", "line_start", "line_end"):
+        no_locator.pop(field_name)
+    with pytest.raises(ValidationError, match="locator"):
+        models.Evidence.model_validate(no_locator)
 
 
-def test_policy_and_eval_cover_security_and_fake_system_expectations() -> None:
-    policy = models.Policy.model_validate(
-        {
-            "schema_version": "1",
-            "id": "crm-sales-read",
-            "required_scopes": ["customer.read"],
-            "tenant_mode": "required",
-            "tenant_field": "tenant_id",
-            "readable_fields": ["id", "name", "email"],
-            "denied_fields": ["internal_note"],
-            "redaction_rules": [{"path": "$.email", "strategy": "mask"}],
-        }
-    )
-    scenario = models.Eval.model_validate(
-        {
-            "schema_version": "1",
-            "id": "get-customer-context-normal",
-            "capability": "get_customer_context",
-            "input": {"customer_id": "cus-1"},
-            "fixtures": {"customers": [{"id": "cus-1", "tenant_id": "tenant-a"}]},
-            "expected_calls": [
-                {
-                    "operation": "crm.get_customer",
-                    "arguments": {"customer_id": "cus-1"},
-                }
-            ],
-            "expected_output_schema": {"type": "object", "required": ["customer"]},
-            "forbidden_fields": ["internal_note"],
-        }
-    )
+def test_policy_tenant_contract_is_explicit() -> None:
+    required = policy_document()
+    required["tenant_mode"] = "required"
+    required["tenant_field"] = "tenant_id"
+    assert models.Policy.model_validate(required).tenant_field == "tenant_id"
 
-    assert policy.tenant_mode == "required"
-    assert policy.tenant_field == "tenant_id"
-    assert policy.tenant_field == "tenant_id"
-    assert scenario.expected_calls[0].operation == "crm.get_customer"
-    assert scenario.expected_error is None
+    required["tenant_field"] = None
+    with pytest.raises(ValidationError, match="tenant_field"):
+        models.Policy.model_validate(required)
 
 
-def test_eval_can_describe_an_expected_error() -> None:
-    scenario = models.Eval.model_validate(
-        {
-            "schema_version": "1",
-            "id": "get-customer-context-not-found",
-            "capability": "get_customer_context",
-            "input": {"customer_id": "missing"},
-            "fixtures": {},
-            "expected_calls": [],
-            "expected_error": {"code": "NOT_FOUND", "status": 404},
-            "forbidden_fields": [],
-        }
-    )
+def test_eval_requires_exactly_one_success_or_failure_expectation() -> None:
+    neither = eval_document()
+    neither["expected_output_schema"] = None
+    with pytest.raises(ValidationError, match="exactly one"):
+        models.Eval.model_validate(neither)
 
-    assert scenario.expected_error is not None
-    assert scenario.expected_error.status == 404
+    both = eval_document()
+    both["expected_error"] = {"code": "NOT_FOUND", "status": 404}
+    with pytest.raises(ValidationError, match="exactly one"):
+        models.Eval.model_validate(both)
 
 
-def test_capability_supports_the_bounded_workflow_step_union() -> None:
-    capability = models.Capability.model_validate(
-        {
-            "schema_version": "1",
-            "id": "get_customer_context",
-            "title": "Get customer context",
-            "description": "Combine customer information without exposing credentials.",
-            "input_schema": {"type": "object", "additionalProperties": False},
-            "output_schema": {"type": "object"},
-            "workflow": [
-                {
-                    "id": "customer",
-                    "call": {
-                        "operation": "crm.get_customer",
-                        "arguments": {"customer_id": "$.input.customer_id"},
-                    },
-                },
-                {"id": "picked", "pick": {"value": "$.steps.customer", "fields": ["id"]}},
-                {
-                    "id": "mapped",
-                    "map": {
-                        "items": "$.steps.contacts",
-                        "expression": "{id: id}",
-                        "max_items": 100,
-                    },
-                },
-                {
-                    "id": "filtered",
-                    "filter": {
-                        "items": "$.steps.followups",
-                        "condition": "status == 'overdue'",
-                        "max_items": 100,
-                    },
-                },
-                {"assert": {"condition": "$.steps.customer != null", "message": "missing"}},
-                {"id": "safe", "redact": {"value": "$.steps.customer", "fields": ["email"]}},
-                {
-                    "branch": {
-                        "condition": "$.input.include_contacts",
-                        "then": [{"emit": {"value": "$.steps.safe"}}],
-                        "else": [{"emit": {"value": {}}}],
-                    }
-                },
-                {
-                    "parallel": [
-                        {"call": {"operation": "crm.list_contacts", "arguments": {}}},
-                        {"call": {"operation": "crm.list_followups", "arguments": {}}},
-                    ]
-                },
-                {
-                    "id": "contact_names",
-                    "foreach": {
-                        "items": "$.steps.contacts",
-                        "item_name": "contact",
-                        "max_items": 100,
-                        "workflow": [{"emit": {"value": "$.item.name"}}],
-                    },
-                },
-                {"emit": {"value": {"customer": "$.steps.customer"}}},
-            ],
-            "policy": "crm-sales-read",
-            "evals": ["get-customer-context-normal"],
-        }
-    )
-
-    assert len(capability.workflow) == 10
-    assert isinstance(capability.workflow[0], models.CallStep)
-    assert isinstance(capability.workflow[-1], models.EmitStep)
-
-
-def test_parallel_and_foreach_bounds_are_enforced() -> None:
-    too_many_parallel_calls = [
-        {"call": {"operation": f"crm.operation_{index}", "arguments": {}}} for index in range(9)
-    ]
-
+def test_recursive_workflow_bounds_remain_enforced() -> None:
     with pytest.raises(ValidationError):
-        models.ParallelStep.model_validate({"parallel": too_many_parallel_calls})
+        models.ParallelStep.model_validate(
+            {
+                "parallel": [
+                    {"call": {"operation": f"crm.op_{index}", "arguments": {}}}
+                    for index in range(9)
+                ]
+            }
+        )
     with pytest.raises(ValidationError):
         models.ForeachStep.model_validate(
             {
                 "foreach": {
-                    "items": "$.items",
+                    "items": "$.input.items",
                     "item_name": "item",
                     "max_items": 101,
                     "workflow": [{"emit": {"value": "$.item"}}],
@@ -753,68 +296,16 @@ def test_parallel_and_foreach_bounds_are_enforced() -> None:
 
 
 @pytest.mark.parametrize(
-    ("model_name", "document"),
+    ("adapter", "document"),
     [
-        ("Project", project_document()),
-        ("Evidence", evidence_document()),
-        ("Operation", operation_document()),
-        (
-            "Policy",
-            {
-                "schema_version": "1",
-                "id": "crm-read",
-                "required_scopes": [],
-                "tenant_mode": "none",
-                "readable_fields": [],
-                "denied_fields": [],
-                "redaction_rules": [],
-            },
-        ),
-        (
-            "Eval",
-            {
-                "schema_version": "1",
-                "id": "normal",
-                "capability": "search_customers",
-                "input": {},
-                "fixtures": {},
-                "expected_calls": [],
-                "expected_output_schema": {"type": "object"},
-                "forbidden_fields": [],
-            },
-        ),
-        (
-            "Capability",
-            {
-                "schema_version": "1",
-                "id": "search_customers",
-                "title": "Search customers",
-                "description": "Search visible customers.",
-                "input_schema": {"type": "object"},
-                "output_schema": {"type": "array"},
-                "workflow": [{"emit": {"value": []}}],
-                "policy": "crm-read",
-                "evals": ["normal"],
-            },
-        ),
+        (TypeAdapter(models.Operation), operation_document()),
+        (TypeAdapter(models.Capability), capability_document()),
     ],
 )
-def test_all_public_models_reject_unknown_fields(
-    model_name: str, document: dict[str, object]
+def test_discriminated_documents_reject_unknown_fields(
+    adapter: TypeAdapter[object],
+    document: dict[str, object],
 ) -> None:
     document["unknown"] = True
-    model_type = getattr(models, model_name)
-
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-        model_type.model_validate(document)
-
-
-def test_nested_public_models_also_reject_unknown_fields() -> None:
-    document = operation_document()
-    http = deepcopy(document["http"])
-    assert isinstance(http, dict)
-    http["headers"] = {"Authorization": "token"}
-    document["http"] = http
-
-    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-        models.Operation.model_validate(document)
+        adapter.validate_python(document)

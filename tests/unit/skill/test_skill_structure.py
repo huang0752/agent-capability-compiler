@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from pydantic import TypeAdapter
 
 from acc_core.models import Capability, Eval, Operation, Policy
 
@@ -60,7 +61,7 @@ def test_skill_requires_explicit_scope_audit_and_validation_level() -> None:
     harness = (SKILL / "HARNESS.md").read_text(encoding="utf-8")
     guides = "\n".join(path.read_text(encoding="utf-8") for path in (SKILL / "guides").glob("*.md"))
 
-    assert "system_readonly_complete" in skill
+    assert "system_complete" in skill
     assert "只有用户明确" in skill
     assert "scope_audit.py" in skill
     assert "浅层全局发现" in harness
@@ -115,8 +116,8 @@ def test_templates_track_current_strict_public_models() -> None:
     operation = _yaml(SKILL / "templates" / "operation.yaml")
     assert "credential_ref" not in operation["http"]
     operation["evidence"][0]["digest"] = digest
-    Operation.model_validate(operation)
-    Capability.model_validate(_yaml(SKILL / "templates" / "capability.yaml"))
+    TypeAdapter(Operation).validate_python(operation)
+    TypeAdapter(Capability).validate_python(_yaml(SKILL / "templates" / "capability.yaml"))
     Policy.model_validate(_yaml(SKILL / "templates" / "policy.yaml"))
     Eval.model_validate(_yaml(SKILL / "templates" / "eval.yaml"))
     Eval.model_validate(_yaml(SKILL / "references" / "examples" / "permission-negative-eval.yaml"))
@@ -129,7 +130,7 @@ def test_templates_track_current_strict_public_models() -> None:
     ]
     scope = _yaml(SKILL / "templates" / "scope-inventory.yaml")
     assert scope["scope"] == {
-        "mode": "system_readonly_complete",
+        "mode": "system_complete",
         "user_confirmation": None,
         "selected_domains": [],
         "exclusion_approval": {
@@ -143,6 +144,8 @@ def test_templates_track_current_strict_public_models() -> None:
         "id",
         "domain",
         "method",
+        "kind",
+        "effect",
         "path",
         "evidence_sources",
         "eligibility",
@@ -174,9 +177,9 @@ def test_templates_track_current_strict_public_models() -> None:
     baseline = json.loads(
         (SKILL / "templates" / "coverage-baseline.json").read_text(encoding="utf-8")
     )
-    assert baseline["scope_mode"] == "system_readonly_complete"
+    assert baseline["scope_mode"] == "system_complete"
     assert set(baseline["source_scope"]) == {
-        "eligible_read_routes",
+        "eligible_routes",
         "planned_or_composed",
         "excluded",
         "blocked_on_evidence",
@@ -238,7 +241,7 @@ def test_scope_governance_guides_define_each_phase_contract() -> None:
         "ineligible",
     ):
         assert contract in plan
-    assert "不再要求 legacy `reason`" in plan
+    assert "不再要求 `reason`" in plan
     assert "pilot/domain" in plan
     assert "精确一致" in plan
     assert "/routes/{index}/exclusion_decision" in plan
@@ -307,7 +310,7 @@ def test_skill_workflow_enforces_provider_auth_and_trusted_context_contracts() -
     ):
         assert contract in workflow
 
-    assert "Operation 级 `credential_ref` 只用于 legacy `stdio`" in workflow
+    assert "Operation 不得保存 `credential_ref`" in workflow
     assert "Agent 输入" in workflow
 
 
@@ -388,7 +391,7 @@ def test_coverage_and_validation_guidance_use_independent_v2_axes_and_three_leve
     ):
         assert axis in coverage
     assert "不生成总分" in coverage
-    assert "acc coverage --version 2 --json" in skill
+    assert "acc coverage --json" in skill
     for level in (
         "offline_candidate",
         "gateway_offline_verified",
@@ -397,7 +400,7 @@ def test_coverage_and_validation_guidance_use_independent_v2_axes_and_three_leve
         assert level in validation
 
 
-def test_skill_keeps_v1_read_only_and_requires_action_lifecycle_in_v2() -> None:
+def test_skill_requires_explicit_read_effects_and_action_lifecycle() -> None:
     skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
     harness = (SKILL / "HARNESS.md").read_text(encoding="utf-8")
     plan = (SKILL / "guides" / "04-plan.md").read_text(encoding="utf-8")
@@ -405,7 +408,7 @@ def test_skill_keeps_v1_read_only_and_requires_action_lifecycle_in_v2() -> None:
     test_guide = (SKILL / "guides" / "07-test.md").read_text(encoding="utf-8")
     workflow = "\n".join((skill, harness, plan, implement, test_guide))
 
-    assert "v1" in workflow and "只读" in workflow
+    assert "Read Operation" in workflow and "`read` effect" in workflow
     assert "prepare → approve → commit → status" in workflow
     assert "不得简单放开 POST" in workflow
     assert "隔离沙箱" in workflow

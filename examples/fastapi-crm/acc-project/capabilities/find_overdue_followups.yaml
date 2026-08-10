@@ -1,4 +1,5 @@
-schema_version: "1"
+schema_version: "2"
+kind: read
 id: find_overdue_followups
 title: Find overdue followups
 description: Find open followups due before an explicit date for the current tenant.

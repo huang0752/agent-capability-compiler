@@ -4,7 +4,6 @@ from typing import Any
 
 import pytest
 
-from acc_core.models import Capability, Operation, Policy
 from acc_core.scope import CapabilityScopeRequirements
 from acc_runtime.callability import (
     CallabilityAnalysisError,
@@ -44,20 +43,17 @@ def _project(*, mapping: dict[str, list[str]] | None = None) -> dict[str, Any]:
         "scope_mapping": mapping or {},
     }
     return {
-        "schema_version": "1",
+        "schema_version": "2",
         "project": {"id": "system", "version": "0.1.0"},
         "source_workspace": {"path": "../source", "mode": "read_only"},
         "runtime": {"transport": ["streamable_http"]},
         "provider": {"kind": "http", "base_url_ref": "SYSTEM_URL", "auth": auth},
+        "quality": {"profile": "standard"},
     }
 
 
 def _project_v2(*, mapping: dict[str, list[str]] | None = None) -> dict[str, Any]:
-    return {
-        **_project(mapping=mapping),
-        "schema_version": "2",
-        "quality": {"profile": "standard"},
-    }
+    return _project(mapping=mapping)
 
 
 def _principal(
@@ -111,6 +107,24 @@ def test_deployment_status_distinguishes_denied_conditional_and_callable(
     assert capability.deployment.missing_conditional == frozenset({"records.extra"} - ceiling)
 
 
+def test_legacy_ir_version_is_rejected_before_scope_analysis() -> None:
+    requirement = _requirements(
+        "records",
+        always={"records.read"},
+        conditional=set(),
+        alternatives=({"records.read"},),
+    )
+
+    with pytest.raises(CallabilityAnalysisError) as caught:
+        analyze_scope_callability(
+            {"ir_version": "1", "capabilities": {}},
+            deployment_scope_ceiling={"records.read"},
+            requirements_by_capability={"records": requirement},
+        )
+
+    assert caught.value.reason == "ir_version_invalid"
+
+
 def test_user_and_effective_status_are_separate_from_deployment_ceiling() -> None:
     mapping = {
         "source:base": ["records.base"],
@@ -130,8 +144,8 @@ def test_user_and_effective_status_are_separate_from_deployment_ceiling() -> Non
 
     report = analyze_scope_callability(
         {
-            "ir_version": "1",
-            "project": _project(mapping=mapping),
+            "ir_version": "2",
+            "project": _project_v2(mapping=mapping),
             "capabilities": {},
         },
         deployment_scope_ceiling={"records.base"},
@@ -189,7 +203,7 @@ def test_stdio_principal_with_unavailable_source_scopes_keeps_user_unknown() -> 
     principal = _principal(source_scopes=None, ceiling={"records.read"})
 
     report = analyze_scope_callability(
-        {"ir_version": "1", "project": _project(), "capabilities": {}},
+        {"ir_version": "2", "project": _project_v2(), "capabilities": {}},
         deployment_scope_ceiling={"records.read"},
         principal_context=principal,
         requirements_by_capability={"records": requirement},
@@ -201,37 +215,16 @@ def test_stdio_principal_with_unavailable_source_scopes_keeps_user_unknown() -> 
     assert capability.effective.status is CallabilityStatus.CALLABLE
 
 
-def test_v1_ir_without_compiled_requirements_is_analyzed_from_definitions() -> None:
-    list_operation = _operation("list", "records.list")
-    detail_operation = _operation("detail", "records.detail")
-    policy = _policy("records.policy")
-    capability = _capability()
+def test_current_ir_without_compiled_requirements_fails_closed() -> None:
     ir = {
-        "ir_version": "1",
-        "project": _project(),
-        "operations": {
-            "list": list_operation.model_dump(mode="json"),
-            "detail": detail_operation.model_dump(mode="json"),
-        },
-        "policies": {"read-policy": policy.model_dump(mode="json")},
-        "capabilities": {
-            "records": {
-                "definition": capability.model_dump(mode="json", by_alias=True),
-                "operation_dependencies": ["detail", "list"],
-            }
-        },
+        "ir_version": "2",
+        "capabilities": {"records": {}},
     }
 
-    report = analyze_scope_callability(
-        ir,
-        deployment_scope_ceiling={"records.policy", "records.list"},
-    )
+    with pytest.raises(CallabilityAnalysisError) as caught:
+        analyze_scope_callability(ir, deployment_scope_ceiling=set())
 
-    result = report.capabilities[0]
-    assert result.capability_id == "records"
-    assert result.always_required == frozenset({"records.policy"})
-    assert result.conditionally_required == frozenset({"records.list", "records.detail"})
-    assert result.deployment.status is CallabilityStatus.CONDITIONAL
+    assert caught.value.reason == "scope_requirements_invalid"
 
 
 def test_embedded_v2_requirements_do_not_require_v1_definition_reconstruction() -> None:
@@ -270,66 +263,3 @@ def test_malformed_embedded_requirements_fail_closed_without_identity_details() 
 
     assert caught.value.reason == "scope_requirements_invalid"
     assert "secret" not in str(caught.value)
-
-
-def _operation(operation_id: str, scope: str) -> Operation:
-    return Operation.model_validate(
-        {
-            "schema_version": "1",
-            "id": operation_id,
-            "title": operation_id,
-            "kind": "http",
-            "input_schema": {"type": "object", "properties": {}},
-            "output_schema": {"type": "object"},
-            "http": {"method": "GET", "path": f"/{operation_id}", "scopes": [scope]},
-            "safety": {"effect": "read"},
-            "evidence": [
-                {
-                    "source_id": operation_id,
-                    "locator": f"routes.py#{operation_id}",
-                    "digest": f"sha256:{'0' * 64}",
-                }
-            ],
-        }
-    )
-
-
-def _policy(scope: str) -> Policy:
-    return Policy.model_validate(
-        {
-            "schema_version": "1",
-            "id": "read-policy",
-            "required_scopes": [scope],
-            "tenant_mode": "none",
-            "readable_fields": ["value"],
-            "denied_fields": [],
-            "redaction_rules": [],
-        }
-    )
-
-
-def _capability() -> Capability:
-    return Capability.model_validate(
-        {
-            "schema_version": "1",
-            "id": "records",
-            "title": "Records",
-            "description": "Inspect one of two record paths.",
-            "input_schema": {"type": "object", "properties": {}},
-            "output_schema": {"type": "object"},
-            "workflow": [
-                {
-                    "branch": {
-                        "condition": "$.input.detail",
-                        "then": [
-                            {"id": "detail", "call": {"operation": "detail", "arguments": {}}}
-                        ],
-                        "else": [{"id": "list", "call": {"operation": "list", "arguments": {}}}],
-                    }
-                },
-                {"emit": {"value": {}}},
-            ],
-            "policy": "read-policy",
-            "evals": ["normal"],
-        }
-    )

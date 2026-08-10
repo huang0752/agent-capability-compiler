@@ -108,7 +108,11 @@
           "items": {
             "enum": [
               "GET",
-              "HEAD"
+              "HEAD",
+              "POST",
+              "PUT",
+              "PATCH",
+              "DELETE"
             ],
             "type": "string"
           },
@@ -166,7 +170,7 @@
     },
     "ScopeRoute": {
       "additionalProperties": false,
-      "description": "One discovered GET/HEAD route and its exact disposition.",
+      "description": "One discovered source route with evidence-declared effect and disposition.",
       "properties": {
         "capability_ids": {
           "items": {
@@ -190,6 +194,18 @@
         "domain": {
           "minLength": 1,
           "title": "Domain",
+          "type": "string"
+        },
+        "effect": {
+          "enum": [
+            "read",
+            "create",
+            "update",
+            "delete",
+            "transition",
+            "execute"
+          ],
+          "title": "Effect",
           "type": "string"
         },
         "eligibility": {
@@ -239,10 +255,22 @@
           "title": "Id",
           "type": "string"
         },
+        "kind": {
+          "enum": [
+            "read",
+            "action"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
         "method": {
           "enum": [
             "GET",
-            "HEAD"
+            "HEAD",
+            "POST",
+            "PUT",
+            "PATCH",
+            "DELETE"
           ],
           "title": "Method",
           "type": "string"
@@ -291,6 +319,8 @@
         "id",
         "domain",
         "method",
+        "kind",
+        "effect",
         "path",
         "evidence_sources",
         "eligibility",
@@ -310,7 +340,7 @@
           "enum": [
             "pilot",
             "domain_complete",
-            "system_readonly_complete"
+            "system_complete"
           ],
           "title": "Mode",
           "type": "string"
@@ -362,9 +392,9 @@
           "title": "Discovered Routes",
           "type": "integer"
         },
-        "eligible_read_routes": {
+        "eligible_routes": {
           "minimum": 0,
-          "title": "Eligible Read Routes",
+          "title": "Eligible Routes",
           "type": "integer"
         },
         "excluded": {
@@ -390,7 +420,7 @@
       },
       "required": [
         "discovered_routes",
-        "eligible_read_routes",
+        "eligible_routes",
         "planned",
         "composed",
         "excluded",
@@ -439,7 +469,7 @@
       "type": "array"
     },
     "schema_version": {
-      "const": "1",
+      "const": "2",
       "title": "Schema Version",
       "type": "string"
     },

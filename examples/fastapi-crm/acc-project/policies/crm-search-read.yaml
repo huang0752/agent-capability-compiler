@@ -1,4 +1,4 @@
-schema_version: "1"
+schema_version: "2"
 id: crm-search-read
 required_scopes: [customer.read]
 tenant_mode: required

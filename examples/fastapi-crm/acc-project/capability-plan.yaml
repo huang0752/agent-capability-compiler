@@ -1,4 +1,4 @@
-schema_version: "1"
+schema_version: "2"
 goal: Provide safe customer discovery, composed customer context, and overdue followup discovery.
 
 capabilities:

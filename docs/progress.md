@@ -11,20 +11,20 @@
 | 6 — CRM acceptance | Complete | ACC gates 9/9 each; source 34 passed; repository 281 passed; deterministic Pack and real MCP stdio |
 | 7 — generic auth, identity, and scope governance | Complete | Provider auth, PrincipalContext, structured scope audit, stdio/source contracts |
 | 8 — optional multi-user HTTP Gateway | Complete | 1100 passed; Ruff; mypy; Schema/CRM compile; Skill validation; independent security reviews |
-| 9 — v2 quality contracts and Coverage | In progress | SourceContract, CapabilityQuality, Scope callability and Coverage v2 focused tests exist; release gate pending |
-| 10 — v2 Action and Live validation | In progress | compiler/runtime foundations exist; MCP Action, durable production Store and release gate pending |
+| 9 — quality contracts and Coverage | Complete | current-format SourceContract, CapabilityQuality, Scope callability, nine-axis Coverage, full release gates |
+| 10 — Action and Live validation | In progress | compiler/runtime foundations exist; MCP Action and durable production integrations remain pending |
 
 This file records fresh command evidence at each milestone. A status changes to complete only after its focused tests, the full test suite, lint, type checking, diff review, and milestone commit have succeeded.
 
-## Unreleased v2 boundary — 2026-08-10
+## Current-format boundary — 2026-08-10
 
-- Project v1、Operation v1、Capability v1、IR/Pack v1 继续保持只读兼容；部署默认 `allowed_effects={read}`，新模型不会让旧 Pack 自动获得写权限。
-- Core 已加入平台中立的 SourceContract/provenance、CapabilityQuality、Schema fidelity、constructability/discoverability/composition、保守输出预算和 Coverage v2 多轴 API。Coverage v2 不生成总分，route disposition closure 不代表 Capability usable。
+- Project、Operation、Capability、IR 与 Pack 只接受当前格式 `2`；旧格式在解析边界稳定拒绝。部署仍默认 `allowed_effects={read}`。
+- Core 已加入平台中立的 SourceContract/provenance、CapabilityQuality、Schema fidelity、constructability/discoverability/composition、保守输出预算和九轴 Coverage API。Coverage 不生成总分，route disposition closure 不代表 Capability usable。
 - Runtime/CLI 已加入路径感知 Scope callability：空 deployment ceiling 默认拒绝，确定不可调用项可由 strict mode 阻止启动，登录前未知的源权限保持 unknown。
-- v2 Action 已有严格模型、编译证明、Pack/Loader 合同、部署策略、直接 Runtime Coordinator、审批协议和显式开发/测试内存 Store。状态机为 `prepare → approve → commit → status`，不能简化为允许 `POST`。
-- Action semantics 已由 SourceContract 可信 Evidence 逐字段绑定，并在 compiler IR 与 Runtime 之间做摘要证明；Coordinator 也已有 durable/audit fail-closed 门禁和 secret-safe lifecycle audit 合同。当前 Generic Runtime 的普通 `tools()`/`call()` 和 MCP Server 仍未暴露 Action 生命周期；生产 durable Store、可信审批签发、集中审计后端及完整 MCP/CLI Action 接线尚未完成。因此 M9/M10 不能标记 Complete，也不能宣称生产 Action 已可用。
+- Action 已有严格模型、编译证明、Pack/Loader 合同、部署策略、直接 Runtime Coordinator、审批协议和显式开发/测试内存 Store。状态机为 `prepare → approve → commit → status`，不能简化为允许 `POST`。
+- Action semantics 已由 SourceContract 可信 Evidence 逐字段绑定，并在 compiler IR 与 Runtime 之间做摘要证明；Coordinator 也已有 durable/audit fail-closed 门禁和 secret-safe lifecycle audit 合同。当前 Generic Runtime 的普通 `tools()`/`call()` 和 MCP Server 仍未暴露 Action 生命周期；生产 durable Store、可信审批签发、集中审计后端及完整 MCP/CLI Action 接线尚未完成。因此 M10 仍不能标记 Complete，也不能宣称生产 Action 已可用。
 - Live 验证术语分为 `offline_candidate`、`gateway_offline_verified` 和 `source_connected_verified`。历史里程碑使用的旧二层标签保留为当时记录，不自动升级为更高等级；新报告必须依据实际传输和源连接重新判定。
-- 本节描述当前未发布工作树边界，不替代完整 pytest、Ruff、mypy、Pack 重建和安全复审；完成状态必须等这些门禁真实通过后更新。
+- 当前格式收口门禁：`uv run --frozen pytest -q` 为 1335 passed（仅既有 Starlette 弃用警告）；Ruff format/check 通过；mypy 检查 180 个源码文件通过；九份公开 Schema 可重复生成；FastAPI CRM validate/compile/coverage 通过，两次 Pack 构建得到相同 SHA-256 `0252a23c562b0e0f73909c22342b9f0f6ff006e703b36b4fbfbe1cba5a1d5820`。
 
 ## Verification log
 
@@ -109,7 +109,7 @@ This file records fresh command evidence at each milestone. A status changes to 
 
 ### 2026-08-06 — Milestone 7
 
-- Added strict Provider auth contracts for `none`, `bearer_secret`, and `password_bearer`; legacy Operation-level credentials remain a dedicated `stdio` compatibility path rather than the default example.
+- Added strict Provider auth contracts for `none`, `bearer_secret`, and `password_bearer`; Operation-level credentials have since been removed from the current format.
 - Added immutable request identity through `PrincipalContext`, trusted `context_bindings`, effective-Scope intersection, and a fixed principal for `stdio`.
 - The `streamable_http` schema accepts only the Gateway-session authentication combination. The executable Gateway itself is recorded separately under Milestone 8.
 - Migrated the synthetic FastAPI CRM example to Provider-level `bearer_secret` and removed credentials from all six Operations.
@@ -123,7 +123,7 @@ This file records fresh command evidence at each milestone. A status changes to 
 ### 2026-08-06 — Milestone 8
 
 - `acc run` 现在会将 `runtime.transport: [streamable_http]` Pack 分派到可选的 Starlette/Uvicorn Gateway。ACC 仍是 compiler 与 Generic Runtime；Gateway 是运行时适配层，不是 Web 控制面，也不替代源系统的用户、角色、租户或数据权限。
-- Gateway v1 明确是单进程实现，要求 `workers=1`。它校验精确 Host/Origin allowlist、loopback/TLS 部署规则、请求体大小、会话 TTL、最大会话数，以及不高于 Gateway TTL 的有限 MCP idle timeout。
+- 当前 Gateway 明确是单进程实现，要求 `workers=1`。它校验精确 Host/Origin allowlist、loopback/TLS 部署规则、请求体大小、会话 TTL、最大会话数，以及不高于 Gateway TTL 的有限 MCP idle timeout。
 - 每个用户只在 `POST /runtime/sessions` 一次性提交 identity/password。密码在源登录交换后丢弃，源 JWT 只保留在进程内，客户端收到独立的短期 opaque Gateway token，Store 只用其摘要索引。MCP tool 拒绝凭据和身份覆盖参数。
 - 每个已认证 HTTP 请求都重新校验 Gateway Session，每次工具执行再恢复并绑定 `PrincipalContext`。A/B/C 的 Gateway 与 MCP Session 相互独立；MCP Session owner 绑定阻止跨 token 的 POST/GET/DELETE/SSE 访问。有效 Scope 是映射后的源 Scope 与部署 ceiling 的交集，源系统仍会授权每次 REST 调用。
 - `DELETE /runtime/sessions/current`、过期、重启和源 401 都会使受影响的 Gateway 授权路径失效。源 401 只将当前用户标记为 `reauth_required`。MCP SDK 1.29 没有立即终止单个底层 Streamable HTTP 传输的公开 manager API，因此已有 SSE/传输受配置的 idle timeout 上限约束，但被撤销 token 不能授权新请求。

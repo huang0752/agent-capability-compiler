@@ -1,4 +1,4 @@
-schema_version: "1"
+schema_version: "2"
 id: crm-followup-read
 required_scopes: [followup.read]
 tenant_mode: required

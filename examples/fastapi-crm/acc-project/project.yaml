@@ -1,4 +1,4 @@
-schema_version: '1'
+schema_version: '2'
 project:
   id: fastapi-crm
   version: 0.1.0
@@ -11,6 +11,9 @@ runtime:
 provider:
   kind: http
   base_url_ref: CRM_BASE_URL
+  context_binding_allowlist: [tenant_context.tenant_id]
   auth:
     kind: bearer_secret
     token_ref: CRM_DEMO_TOKEN
+quality:
+  profile: standard

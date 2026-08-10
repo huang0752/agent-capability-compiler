@@ -1,7 +1,7 @@
-schema_version: "1"
+schema_version: "2"
 id: REPLACE_WITH_OPERATION_ID
 title: REPLACE_WITH_OPERATION_TITLE
-kind: http
+kind: read
 
 input_schema:
   $schema: https://json-schema.org/draft/2020-12/schema
@@ -25,7 +25,7 @@ output_schema:
       type: string
 
 http:
-  # MVP accepts GET or HEAD only.
+  # Read Operations accept GET or HEAD only.
   method: GET
   path: /REPLACE_WITH_EVIDENCED_RESOURCE/{resource_id}
   path_parameters:
@@ -36,9 +36,19 @@ http:
     - REPLACE_WITH_EVIDENCED_READ_SCOPE
   timeout_seconds: 15
   max_response_bytes: 1048576
+  request: null
+  success:
+    statuses: [200]
+    body: json
+  safety:
+    effect: read
+    risk: low
+    reversibility: reversible
+    retry: {mode: idempotent_only}
+    idempotency: {mode: unsupported}
+    concurrency: {mode: not_supported}
 
-safety:
-  effect: read
+context_bindings: {}
 
 evidence:
   - source_id: REPLACE_WITH_EVIDENCE_SOURCE_ID

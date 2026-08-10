@@ -21,7 +21,6 @@ from acc_core.models import (
     AssertStep,
     BranchStep,
     CallStep,
-    Capability,
     EmitStep,
     FilterStep,
     ForeachStep,
@@ -29,7 +28,6 @@ from acc_core.models import (
     ParallelStep,
     PasswordBearerAuthConfig,
     PickStep,
-    ProjectV2,
     ReadCapabilityV2,
     RedactStep,
     StrictModel,
@@ -521,7 +519,7 @@ def _validate_workflow(
 
 
 def _compile_capability(
-    capability: Capability | ReadCapabilityV2,
+    capability: ReadCapabilityV2,
     *,
     operations: set[str],
     operation_bindings: dict[str, set[str]],
@@ -656,7 +654,7 @@ def _compile_action_capability(
     evals: dict[str, str],
     diagnostics: list[Diagnostic],
 ) -> tuple[set[str], dict[str, JsonValue]]:
-    """Prove and compile one v2 Action without weakening the v1 workflow path."""
+    """Prove and compile one current-format Action."""
 
     path = f"capabilities/{capability.id}.yaml"
     if capability.policy not in policies:
@@ -930,45 +928,42 @@ def compile_project(project_root: str | Path = ".") -> CompilationReport:
                     "composition": quality.composition.model_dump(mode="json"),
                 }
             )
-        if isinstance(validation.project, ProjectV2):
-            if capability_id in action_proofs:
-                compiled["action_proof"] = action_proofs[capability_id]
-                action_policy_scopes = frozenset(
-                    validation.policies[
-                        validation.capabilities[capability_id].policy
-                    ].required_scopes
+        if capability_id in action_proofs:
+            compiled["action_proof"] = action_proofs[capability_id]
+            action_policy_scopes = frozenset(
+                validation.policies[validation.capabilities[capability_id].policy].required_scopes
+            )
+            proof_scopes = cast(
+                list[str],
+                action_proofs[capability_id]["required_scopes"],
+            )
+            action_scopes = frozenset(proof_scopes) | action_policy_scopes
+            compiled["scope_requirements"] = _scope_requirements_json(
+                CapabilityScopeRequirements(
+                    capability_id=capability_id,
+                    policy_always_required=action_policy_scopes,
+                    always_required=action_scopes,
+                    conditionally_required=frozenset(),
+                    all_referenced=action_scopes,
+                    completion_alternatives=(action_scopes,),
                 )
-                proof_scopes = cast(
-                    list[str],
-                    action_proofs[capability_id]["required_scopes"],
+            )
+        else:
+            capability = cast(
+                ReadCapabilityV2,
+                validation.capabilities[capability_id],
+            )
+            compiled["scope_requirements"] = _scope_requirements_json(
+                analyze_capability_scope_requirements(
+                    capability=capability,
+                    policy=validation.policies[capability.policy],
+                    operations=validation.operations,
                 )
-                action_scopes = frozenset(proof_scopes) | action_policy_scopes
-                compiled["scope_requirements"] = _scope_requirements_json(
-                    CapabilityScopeRequirements(
-                        capability_id=capability_id,
-                        policy_always_required=action_policy_scopes,
-                        always_required=action_scopes,
-                        conditionally_required=frozenset(),
-                        all_referenced=action_scopes,
-                        completion_alternatives=(action_scopes,),
-                    )
-                )
-            else:
-                capability = cast(
-                    Capability | ReadCapabilityV2,
-                    validation.capabilities[capability_id],
-                )
-                compiled["scope_requirements"] = _scope_requirements_json(
-                    analyze_capability_scope_requirements(
-                        capability=capability,
-                        policy=validation.policies[capability.policy],
-                        operations=validation.operations,
-                    )
-                )
+            )
         compiled_capabilities[capability_id] = _normalize_json(compiled)
 
     raw_ir: dict[str, JsonValue] = {
-        "ir_version": validation.project.schema_version,
+        "ir_version": "2",
         "project": _model_json(validation.project),
         "operations": {
             operation_id: _model_json(validation.operations[operation_id])

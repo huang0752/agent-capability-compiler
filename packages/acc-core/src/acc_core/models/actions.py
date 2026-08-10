@@ -1,8 +1,7 @@
 """Strict, platform-neutral model foundations for ACC Action contracts.
 
-This module is deliberately independent from public package exports and version
-dispatch.  It defines only the reusable v2 safety and HTTP value objects; v1
-models remain unchanged and read-only.
+This module defines the reusable safety and HTTP value objects for the sole
+current ACC format.
 """
 
 from __future__ import annotations
@@ -195,7 +194,7 @@ class ConcurrencyContractV2(StrictModel):
 
 
 class OperationSafetyV2(StrictModel):
-    """Complete, non-defaulted safety contract for one v2 Operation."""
+    """Complete, non-defaulted safety contract for one current Operation."""
 
     effect: Effect
     risk: Risk
@@ -247,7 +246,7 @@ class HttpSuccessV2(StrictModel):
 
 
 class HttpOperationV2(StrictModel):
-    """A bounded v2 HTTP transport contract with explicit safety semantics."""
+    """A bounded current HTTP transport contract with explicit safety semantics."""
 
     method: HttpMethodV2
     path: NonEmptyString

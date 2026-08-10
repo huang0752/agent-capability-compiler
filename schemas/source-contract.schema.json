@@ -176,7 +176,7 @@
     },
     "Evidence": {
       "additionalProperties": false,
-      "description": "A digest-bound locator supporting the milestone one evidence forms.",
+      "description": "A digest-bound locator supporting current evidence forms.",
       "properties": {
         "digest": {
           "pattern": "^sha256:[0-9a-f]{64}$",

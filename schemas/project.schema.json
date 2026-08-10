@@ -331,6 +331,25 @@
       "title": "ProviderConfig",
       "type": "object"
     },
+    "QualityProfileV2": {
+      "additionalProperties": false,
+      "description": "Select the compile-time quality gate for a current project.",
+      "properties": {
+        "profile": {
+          "enum": [
+            "standard",
+            "release"
+          ],
+          "title": "Profile",
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile"
+      ],
+      "title": "QualityProfileV2",
+      "type": "object"
+    },
     "RuntimeConfig": {
       "additionalProperties": false,
       "description": "Runtime transports emitted by the first ACC release.",
@@ -357,7 +376,7 @@
     },
     "SourceWorkspace": {
       "additionalProperties": false,
-      "description": "Source system location, which milestone one always treats as read-only.",
+      "description": "Source system location, which ACC always treats as read-only.",
       "properties": {
         "mode": {
           "const": "read_only",
@@ -380,7 +399,7 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "An isolated ACC integration project.",
+  "description": "The sole current project contract with explicit quality controls.",
   "properties": {
     "project": {
       "$ref": "#/$defs/ProjectIdentity"
@@ -388,11 +407,14 @@
     "provider": {
       "$ref": "#/$defs/ProviderConfig"
     },
+    "quality": {
+      "$ref": "#/$defs/QualityProfileV2"
+    },
     "runtime": {
       "$ref": "#/$defs/RuntimeConfig"
     },
     "schema_version": {
-      "const": "1",
+      "const": "2",
       "title": "Schema Version",
       "type": "string"
     },
@@ -405,7 +427,8 @@
     "project",
     "source_workspace",
     "runtime",
-    "provider"
+    "provider",
+    "quality"
   ],
   "title": "Project",
   "type": "object"

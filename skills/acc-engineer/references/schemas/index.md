@@ -1,4 +1,4 @@
-# ACC v1 schema index
+# ACC current-format schema index
 
 Export the authoritative Draft 2020-12 schemas with:
 
@@ -23,7 +23,7 @@ Before validation:
 
 1. Replace every `REPLACE_WITH_...` marker from inspected evidence or user-approved design.
 2. Replace `{{ CAPTURED_SHA256_DIGEST }}` only with a digest computed from captured evidence; the marker intentionally cannot pass `Operation` validation.
-3. Keep credentials out of all files. Configure `provider.auth` with environment-variable references; `base_url_ref`, `token_ref`, `identity_ref`, and `password_ref` are references, never values. Operation-level `credential_ref` is legacy stdio compatibility only and must not be used by new projects.
+3. Keep credentials out of all files. Configure `provider.auth` with environment-variable references; `base_url_ref`, `token_ref`, `identity_ref`, and `password_ref` are references, never values. Operation-level `credential_ref` is forbidden.
 4. Add one positive Eval per Capability. If scopes or tenant enforcement apply, also add an Eval expecting status 401 or 403.
 
 Provider authentication and identity rules:

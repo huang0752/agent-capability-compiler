@@ -19,20 +19,20 @@ Outputs are confined to `acc_project`. The source checkout is evidence, never an
 2. Capture a source snapshot before work and verify it again before handoff.
 3. Read bounded regular files only. Do not follow repository symlinks or inspect common secret files.
 4. Evidence precedes every formal Operation. Unknown facts remain unknown.
-5. v1 Operations are atomic, read-only REST calls. v2 Action Operations require explicit effect and safety evidence. 一接口一工具不是天然缺陷; choose Capability boundaries from business intent and data flow, not tool count.
+5. Read Operations are atomic `GET`/`HEAD` REST calls. Action Operations require explicit effect and safety evidence. 一接口一工具不是天然缺陷; choose Capability boundaries from business intent and data flow, not tool count.
 6. Runtime behavior is deterministic and model-free. Credentials stay in SecretRef/environment boundaries.
 7. Permission, tenant, disclosure, timeout, and response-size controls are testable contracts.
 8. Failures remain visible in diagnostics and handoff artifacts.
-9. Default unspecified existing-system scope to `system_readonly_complete`; use `pilot` only after explicit user MVP confirmation is recorded.
+9. Default unspecified existing-system scope to `system_complete`; use `pilot` only after explicit user MVP confirmation is recorded.
 10. Separate 浅层全局发现 from bounded deep Evidence includes, and never use `--include` as the discovery denominator.
-11. Authentication belongs to `provider.auth`: `none`, `bearer_secret`, or `password_bearer`; Operation 级 `credential_ref` 只用于 legacy `stdio`, and account/password/JWT values never enter project files.
+11. Authentication belongs to `provider.auth`: `none`, `bearer_secret`, or `password_bearer`; Operation 不得保存 `credential_ref`, and account/password/JWT values never enter project files.
 12. Request identity comes only from immutable `PrincipalContext`. `context_bindings` inject trusted principal/tenant values into evidenced path/query inputs and cannot be supplied by an Agent or Workflow.
 13. Frontend usage is normalized into `usage_evidence_sources`; excluding such a route always warns, and system-complete scope treats an unapproved exact route as an error.
 14. Scope Inventory is the only authority for exclusion rules, route decisions, Evidence, replacement closure, and exact user approval. Capability Plan stores references, not duplicate free-text exclusion facts.
 15. Convert captured Evidence into `SourceContract` request/response schemas and pointer-level `provenance`. Operation 输入 is an evidenced safe subset; Operation 输出 covers evidenced source responses; Capability 输出 may narrow only through a 可证明 deterministic projection.
 16. Every Capability plan records selector acquisition, an empty success path where list/search can legitimately return nothing, failure isolation, and output budget. Producer edges must make required selectors constructible.
-17. Coverage v2 keeps route disposition, Operation trace, scenarios, constructability, discoverability, composition, schema fidelity, output budget, and live observations independent; it does not generate an aggregate score or equate route closure with usability.
-18. v1 remains strictly read-only. A v2 Action uses `prepare → approve → commit → status`, complete safety contracts, trusted approval handles, and isolated sandbox validation; 不得简单放开 POST.
+17. Coverage keeps route disposition, Operation trace, scenarios, constructability, discoverability, composition, schema fidelity, output budget, and live observations independent; it does not generate an aggregate score or equate route closure with usability.
+18. An Action uses `prepare → approve → commit → status`, complete safety contracts, trusted approval handles, and isolated sandbox validation; 不得简单放开 POST.
 
 ## State machine
 
@@ -49,7 +49,7 @@ On a safety or evidence failure, transition to `STOP` and report the blocker. On
 
 ### 0. Preflight
 
-Canonicalize both paths with `pwd -P` or `realpath`. Declare `system_readonly_complete` by default; `pilot` requires explicit user MVP wording and recorded confirmation. For a new target, create the distinct project directory with `acc init <acc_project>`, enter it, then run `acc doctor --json`; do not run Doctor against an uninitialized empty directory. Run the bundled preflight and read-only verification scripts with Python 3.12. Confirm checkout identity, separate paths, route discovery inputs, test discoverability, and absence of likely production secrets. Record a source snapshot. Stop on ambiguity or risk.
+Canonicalize both paths with `pwd -P` or `realpath`. Declare `system_complete` by default; `pilot` requires explicit user MVP wording and recorded confirmation. For a new target, create the distinct project directory with `acc init <acc_project>`, enter it, then run `acc doctor --json`; do not run Doctor against an uninitialized empty directory. Run the bundled preflight and read-only verification scripts with Python 3.12. Confirm checkout identity, separate paths, route discovery inputs, test discoverability, and absence of likely production secrets. Record a source snapshot. Stop on ambiguity or risk.
 
 ### 1. Analyze
 
@@ -61,7 +61,7 @@ Normalize only the observed domain: entities, relations, read operations, permis
 
 ### 3. Plan
 
-Assign every eligible discovered route exactly one disposition: `planned`, `composed`, `excluded`, or `blocked_on_evidence`; `out_of_scope` is valid only where the declared mode permits it. System-complete exclusions require a structured rule and distinct route decision, which replace legacy reason only when valid; subjective and frontend-used exclusions require exact route approval. Ineligible, blocked, out-of-scope, and pilot/domain legacy exclusions keep reason plus Evidence. Capability Plan route lists and decision pointers exactly close over Inventory without duplicate free text. Never count `blocked_on_evidence` as complete. Reconcile the `source_scope` baseline, then design business capabilities with explicit selector acquisition, empty success path, failure isolation, and output budget. Keep credentials, tenant identity, and server-derived values out of agent inputs. Require positive and permission-negative Evals where applicable. Do not advance with unresolved scope.
+Assign every eligible discovered route exactly one disposition: `planned`, `composed`, `excluded`, or `blocked_on_evidence`; `out_of_scope` is valid only where the declared mode permits it. System-complete exclusions require a structured rule and distinct route decision, which replace a free-text route reason only when valid; subjective and frontend-used exclusions require exact route approval. Ineligible, blocked, out-of-scope, and pilot/domain exclusions keep reason plus Evidence. Capability Plan route lists and decision pointers exactly close over Inventory without duplicate free text. Never count `blocked_on_evidence` as complete. Reconcile the `source_scope` baseline, then design business capabilities with explicit selector acquisition, empty success path, failure isolation, and output budget. Keep credentials, tenant identity, and server-derived values out of agent inputs. Require positive and permission-negative Evals where applicable. Do not advance with unresolved scope.
 
 ### 4. Implement
 
@@ -77,7 +77,7 @@ Run contract and direct Fake Runtime suites as `offline_candidate`. Label the re
 
 ### 7. Refine
 
-Compare all Coverage v2 axes independently: route disposition, Operation trace, scenario coverage, constructability, discoverability graph, composition, schema fidelity, output budget, and live observations. Do not generate a total score. Detect duplicate decisions, whole-domain zero capability, frontend-used exclusions, and the high-exclusion heuristic (eligible `>= 10`, excluded `>= 70%`). Remove orphaned or duplicate definitions, correct evidence-unsupported schemas, and add missing valuable or negative coverage. Rerun scope audit, validation, and tests after each material change.
+Compare all Coverage axes independently: route disposition, Operation trace, scenario coverage, constructability, discoverability graph, composition, schema fidelity, output budget, and live observations. Do not generate a total score. Detect duplicate decisions, whole-domain zero capability, frontend-used exclusions, and the high-exclusion heuristic (eligible `>= 10`, excluded `>= 70%`). Remove orphaned or duplicate definitions, correct evidence-unsupported schemas, and add missing valuable or negative coverage. Rerun scope audit, validation, and tests after each material change.
 
 ### 8. Handoff
 

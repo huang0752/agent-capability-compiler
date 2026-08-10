@@ -16,7 +16,7 @@
 5. 检查实际结果和 diagnostics；不得隐藏失败、跳过项或仅报告通过数量。
 6. 仅当用户明确授权连接本地/测试原系统，且源连接套件真实通过时，才标记 `source_connected_verified`。
 7. 覆盖 `none`、`bearer_secret` 或所选 `password_bearer` 合同，确认 `PrincipalContext` 与 `context_bindings` 不进入 Agent 输入；`stdio` 只使用固定身份，`streamable_http` 只有实际 Gateway 请求级身份测试通过后才能声明可用。
-8. 对显式 v2 Action 只在隔离沙箱验证 `prepare → approve → commit → status`，并覆盖过期/跨会话 approval、重复提交、并发冲突、上游拒绝和结果未知。严禁把生产写操作当成自动测试。
+8. 对显式 Action 只在隔离沙箱验证 `prepare → approve → commit → status`，并覆盖过期/跨会话 approval、重复提交、并发冲突、上游拒绝和结果未知。严禁把生产写操作当成自动测试。
 
 ## 门禁
 

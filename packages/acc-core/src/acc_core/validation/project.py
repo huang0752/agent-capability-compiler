@@ -16,16 +16,13 @@ from acc_core.io import ProjectIOError, load_project_object
 from acc_core.models import (
     ActionOperationV2,
     Capability,
-    CapabilityV2,
     EnvironmentSecretCredentials,
     Eval,
     GatewaySessionCredentials,
     Operation,
-    OperationV2,
     PasswordBearerAuthConfig,
     Policy,
     Project,
-    ProjectV2,
     ReadOperationV2,
     StrictModel,
 )
@@ -39,10 +36,10 @@ _DOCUMENT_SUFFIXES = {".json", ".yaml", ".yml"}
 class ValidationReport:
     """Validated contracts plus deterministic diagnostics."""
 
-    project: Project | ProjectV2 | None = None
-    operations: dict[str, Operation | OperationV2] = field(default_factory=dict)
+    project: Project | None = None
+    operations: dict[str, Operation] = field(default_factory=dict)
     operation_paths: dict[str, str] = field(default_factory=dict)
-    capabilities: dict[str, Capability | CapabilityV2] = field(default_factory=dict)
+    capabilities: dict[str, Capability] = field(default_factory=dict)
     source_contracts: dict[str, SourceContract] = field(default_factory=dict)
     source_contract_paths: dict[str, str] = field(default_factory=dict)
     capability_quality: dict[str, CapabilityQuality] = field(default_factory=dict)
@@ -63,6 +60,26 @@ def _pointer(location: tuple[int | str, ...]) -> str:
     return "/" + "/".join(tokens)
 
 
+def _require_current_format(
+    document: Mapping[str, Any],
+    *,
+    relative_path: str,
+    diagnostics: list[Diagnostic],
+) -> bool:
+    if document.get("schema_version") == "2":
+        return True
+    diagnostics.append(
+        Diagnostic(
+            code="ACC_FORMAT_VERSION_UNSUPPORTED",
+            severity="error",
+            message="ACC accepts only the current top-level format: schema_version 2.",
+            path=relative_path,
+            pointer="/schema_version",
+        )
+    )
+    return False
+
+
 def _validation_diagnostic(
     error: Mapping[str, Any],
     *,
@@ -70,14 +87,6 @@ def _validation_diagnostic(
     model_type: type[StrictModel],
 ) -> Diagnostic:
     location = tuple(error.get("loc", ()))
-    if model_type is Operation and location == ("evidence",):
-        return Diagnostic(
-            code="ACC_OPERATION_EVIDENCE_MISSING",
-            severity="error",
-            message="Operation requires at least one evidence reference.",
-            path=relative_path,
-            pointer="/evidence",
-        )
     return Diagnostic(
         code="ACC_SCHEMA_INVALID",
         severity="error",
@@ -95,6 +104,12 @@ def _load_model[ModelT: StrictModel](
 ) -> ModelT | None:
     try:
         document = load_project_object(root, relative_path)
+        if not _require_current_format(
+            document,
+            relative_path=relative_path,
+            diagnostics=diagnostics,
+        ):
+            return None
         return model_type.model_validate(document)
     except ProjectIOError as exc:
         diagnostics.append(
@@ -127,7 +142,14 @@ def _load_adapter[ModelT](
     """Load one discriminated public document through a TypeAdapter."""
 
     try:
-        return adapter.validate_python(load_project_object(root, relative_path))
+        document = load_project_object(root, relative_path)
+        if not _require_current_format(
+            document,
+            relative_path=relative_path,
+            diagnostics=diagnostics,
+        ):
+            return None
+        return adapter.validate_python(document)
     except ProjectIOError as exc:
         diagnostics.append(
             Diagnostic(
@@ -139,29 +161,46 @@ def _load_adapter[ModelT](
             )
         )
     except ValidationError as exc:
-        diagnostics.extend(
-            Diagnostic(
-                code="ACC_SCHEMA_INVALID",
-                severity="error",
-                message=str(error.get("msg", "Document does not match its schema.")),
-                path=relative_path,
-                pointer=_pointer(tuple(error.get("loc", ()))),
+        for error in exc.errors(include_url=False):
+            location = tuple(error.get("loc", ()))
+            if location and location[0] in {"read", "action"}:
+                location = location[1:]
+            if relative_path.startswith("operations/") and location == ("evidence",):
+                diagnostics.append(
+                    Diagnostic(
+                        code="ACC_OPERATION_EVIDENCE_MISSING",
+                        severity="error",
+                        message="Operation requires at least one evidence reference.",
+                        path=relative_path,
+                        pointer="/evidence",
+                    )
+                )
+                continue
+            diagnostics.append(
+                Diagnostic(
+                    code="ACC_SCHEMA_INVALID",
+                    severity="error",
+                    message=str(error.get("msg", "Document does not match its schema.")),
+                    path=relative_path,
+                    pointer=_pointer(location),
+                )
             )
-            for error in exc.errors(include_url=False)
-        )
     return None
 
 
-def _load_project_document(root: Path, diagnostics: list[Diagnostic]) -> Project | ProjectV2 | None:
-    """Dispatch Project versions without adding union-branch tokens to v1 diagnostics."""
+def _load_project_document(root: Path, diagnostics: list[Diagnostic]) -> Project | None:
+    """Load only the current Project format with a stable version diagnostic."""
 
     relative_path = "project.yaml"
     try:
         document = load_project_object(root, relative_path)
-        model_type: type[Project] | type[ProjectV2] = (
-            ProjectV2 if document.get("schema_version") == "2" else Project
-        )
-        return model_type.model_validate(document)
+        if not _require_current_format(
+            document,
+            relative_path=relative_path,
+            diagnostics=diagnostics,
+        ):
+            return None
+        return Project.model_validate(document)
     except ProjectIOError as exc:
         diagnostics.append(
             Diagnostic(
@@ -177,7 +216,7 @@ def _load_project_document(root: Path, diagnostics: list[Diagnostic]) -> Project
             _validation_diagnostic(
                 error,
                 relative_path=relative_path,
-                model_type=model_type,
+                model_type=Project,
             )
             for error in exc.errors(include_url=False)
         )
@@ -310,14 +349,14 @@ def _load_adapter_collection[ModelT](
 
 
 def _validate_v2_sidecar_closure(report: ValidationReport) -> None:
-    """Require complete one-to-one quality sidecars for Project v2."""
+    """Require complete one-to-one quality sidecars for the current Project."""
 
     for operation_id in sorted(set(report.operations) - set(report.source_contracts)):
         report.diagnostics.append(
             Diagnostic(
                 code="ACC_SOURCE_CONTRACT_MISSING",
                 severity="error",
-                message="Project v2 requires one SourceContract per Operation.",
+                message="The current Project requires one SourceContract per Operation.",
                 path=report.operation_paths.get(operation_id),
                 pointer=None,
             )
@@ -337,7 +376,7 @@ def _validate_v2_sidecar_closure(report: ValidationReport) -> None:
             Diagnostic(
                 code="ACC_CAPABILITY_QUALITY_MISSING",
                 severity="error",
-                message="Project v2 requires one CapabilityQuality per Capability.",
+                message="The current Project requires one CapabilityQuality per Capability.",
                 path=None,
                 pointer=None,
             )
@@ -426,7 +465,7 @@ def _validate_v2_sidecar_closure(report: ValidationReport) -> None:
                         )
         report.diagnostics.extend(
             analyze_operation_schema_fidelity(
-                operation,  # type: ignore[arg-type]  # v1/v2 share the schema surface
+                operation,
                 contract,
                 operation_path=report.operation_paths.get(operation_id),
             )
@@ -465,47 +504,7 @@ def _validate_auth_contract(report: ValidationReport) -> None:
                     pointer="/provider/auth",
                 )
             )
-        else:
-            report.diagnostics.append(
-                Diagnostic(
-                    code="ACC_AUTH_LEGACY_CREDENTIAL",
-                    severity="warning",
-                    message=(
-                        "Legacy Operation-level credentials remain supported for stdio; "
-                        "migrate authentication to provider.auth."
-                    ),
-                    path="project.yaml",
-                    pointer="/provider",
-                )
-            )
-        for operation_id, operation in sorted(report.operations.items()):
-            if getattr(operation.http, "credential_ref", None) is None:
-                report.diagnostics.append(
-                    Diagnostic(
-                        code="ACC_AUTH_CREDENTIAL_REQUIRED",
-                        severity="error",
-                        message=(
-                            "Legacy authentication requires an Operation-level credential_ref."
-                        ),
-                        path=report.operation_paths[operation_id],
-                        pointer="/http/credential_ref",
-                    )
-                )
         return
-
-    for operation_id, operation in sorted(report.operations.items()):
-        if getattr(operation.http, "credential_ref", None) is not None:
-            report.diagnostics.append(
-                Diagnostic(
-                    code="ACC_AUTH_CREDENTIAL_CONFLICT",
-                    severity="error",
-                    message=(
-                        "Operation credential_ref is forbidden when provider.auth is configured."
-                    ),
-                    path=report.operation_paths[operation_id],
-                    pointer="/http/credential_ref",
-                )
-            )
 
     password_auth = auth if isinstance(auth, PasswordBearerAuthConfig) else None
     compatible = (
@@ -541,59 +540,42 @@ def validate_project(project_root: str | Path = ".") -> ValidationReport:
     root = Path(project_root)
     report = ValidationReport()
     report.project = _load_project_document(root, report.diagnostics)
-    if isinstance(report.project, ProjectV2):
-        report.operations = _load_adapter_collection(
-            root,
-            "operations",
-            TypeAdapter(OperationV2),
-            identifier_field="id",
-            duplicate_code="ACC_OPERATION_ID_DUPLICATE",
-            diagnostics=report.diagnostics,
-            relative_paths=report.operation_paths,
-        )
-        report.capabilities = _load_adapter_collection(
-            root,
-            "capabilities",
-            TypeAdapter(CapabilityV2),
-            identifier_field="id",
-            duplicate_code="ACC_CAPABILITY_ID_DUPLICATE",
-            diagnostics=report.diagnostics,
-        )
-        report.source_contracts = _load_adapter_collection(
-            root,
-            "source-contracts",
-            TypeAdapter(SourceContract),
-            identifier_field="operation_id",
-            duplicate_code="ACC_SOURCE_CONTRACT_DUPLICATE",
-            diagnostics=report.diagnostics,
-            relative_paths=report.source_contract_paths,
-        )
-        report.capability_quality = _load_adapter_collection(
-            root,
-            "capability-quality",
-            TypeAdapter(CapabilityQuality),
-            identifier_field="capability_id",
-            duplicate_code="ACC_CAPABILITY_QUALITY_DUPLICATE",
-            diagnostics=report.diagnostics,
-            relative_paths=report.capability_quality_paths,
-        )
-        _validate_v2_sidecar_closure(report)
-    else:
-        report.operations = _load_collection(
-            root,
-            "operations",
-            Operation,
-            "ACC_OPERATION_ID_DUPLICATE",
-            report.diagnostics,
-            report.operation_paths,
-        )
-        report.capabilities = _load_collection(
-            root,
-            "capabilities",
-            Capability,
-            "ACC_CAPABILITY_ID_DUPLICATE",
-            report.diagnostics,
-        )
+    report.operations = _load_adapter_collection(
+        root,
+        "operations",
+        TypeAdapter(Operation),
+        identifier_field="id",
+        duplicate_code="ACC_OPERATION_ID_DUPLICATE",
+        diagnostics=report.diagnostics,
+        relative_paths=report.operation_paths,
+    )
+    report.capabilities = _load_adapter_collection(
+        root,
+        "capabilities",
+        TypeAdapter(Capability),
+        identifier_field="id",
+        duplicate_code="ACC_CAPABILITY_ID_DUPLICATE",
+        diagnostics=report.diagnostics,
+    )
+    report.source_contracts = _load_adapter_collection(
+        root,
+        "source-contracts",
+        TypeAdapter(SourceContract),
+        identifier_field="operation_id",
+        duplicate_code="ACC_SOURCE_CONTRACT_DUPLICATE",
+        diagnostics=report.diagnostics,
+        relative_paths=report.source_contract_paths,
+    )
+    report.capability_quality = _load_adapter_collection(
+        root,
+        "capability-quality",
+        TypeAdapter(CapabilityQuality),
+        identifier_field="capability_id",
+        duplicate_code="ACC_CAPABILITY_QUALITY_DUPLICATE",
+        diagnostics=report.diagnostics,
+        relative_paths=report.capability_quality_paths,
+    )
+    _validate_v2_sidecar_closure(report)
     report.policies = _load_collection(
         root,
         "policies",

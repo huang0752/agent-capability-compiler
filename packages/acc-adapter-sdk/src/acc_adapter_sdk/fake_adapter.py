@@ -9,10 +9,10 @@ from acc_adapter_sdk.server import AdapterServer
 
 FAKE_ADAPTER_CONTRACT = AdapterContract.model_validate(
     {
-        "schema_version": "1",
+        "schema_version": "2",
         "id": "fake-readonly-adapter",
         "version": "0.1.0",
-        "base_path": "/adapter/v1",
+        "base_path": "/adapter/v2",
         "health": {
             "path": "/healthz",
             "metadata": {

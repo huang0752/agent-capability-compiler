@@ -16,6 +16,17 @@ class ContractEvalRunner:
     """Check the static shape and bindings of eval cases in compiled IR."""
 
     def run(self, compiled_ir: Mapping[str, Any]) -> EvalReport:
+        if compiled_ir.get("ir_version") != "2":
+            return EvalReport(
+                kind="contract",
+                cases=(),
+                diagnostics=(
+                    EvalDiagnostic(
+                        code="ACC_EVAL_IR_INVALID",
+                        message="Eval accepts only current compiled IR version 2.",
+                    ),
+                ),
+            )
         raw_evals = _mapping(compiled_ir.get("evals"))
         capabilities = _mapping(compiled_ir.get("capabilities"))
         operations = _mapping(compiled_ir.get("operations"))

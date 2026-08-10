@@ -1,0 +1,43 @@
+schema_version: "2"
+id: crm.get_customer.contract
+operation_id: crm.get_customer
+request_schema:
+  type: object
+  additionalProperties: false
+  required: [customer_id]
+  properties:
+    customer_id: {type: string, minLength: 1}
+    tenant_id: {type: string, minLength: 1}
+response_schema:
+  type: object
+  additionalProperties: false
+  required: [id, tenant_id, name, industry, owner]
+  properties:
+    id: {type: string}
+    tenant_id: {type: string}
+    name: {type: string}
+    industry: {type: string}
+    owner: {type: string}
+request_completeness: complete
+response_completeness: complete
+provenance:
+  - target_pointer: /request_schema
+    evidence:
+      source_id: crm-app-get
+      kind: source_file
+      path: src/fastapi_crm_system/app.py
+      line_start: 71
+      line_end: 79
+      digest: sha256:ecb11507024ad7fd9324a741a08d6265452beb5bd5177a3ff465c60c0798aeb0
+    evidence_schema_pointer: /
+    authority: implementation
+  - target_pointer: /response_schema
+    evidence:
+      source_id: crm-response-models
+      kind: source_file
+      path: src/fastapi_crm_system/models.py
+      line_start: 15
+      line_end: 20
+      digest: sha256:b32c4a9392f0d7bc1ef94bc53d129a0d738cdeca90aed71b3d3ce7b584731ad7
+    evidence_schema_pointer: /
+    authority: implementation

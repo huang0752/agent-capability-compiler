@@ -1,4 +1,4 @@
-"""Strict public data contracts for ACC milestone one."""
+"""Strict public data contracts for the current ACC format."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from pydantic import (
 
 NonEmptyString = Annotated[str, Field(min_length=1)]
 JsonObject = dict[str, JsonValue]
-SchemaVersion = Literal["1"]
+SchemaVersion = Literal["2"]
 Sha256Digest = Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
 EnvironmentReference = Annotated[
     str,
@@ -152,7 +152,7 @@ class ProjectIdentity(StrictModel):
 
 
 class SourceWorkspace(StrictModel):
-    """Source system location, which milestone one always treats as read-only."""
+    """Source system location, which ACC always treats as read-only."""
 
     path: NonEmptyString
     mode: Literal["read_only"]
@@ -310,16 +310,6 @@ class ProviderConfig(StrictModel):
         return value
 
 
-class Project(StrictModel):
-    """An isolated ACC integration project."""
-
-    schema_version: SchemaVersion
-    project: ProjectIdentity
-    source_workspace: SourceWorkspace
-    runtime: RuntimeConfig
-    provider: ProviderConfig
-
-
 EvidenceKind = Literal[
     "source_file",
     "json_document",
@@ -331,7 +321,7 @@ EvidenceKind = Literal[
 
 
 class Evidence(StrictModel):
-    """A digest-bound locator supporting the milestone one evidence forms."""
+    """A digest-bound locator supporting current evidence forms."""
 
     source_id: NonEmptyString
     kind: EvidenceKind | None = None
@@ -369,69 +359,6 @@ class Evidence(StrictModel):
             )
         ):
             raise ValueError("evidence requires a source locator or content summary")
-        return self
-
-
-class HttpOperation(StrictModel):
-    """A bounded HTTP request description for an existing REST system."""
-
-    method: Literal["GET", "HEAD"]
-    path: NonEmptyString
-    path_parameters: dict[NonEmptyString, NonEmptyString] = Field(default_factory=dict)
-    query_parameters: dict[NonEmptyString, NonEmptyString] = Field(default_factory=dict)
-    credential_ref: EnvironmentReference | None = None
-    scopes: list[NonEmptyString] = Field(default_factory=list)
-    timeout_seconds: Annotated[int, Field(ge=1, le=300)] = 15
-    max_response_bytes: Annotated[int, Field(ge=1, le=100 * 1024 * 1024)] = 1_048_576
-
-    @model_validator(mode="after")
-    def validate_origin_relative_path(self) -> HttpOperation:
-        """Reject absolute URLs, authority-relative paths, and traversal."""
-
-        _validate_origin_relative_path(self.path, field_name="path")
-        return self
-
-
-class OperationSafety(StrictModel):
-    """Milestone one permits read effects only."""
-
-    effect: Literal["read"]
-
-
-class Operation(StrictModel):
-    """An evidence-bound atomic REST operation."""
-
-    schema_version: SchemaVersion
-    id: NonEmptyString
-    title: NonEmptyString
-    kind: Literal["http"]
-    input_schema: JsonObject
-    output_schema: JsonObject
-    http: HttpOperation
-    context_bindings: dict[NonEmptyString, ContextBindingReference] = Field(default_factory=dict)
-    safety: OperationSafety
-    evidence: Annotated[list[Evidence], Field(min_length=1)]
-
-    @field_validator("input_schema", "output_schema")
-    @classmethod
-    def validate_json_schema(cls, value: JsonObject) -> JsonObject:
-        return _checked_json_schema(value)
-
-    @model_validator(mode="after")
-    def validate_parameter_mappings(self) -> Operation:
-        properties = self.input_schema.get("properties", {})
-        declared_inputs = set(properties) if isinstance(properties, dict) else set()
-        mapped_inputs = set(self.http.path_parameters.values()) | set(
-            self.http.query_parameters.values()
-        )
-        undeclared = sorted(mapped_inputs - declared_inputs)
-        if undeclared:
-            raise ValueError(
-                "HTTP parameter mappings must reference a declared input: " + ", ".join(undeclared)
-            )
-        placeholders = set(re.findall(r"\{([A-Za-z_][A-Za-z0-9_-]*)\}", self.http.path))
-        if placeholders != set(self.http.path_parameters):
-            raise ValueError("path_parameters must exactly match HTTP path placeholders")
         return self
 
 
@@ -633,43 +560,26 @@ type WorkflowStep = (
 )
 
 
-class Capability(StrictModel):
-    """An Agent-facing business capability composed from operations."""
-
-    schema_version: SchemaVersion
-    id: NonEmptyString
-    title: NonEmptyString
-    description: NonEmptyString
-    input_schema: JsonObject
-    output_schema: JsonObject
-    workflow: Annotated[list[WorkflowStep], Field(min_length=1)]
-    policy: NonEmptyString
-    evals: Annotated[list[NonEmptyString], Field(min_length=1)]
-
-    @field_validator("input_schema", "output_schema")
-    @classmethod
-    def validate_json_schema(cls, value: JsonObject) -> JsonObject:
-        return _checked_json_schema(value)
-
-
 _RECURSIVE_MODELS = (
     BranchAction,
     BranchStep,
     ParallelStep,
     ForeachAction,
     ForeachStep,
-    Capability,
 )
 for _model in _RECURSIVE_MODELS:
     _model.model_rebuild(_types_namespace={"WorkflowStep": WorkflowStep})
 
-from acc_core.models.v2 import (  # noqa: E402  # import after v1 recursive model rebuild
+from acc_core.models.v2 import (  # noqa: E402  # import after recursive workflow rebuild
     ActionCapabilityV2,
     ActionContractV2,
     ActionOperationV2,
     ApprovalContractV2,
+    Capability,
     CapabilityV2,
+    Operation,
     OperationV2,
+    Project,
     ProjectDocument,
     ProjectV2,
     QualityProfileV2,
@@ -705,12 +615,10 @@ __all__ = [
     "ForeachAction",
     "ForeachStep",
     "GatewaySessionCredentials",
-    "HttpOperation",
     "MapAction",
     "MapStep",
     "NoAuthConfig",
     "Operation",
-    "OperationSafety",
     "OperationV2",
     "ParallelStep",
     "PasswordBearerAuthConfig",

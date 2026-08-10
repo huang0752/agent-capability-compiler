@@ -14,10 +14,10 @@ JsonValue = bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"
 
 def _operation(operation_id: str, *, output_schema: dict[str, Any] | None = None) -> dict[str, Any]:
     return {
-        "schema_version": "1",
+        "schema_version": "2",
         "id": operation_id,
         "title": operation_id,
-        "kind": "http",
+        "kind": "read",
         "input_schema": {"type": "object"},
         "output_schema": output_schema or {},
         "http": {},
@@ -28,12 +28,12 @@ def _operation(operation_id: str, *, output_schema: dict[str, Any] | None = None
 
 def _compiled_ir(workflow: list[dict[str, Any]], operations: list[str]) -> dict[str, Any]:
     return {
-        "ir_version": "1",
+        "ir_version": "2",
         "operations": {operation_id: _operation(operation_id) for operation_id in operations},
         "capabilities": {
             "customer_context": {
                 "definition": {
-                    "schema_version": "1",
+                    "schema_version": "2",
                     "id": "customer_context",
                     "title": "Customer context",
                     "description": "Exercise the bounded workflow executor.",

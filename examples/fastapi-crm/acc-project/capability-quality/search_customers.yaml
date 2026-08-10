@@ -1,0 +1,7 @@
+schema_version: "2"
+capability_id: search_customers
+intent: {action: search, resource_types: [customer]}
+inputs:
+  query: {kind: query, acquisition: caller}
+composition: {failure_mode: fail_fast}
+output_budget: {max_bytes: 65536, long_text_disclosures: []}

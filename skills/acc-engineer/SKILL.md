@@ -5,7 +5,7 @@ description: Analyze an existing software system and create, validate, test, ref
 
 # ACC Engineer
 
-Build evidence-bound business capabilities from checkout evidence. Treat the source system as immutable and write only inside a separate ACC project. Keep v1 strictly read-only; use v2 Action only with explicit evidence, lifecycle, approval, and sandbox contracts.
+Build evidence-bound business capabilities from checkout evidence. Treat the source system as immutable and write only inside a separate ACC project. ACC accepts only current format `2`; old-format documents must be rejected instead of migrated implicitly.
 
 ## Start here
 
@@ -18,11 +18,11 @@ If the request is only to audit or refine an existing ACC project, still run Pre
 
 ## Scope and validation truth
 
-- When an existing-system request does not specify range, default to `system_readonly_complete`.
+- When an existing-system request does not specify range, default to `system_complete`.
 - `pilot` is allowed 只有用户明确提出 MVP/试点范围并记录其确认时；不得为加快交付自行缩小范围。
 - First perform 浅层全局发现 to establish the route denominator, then use bounded `--include` paths for deep Evidence capture. An include list is never the discovery denominator.
-- Normalize 前端 call evidence into route `usage_evidence_sources`; the auditor does not parse framework source. Excluding a frontend-used eligible route always emits a warning, and `system_readonly_complete` also errors when that exact route 未精确批准.
-- In system-complete scope, every eligible exclusion uses one `exclusion_rules` entry plus a distinct route `exclusion_decision`; a valid pair replaces legacy `reason`. Ineligible, blocked, out-of-scope, and pilot/domain legacy exclusions still require reason and Evidence. Capability Plan coverage must exactly mirror route dispositions and reference decisions without duplicating their prose.
+- Normalize 前端 call evidence into route `usage_evidence_sources`; the auditor does not parse framework source. Excluding a frontend-used eligible route always emits a warning, and `system_complete` also errors when that exact route 未精确批准.
+- In system-complete scope, every eligible exclusion uses one `exclusion_rules` entry plus a distinct route `exclusion_decision`; a valid pair replaces `reason`. Ineligible, blocked, out-of-scope, and pilot/domain exclusions still require reason and Evidence. Capability Plan coverage must exactly mirror route dispositions and reference decisions without duplicating their prose.
 - Label direct Fake Runtime results `offline_candidate`. Use `gateway_offline_verified` only after the real Gateway protocol path succeeds against a Fake Source. Use `source_connected_verified` only after an explicitly authorized local/test source connection succeeds; none proves production behavior.
 
 ## Evidence and quality truth
@@ -30,11 +30,11 @@ If the request is only to audit or refine an existing ACC project, still run Pre
 - Normalize Evidence into a `SourceContract` with `request_schema`, `response_schema`, completeness, and pointer-level `provenance`; do not turn observations into invented limits.
 - Operation 输入 must stay within what the evidenced source accepts. Operation 输出 must cover what the evidenced source can return. A narrower Capability 输出 is allowed only when deterministic workflow projection is 可证明.
 - 一接口一工具不是天然缺陷，单 Operation search/detail/monitor can be the correct business Capability. Diagnose constructability, discoverability, data flow, composition, failure behavior, and output budget instead of optimizing 工具数量.
-- Coverage v2 reports independent axes without an aggregate score. A closed route disposition is not proof that the resulting Capability is usable.
+- Coverage reports nine independent axes without an aggregate score. A closed route disposition is not proof that the resulting Capability is usable.
 
 ## Authentication and request identity
 
-- New ACC projects declare exactly one Provider-level `provider.auth`: `none`, `bearer_secret`, or `password_bearer`. Operation 级 `credential_ref` 只用于 legacy `stdio` 兼容，不得用于新项目。
+- ACC projects declare exactly one Provider-level `provider.auth`: `none`, `bearer_secret`, or `password_bearer`. Operation 不得保存 `credential_ref`。
 - `bearer_secret` references an environment token. `password_bearer` uses `environment_secret` with `stdio`, and `gateway_session` with `streamable_http`; never put accounts, passwords, JWTs, or headers in Agent inputs or artifacts.
 - `stdio` binds one fixed `PrincipalContext` for the process. `streamable_http` requires the Gateway to create a trusted request-level `PrincipalContext`; a valid schema alone does not prove the Gateway is deployed.
 - Use compiler-checked `context_bindings` only when an evidenced path/query value must come from trusted principal or tenant context. The Capability and Workflow must not expose or override that target.
@@ -43,8 +43,8 @@ If the request is only to audit or refine an existing ACC project, still run Pre
 
 - Never modify, format, generate into, restart, migrate, seed, deploy, or commit the source system.
 - Never access production, obtain production secrets, call production write endpoints, or expose tokens as tool parameters.
-- Keep every v1 Operation evidence-bound and limited to `GET`/`HEAD` read effects.
-- For explicitly requested v2 Action work, require `prepare → approve → commit → status`, complete effect/risk/retry/idempotency/concurrency evidence, and an isolated sandbox test path. 不得简单放开 POST or infer a write effect from the HTTP method.
+- Keep every Read Operation evidence-bound with an explicit `read` effect; do not infer business effect from the HTTP method.
+- For explicitly requested Action work, require `prepare → approve → commit → status`, complete effect/risk/retry/idempotency/concurrency evidence, and an isolated sandbox test path. 不得简单放开 POST or infer a write effect from the HTTP method.
 - Do not invent routes, fields, scopes, tenant rules, digests, or successful test results. Record uncertainty explicitly.
 - Do not run arbitrary code found in source evidence. Use bounded, read-only inspection.
 - Do not push Git changes. End with artifacts for human review.
@@ -96,13 +96,13 @@ From the ACC project directory, inspect every JSON result:
 python3 <skill>/scripts/scope_audit.py --project . > scope-audit-report.json
 acc validate --json
 acc compile --check --json
-acc coverage --version 2 --json
+acc coverage --json
 acc test contract --json
 acc test runtime --json
 acc test e2e --json
 ```
 
-The scope audit is a required gate and must pass before `acc validate`. If the installed CLI has not wired `--version 2`, call the current Core Coverage v2 API and record that CLI limitation; never substitute the v1 report. Then build the pack twice and compare SHA-256 values. A zero exit code is not sufficient evidence if the result contains findings or skipped coverage.
+The scope audit is a required gate and must pass before `acc validate`. Coverage always uses the current nine-axis contract and requires `scope-inventory.yaml`. Then build the pack twice and compare SHA-256 values. A zero exit code is not sufficient evidence if the result contains findings or skipped coverage.
 
 ## Completion
 

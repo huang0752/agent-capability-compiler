@@ -14,7 +14,7 @@ from acc_core.contracts.schema_relation import (
     compare_operation_input,
     compare_operation_output,
 )
-from acc_core.models import JsonObject, Operation
+from acc_core.models import JsonObject, ReadOperationV2
 
 
 def _evidence() -> dict[str, object]:
@@ -27,13 +27,13 @@ def _evidence() -> dict[str, object]:
     }
 
 
-def _operation(output_schema: JsonObject) -> Operation:
-    return Operation.model_validate(
+def _operation(output_schema: JsonObject) -> ReadOperationV2:
+    return ReadOperationV2.model_validate(
         {
-            "schema_version": "1",
+            "schema_version": "2",
+            "kind": "read",
             "id": "crm.get_permissions",
             "title": "Get permissions",
-            "kind": "http",
             "input_schema": {
                 "type": "object",
                 "additionalProperties": False,
@@ -45,10 +45,23 @@ def _operation(output_schema: JsonObject) -> Operation:
             "http": {
                 "method": "GET",
                 "path": "/permissions",
+                "path_parameters": {},
                 "query_parameters": {"keyword": "keyword"},
-                "credential_ref": "CRM_TOKEN",
+                "request": None,
+                "success": {"statuses": [200], "body": "json"},
+                "scopes": ["crm.permissions.read"],
+                "timeout_seconds": 15,
+                "max_response_bytes": 65_536,
+                "safety": {
+                    "effect": "read",
+                    "risk": "low",
+                    "reversibility": "reversible",
+                    "retry": {"mode": "never"},
+                    "idempotency": {"mode": "unsupported"},
+                    "concurrency": {"mode": "not_supported"},
+                },
             },
-            "safety": {"effect": "read"},
+            "context_bindings": {},
             "evidence": [_evidence()],
         }
     )

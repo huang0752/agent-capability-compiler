@@ -10,8 +10,10 @@ from acc_core.evals import ContractEvalRunner, RuntimeEvalRunner
 
 def _operation(operation_id: str) -> dict[str, Any]:
     return {
-        "schema_version": "1",
+        "schema_version": "2",
+        "kind": "read",
         "id": operation_id,
+        "title": operation_id,
         "input_schema": {
             "type": "object",
             "required": ["customer_id"],
@@ -19,13 +21,44 @@ def _operation(operation_id: str) -> dict[str, Any]:
             "additionalProperties": False,
         },
         "output_schema": {"type": "object"},
+        "http": {
+            "method": "GET",
+            "path": "/customers/{customer_id}",
+            "path_parameters": {"customer_id": "customer_id"},
+            "query_parameters": {},
+            "request": None,
+            "success": {"statuses": [200], "body": "json"},
+            "scopes": ["customer.read"],
+            "timeout_seconds": 15,
+            "max_response_bytes": 65536,
+            "safety": {
+                "effect": "read",
+                "risk": "low",
+                "reversibility": "reversible",
+                "retry": {"mode": "idempotent_only"},
+                "idempotency": {"mode": "unsupported"},
+                "concurrency": {"mode": "not_supported"},
+            },
+        },
+        "context_bindings": {},
+        "evidence": [
+            {
+                "source_id": "crm-source",
+                "kind": "source_file",
+                "path": "src/customers.py",
+                "line_start": 1,
+                "line_end": 20,
+                "digest": "sha256:" + "a" * 64,
+            }
+        ],
     }
 
 
 def _capability(eval_ids: list[str]) -> dict[str, Any]:
     return {
         "definition": {
-            "schema_version": "1",
+            "schema_version": "2",
+            "kind": "read",
             "id": "get_customer",
             "title": "Get customer",
             "description": "Get one customer.",
@@ -41,12 +74,25 @@ def _capability(eval_ids: list[str]) -> dict[str, Any]:
             "evals": eval_ids,
         },
         "operation_dependencies": ["crm.get_customer"],
+        "quality": {
+            "max_output_bytes": 65536,
+            "long_text_disclosures": [],
+            "intent": {"action": "get", "resource_types": ["customer"]},
+            "inputs": {
+                "customer_id": {
+                    "kind": "resource_selector",
+                    "resource_type": "customer",
+                    "acquisition": "caller",
+                }
+            },
+            "composition": {"failure_mode": "fail_fast", "justification": None},
+        },
     }
 
 
 def _success_eval() -> dict[str, Any]:
     return {
-        "schema_version": "1",
+        "schema_version": "2",
         "id": "normal",
         "capability": "get_customer",
         "input": {"customer_id": "c-1"},
@@ -59,7 +105,7 @@ def _success_eval() -> dict[str, Any]:
 
 def _error_eval() -> dict[str, Any]:
     return {
-        "schema_version": "1",
+        "schema_version": "2",
         "id": "forbidden",
         "capability": "get_customer",
         "input": {"customer_id": "other-tenant"},
@@ -72,12 +118,24 @@ def _error_eval() -> dict[str, Any]:
 
 def _compiled_ir() -> dict[str, Any]:
     return {
-        "ir_version": "1",
+        "ir_version": "2",
+        "project": {
+            "schema_version": "2",
+            "project": {"id": "crm", "version": "2.0.0"},
+            "source_workspace": {"path": "/srv/crm", "mode": "read_only"},
+            "runtime": {"transport": ["stdio"]},
+            "provider": {
+                "kind": "http",
+                "base_url_ref": "CRM_BASE_URL",
+                "auth": {"kind": "bearer_secret", "token_ref": "CRM_TOKEN"},
+            },
+            "quality": {"profile": "standard"},
+        },
         "operations": {"crm.get_customer": _operation("crm.get_customer")},
         "capabilities": {"get_customer": _capability(["normal", "forbidden"])},
         "policies": {
             "crm-read": {
-                "schema_version": "1",
+                "schema_version": "2",
                 "id": "crm-read",
                 "required_scopes": ["customer.read"],
                 "tenant_mode": "required",
@@ -116,6 +174,20 @@ def test_contract_eval_accepts_bound_positive_and_permission_negative_cases() ->
             },
         ],
     }
+
+
+@pytest.mark.asyncio
+async def test_eval_runners_reject_noncurrent_compiled_ir_before_cases() -> None:
+    ir = _compiled_ir()
+    ir["ir_version"] = "1"
+
+    contract = ContractEvalRunner().run(ir)
+    runtime = await RuntimeEvalRunner(_FailureCaller(AssertionError("must not run"))).run(ir)
+
+    assert [item.code for item in contract.diagnostics] == ["ACC_EVAL_IR_INVALID"]
+    assert contract.cases == ()
+    assert [item.code for item in runtime.diagnostics] == ["ACC_EVAL_IR_INVALID"]
+    assert runtime.cases == ()
 
 
 def test_contract_eval_reports_case_binding_dependency_and_schema_failures() -> None:

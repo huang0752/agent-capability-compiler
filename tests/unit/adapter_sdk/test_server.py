@@ -12,10 +12,10 @@ from acc_adapter_sdk.contracts import AdapterContract, AdapterHealth, AdapterOpe
 def _contract() -> AdapterContract:
     return AdapterContract.model_validate(
         {
-            "schema_version": "1",
+            "schema_version": "2",
             "id": "example-crm-adapter",
             "version": "0.1.0",
-            "base_path": "/adapter/v1",
+            "base_path": "/adapter/v2",
             "health": {
                 "path": "/healthz",
                 "metadata": {"system": "example-crm", "mode": "test"},
@@ -55,7 +55,7 @@ async def test_adapter_server_exposes_health_metadata() -> None:
     assert response.status_code == 200
     assert response.json() == {
         "status": "ok",
-        "schema_version": "1",
+        "schema_version": "2",
         "adapter": {"id": "example-crm-adapter", "version": "0.1.0"},
         "metadata": {"system": "example-crm", "mode": "test"},
     }
@@ -75,9 +75,9 @@ async def test_adapter_server_registers_declared_get_and_head_routes_under_base_
     server.register_operation("crm.head_customer", head_customer)
 
     async with _client(server) as client:
-        get_response = await client.get("/adapter/v1/customers/c-1")
-        head_response = await client.head("/adapter/v1/customers/c-1")
-        write_response = await client.post("/adapter/v1/customers/c-1", json={"name": "Eve"})
+        get_response = await client.get("/adapter/v2/customers/c-1")
+        head_response = await client.head("/adapter/v2/customers/c-1")
+        write_response = await client.post("/adapter/v2/customers/c-1", json={"name": "Eve"})
 
     assert get_response.status_code == 200
     assert get_response.json() == {"id": "c-1", "name": "Ada"}
@@ -115,7 +115,7 @@ def test_adapter_server_rejects_write_routes_even_if_model_validation_was_bypass
         schema_version="1",
         id="unsafe-adapter",
         version="0.1.0",
-        base_path="/adapter/v1",
+        base_path="/adapter/v2",
         health=AdapterHealth(path="/healthz", metadata={}),
         operations=[unsafe_operation],
     )
@@ -129,10 +129,10 @@ async def test_adapter_server_loads_scaffold_contract_yaml(tmp_path: Path) -> No
     contract_path = tmp_path / "contract.yaml"
     contract_path.write_text(
         """\
-schema_version: "1"
+schema_version: "2"
 id: generated-adapter
 version: 0.1.0
-base_path: /adapter/v1
+base_path: /adapter/v2
 operations: []
 """,
         encoding="utf-8",

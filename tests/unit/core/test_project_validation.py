@@ -20,20 +20,25 @@ def make_valid_project(root: Path) -> Path:
     _write_yaml(
         project / "project.yaml",
         {
-            "schema_version": "1",
+            "schema_version": "2",
             "project": {"id": "example-crm", "version": "0.1.0"},
             "source_workspace": {"path": "../system", "mode": "read_only"},
             "runtime": {"transport": ["stdio"]},
-            "provider": {"kind": "http", "base_url_ref": "CRM_BASE_URL"},
+            "provider": {
+                "kind": "http",
+                "base_url_ref": "CRM_BASE_URL",
+                "auth": {"kind": "bearer_secret", "token_ref": "CRM_USER_TOKEN"},
+            },
+            "quality": {"profile": "standard"},
         },
     )
     _write_yaml(
         project / "operations" / "crm.get_customer.yaml",
         {
-            "schema_version": "1",
+            "schema_version": "2",
             "id": "crm.get_customer",
             "title": "Get customer",
-            "kind": "http",
+            "kind": "read",
             "input_schema": {
                 "type": "object",
                 "additionalProperties": False,
@@ -45,12 +50,22 @@ def make_valid_project(root: Path) -> Path:
                 "method": "GET",
                 "path": "/customers/{customer_id}",
                 "path_parameters": {"customer_id": "customer_id"},
-                "credential_ref": "CRM_USER_TOKEN",
+                "query_parameters": {},
+                "request": None,
+                "success": {"statuses": [200], "body": "json"},
                 "scopes": ["customer.read"],
                 "timeout_seconds": 15,
                 "max_response_bytes": 1048576,
+                "safety": {
+                    "effect": "read",
+                    "risk": "low",
+                    "reversibility": "reversible",
+                    "retry": {"mode": "idempotent_only"},
+                    "idempotency": {"mode": "unsupported"},
+                    "concurrency": {"mode": "not_supported"},
+                },
             },
-            "safety": {"effect": "read"},
+            "context_bindings": {},
             "evidence": [
                 {
                     "source_id": "crm-backend",
@@ -63,7 +78,7 @@ def make_valid_project(root: Path) -> Path:
     _write_yaml(
         project / "policies" / "crm-sales-read.yaml",
         {
-            "schema_version": "1",
+            "schema_version": "2",
             "id": "crm-sales-read",
             "required_scopes": ["customer.read"],
             "tenant_mode": "required",
@@ -76,7 +91,8 @@ def make_valid_project(root: Path) -> Path:
     _write_yaml(
         project / "capabilities" / "get_customer.yaml",
         {
-            "schema_version": "1",
+            "schema_version": "2",
+            "kind": "read",
             "id": "get_customer",
             "title": "Get customer context",
             "description": "Get one customer's context.",
@@ -104,7 +120,7 @@ def make_valid_project(root: Path) -> Path:
     _write_yaml(
         project / "evals" / "get-customer-normal.yaml",
         {
-            "schema_version": "1",
+            "schema_version": "2",
             "id": "get-customer-normal",
             "capability": "get_customer",
             "input": {"customer_id": "c-1"},
@@ -114,6 +130,36 @@ def make_valid_project(root: Path) -> Path:
             ],
             "expected_output_schema": {"type": "object"},
             "forbidden_fields": ["internal_note"],
+        },
+    )
+    _write_yaml(
+        project / "source-contracts" / "crm.get_customer.yaml",
+        {
+            "schema_version": "2",
+            "id": "crm.get_customer.contract",
+            "operation_id": "crm.get_customer",
+            "request_schema": {"type": "object"},
+            "response_schema": {"type": "object"},
+            "request_completeness": "complete",
+            "response_completeness": "complete",
+            "provenance": [],
+        },
+    )
+    _write_yaml(
+        project / "capability-quality" / "get_customer.yaml",
+        {
+            "schema_version": "2",
+            "capability_id": "get_customer",
+            "intent": {"action": "get", "resource_types": ["customer"]},
+            "inputs": {
+                "customer_id": {
+                    "kind": "resource_selector",
+                    "resource_type": "customer",
+                    "acquisition": "caller",
+                }
+            },
+            "composition": {"failure_mode": "fail_fast"},
+            "output_budget": {"max_bytes": 65536},
         },
     )
     return project
@@ -130,7 +176,9 @@ def test_valid_project_loads_all_contracts(tmp_path: Path) -> None:
     assert list(report.capabilities) == ["get_customer"]
     assert list(report.policies) == ["crm-sales-read"]
     assert list(report.evals) == ["get-customer-normal"]
-    assert [item.code for item in report.diagnostics] == ["ACC_AUTH_LEGACY_CREDENTIAL"]
+    assert set(report.source_contracts) == {"crm.get_customer"}
+    assert set(report.capability_quality) == {"get_customer"}
+    assert [item.code for item in report.diagnostics] == ["ACC_CAPABILITY_OUTPUT_BOUND_UNKNOWN"]
     assert report.diagnostics[0].severity == "warning"
 
 
@@ -139,13 +187,6 @@ def _set_provider_auth(project: Path, auth: dict[str, object]) -> None:
     document = yaml.safe_load(project_path.read_text(encoding="utf-8"))
     document["provider"]["auth"] = auth
     _write_yaml(project_path, document)
-
-
-def _remove_operation_credential(project: Path) -> None:
-    operation_path = project / "operations" / "crm.get_customer.yaml"
-    operation = yaml.safe_load(operation_path.read_text(encoding="utf-8"))
-    operation["http"].pop("credential_ref")
-    _write_yaml(operation_path, operation)
 
 
 def _password_auth(credential_kind: str) -> dict[str, object]:
@@ -160,50 +201,6 @@ def _password_auth(credential_kind: str) -> dict[str, object]:
         "password_field": "password",
         "token_pointer": "/access_token",
     }
-
-
-def test_legacy_auth_requires_operation_credential(tmp_path: Path) -> None:
-    project = make_valid_project(tmp_path)
-    _remove_operation_credential(project)
-
-    report = validate_project(project)
-
-    assert report.ok is False
-    diagnostic = next(
-        item for item in report.diagnostics if item.code == "ACC_AUTH_CREDENTIAL_REQUIRED"
-    )
-    assert diagnostic.path == "operations/crm.get_customer.yaml"
-    assert diagnostic.pointer == "/http/credential_ref"
-
-
-def test_provider_auth_forbids_operation_credential(tmp_path: Path) -> None:
-    project = make_valid_project(tmp_path)
-    _set_provider_auth(project, {"kind": "bearer_secret", "token_ref": "CRM_USER_TOKEN"})
-
-    report = validate_project(project)
-
-    assert report.ok is False
-    diagnostic = next(
-        item for item in report.diagnostics if item.code == "ACC_AUTH_CREDENTIAL_CONFLICT"
-    )
-    assert diagnostic.pointer == "/http/credential_ref"
-
-
-def test_auth_diagnostic_uses_real_operation_relative_path(tmp_path: Path) -> None:
-    project = make_valid_project(tmp_path)
-    original = project / "operations" / "crm.get_customer.yaml"
-    renamed = project / "operations" / "customer-by-id.yaml"
-    original.rename(renamed)
-    operation = yaml.safe_load(renamed.read_text(encoding="utf-8"))
-    operation["http"].pop("credential_ref")
-    _write_yaml(renamed, operation)
-
-    report = validate_project(project)
-
-    diagnostic = next(
-        item for item in report.diagnostics if item.code == "ACC_AUTH_CREDENTIAL_REQUIRED"
-    )
-    assert diagnostic.path == "operations/customer-by-id.yaml"
 
 
 @pytest.mark.parametrize(
@@ -235,7 +232,6 @@ def test_transport_and_credential_source_cross_validation(
     document["runtime"]["transport"] = [transport]
     document["provider"]["auth"] = deepcopy(auth)
     _write_yaml(project_path, document)
-    _remove_operation_credential(project)
 
     report = validate_project(project)
 

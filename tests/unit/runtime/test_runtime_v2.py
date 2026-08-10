@@ -8,7 +8,7 @@ from pydantic import JsonValue
 
 from acc_runtime.context import PrincipalContext
 from acc_runtime.execution import ExecutionError
-from acc_runtime.runtime import GenericRuntime
+from acc_runtime.runtime import GenericRuntime, RuntimeConfigurationError
 
 
 class _Provider:
@@ -103,7 +103,7 @@ def _v2_ir(*, max_output_bytes: int) -> dict[str, Any]:
         "operations": {"messages.get": operation},
         "policies": {
             "messages-read": {
-                "schema_version": "1",
+                "schema_version": "2",
                 "id": "messages-read",
                 "required_scopes": [],
                 "tenant_mode": "none",
@@ -154,6 +154,23 @@ async def test_v2_read_capability_executes_without_changing_v1_contracts() -> No
 
     assert [tool["name"] for tool in runtime.tools()] == ["messages.inspect"]
     assert await runtime.call("messages.inspect", {}) == {"message": "你好世界"}
+
+
+def test_generic_runtime_rejects_a_legacy_project_before_exposing_tools() -> None:
+    legacy = _v2_ir(max_output_bytes=1024)
+    legacy["ir_version"] = "1"
+    legacy["project"] = {
+        "schema_version": "1",
+        "project": {"id": "messages", "version": "1.0.0"},
+        "source_workspace": {"path": "/srv/messages", "mode": "read_only"},
+        "runtime": {"transport": ["stdio"]},
+        "provider": {"kind": "http", "base_url_ref": "MESSAGES_URL"},
+    }
+
+    with pytest.raises(RuntimeConfigurationError) as caught:
+        GenericRuntime(legacy, provider=_Provider(), principal_context=_principal())
+
+    assert caught.value.details == {"reason": "ir_version_invalid"}
 
 
 @pytest.mark.asyncio

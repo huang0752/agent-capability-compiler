@@ -19,10 +19,10 @@ def _operation(**overrides: object) -> contracts.AdapterOperation:
 
 def _contract(**overrides: object) -> contracts.AdapterContract:
     document: dict[str, object] = {
-        "schema_version": "1",
+        "schema_version": "2",
         "id": "example-crm-adapter",
         "version": "0.1.0",
-        "base_path": "/adapter/v1",
+        "base_path": "/adapter/v2",
         "health": {
             "path": "/healthz",
             "metadata": {"system": "example-crm", "mode": "fake"},
@@ -37,10 +37,10 @@ def test_adapter_contract_is_strict_and_preserves_health_metadata() -> None:
     contract = _contract()
 
     assert contract.model_dump(mode="json") == {
-        "schema_version": "1",
+        "schema_version": "2",
         "id": "example-crm-adapter",
         "version": "0.1.0",
-        "base_path": "/adapter/v1",
+        "base_path": "/adapter/v2",
         "health": {
             "path": "/healthz",
             "metadata": {"system": "example-crm", "mode": "fake"},
@@ -91,7 +91,7 @@ def test_adapter_operation_paths_are_origin_relative_and_safe(path: str) -> None
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("base_path", "/adapter/v1/"),
+        ("base_path", "/adapter/v2/"),
         ("base_path", "/adapter/{tenant}"),
         ("base_path", "/adapter/../admin"),
         ("health", {"path": "/health/{probe}", "metadata": {}}),
@@ -115,7 +115,7 @@ def test_adapter_contract_rejects_duplicate_ids_routes_and_health_collisions() -
 
     with pytest.raises(ValidationError, match="health path must not collide"):
         _contract(
-            health={"path": "/adapter/v1/customers", "metadata": {}},
+            health={"path": "/adapter/v2/customers", "metadata": {}},
             operations=[_operation(path="/customers")],
         )
 
@@ -123,13 +123,18 @@ def test_adapter_contract_rejects_duplicate_ids_routes_and_health_collisions() -
 def test_adapter_contract_allows_an_empty_scaffold_with_default_health_metadata() -> None:
     contract = contracts.AdapterContract.model_validate(
         {
-            "schema_version": "1",
+            "schema_version": "2",
             "id": "new-adapter",
             "version": "0.1.0",
-            "base_path": "/adapter/v1",
+            "base_path": "/adapter/v2",
             "operations": [],
         }
     )
 
     assert contract.operations == []
     assert contract.health.model_dump() == {"path": "/healthz", "metadata": {}}
+
+
+def test_adapter_contract_rejects_legacy_schema_version() -> None:
+    with pytest.raises(ValidationError, match="schema_version"):
+        _contract(schema_version="1")

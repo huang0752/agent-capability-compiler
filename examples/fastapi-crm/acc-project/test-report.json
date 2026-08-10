@@ -54,6 +54,6 @@
   "limits": [
     "No production system or production credential was used.",
     "No streamable_http Gateway or multi-user session was exercised.",
-    "The CRM candidate uses legacy required-tenant Policy injection rather than explicit context_bindings."
+    "The CRM candidate uses explicit tenant_id context_bindings with a fixed stdio PrincipalContext."
   ]
 }

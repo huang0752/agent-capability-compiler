@@ -30,20 +30,17 @@ from acc_core.io import (
 )
 
 PACK_FORMAT = "acc.capability-pack"
-PACK_FORMAT_VERSION = 1
-SUPPORTED_PACK_FORMAT_VERSIONS = frozenset({1, 2})
+PACK_FORMAT_VERSION = 2
+SUPPORTED_PACK_FORMAT_VERSIONS = frozenset({PACK_FORMAT_VERSION})
 FIXED_ZIP_TIME = (1980, 1, 1, 0, 0, 0)
 
-_V1_DOCUMENT_DIRECTORIES = (
+_DOCUMENT_DIRECTORIES = (
     "capabilities",
+    "capability-quality",
     "evals",
     "evidence",
     "operations",
     "policies",
-)
-_V2_DOCUMENT_DIRECTORIES = (
-    *_V1_DOCUMENT_DIRECTORIES,
-    "capability-quality",
     "source-contracts",
 )
 _DOCUMENT_SUFFIXES = {".json", ".yaml", ".yml"}
@@ -195,7 +192,9 @@ def _record(path: str, contents: bytes) -> PackFileRecord:
 
 
 def _document_directories(format_version: int) -> tuple[str, ...]:
-    return _V2_DOCUMENT_DIRECTORIES if format_version == 2 else _V1_DOCUMENT_DIRECTORIES
+    if format_version != PACK_FORMAT_VERSION:
+        raise PackFormatError("unsupported capability-pack format version")
+    return _DOCUMENT_DIRECTORIES
 
 
 def _is_allowed_entry(path: str, *, format_version: int | None = None) -> bool:
@@ -208,7 +207,7 @@ def _is_allowed_entry(path: str, *, format_version: int | None = None) -> bool:
         len(parts) == 2
         and parts[0]
         in (
-            _V2_DOCUMENT_DIRECTORIES
+            _DOCUMENT_DIRECTORIES
             if format_version is None
             else _document_directories(format_version)
         )
@@ -303,13 +302,9 @@ def _project_manifest(project_contents: bytes) -> PackManifest:
         "schema_version",
         "source_workspace",
     }
-    if schema_version == "2":
-        expected_fields.add("quality")
-        format_version = 2
-    elif schema_version == "1":
-        format_version = 1
-    else:
+    if schema_version != "2":
         raise PackFormatError("project.yaml declares an unsupported schema version")
+    expected_fields.add("quality")
     if set(document) != expected_fields:
         raise PackFormatError("project.yaml does not have the required project shape")
     identity = document.get("project")
@@ -323,7 +318,7 @@ def _project_manifest(project_contents: bytes) -> PackManifest:
         raise PackFormatError("project version must be a non-empty string")
     return PackManifest(
         format=PACK_FORMAT,
-        format_version=format_version,
+        format_version=PACK_FORMAT_VERSION,
         project_id=project_id,
         project_version=project_version,
     )
@@ -360,7 +355,7 @@ def _compiled_payload(
         return None
     if isinstance(compiled_ir, Mapping):
         ir_version = compiled_ir.get("ir_version")
-        if ir_version != str(format_version) and not (format_version == 1 and ir_version is None):
+        if ir_version != str(format_version):
             raise PackFormatError("compiled IR version does not match the pack format")
         contents = _canonical_json(dict(compiled_ir), description="compiled IR")
         if len(contents) > max_file_bytes:
@@ -402,7 +397,7 @@ def _compiled_payload(
     if not isinstance(value, dict):
         raise PackFormatError("compiled IR must be a JSON object")
     ir_version = value.get("ir_version")
-    if ir_version != str(format_version) and not (format_version == 1 and ir_version is None):
+    if ir_version != str(format_version):
         raise PackFormatError("compiled IR version does not match the pack format")
     contents = _canonical_json(value, description="compiled IR")
     if len(contents) > max_file_bytes:
@@ -452,7 +447,7 @@ def build_pack(
         )
     resolved_root = root.resolve(strict=False)
     resolved_destination = destination.resolve(strict=False)
-    for directory in _V2_DOCUMENT_DIRECTORIES:
+    for directory in _DOCUMENT_DIRECTORIES:
         if resolved_destination.is_relative_to(resolved_root / directory):
             raise PackPathError(
                 "capability-pack output cannot overwrite a project definition directory",

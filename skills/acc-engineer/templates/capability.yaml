@@ -1,4 +1,5 @@
-schema_version: "1"
+schema_version: "2"
+kind: read
 id: REPLACE_WITH_CAPABILITY_ID
 title: REPLACE_WITH_CAPABILITY_TITLE
 description: REPLACE_WITH_AGENT_FACING_BUSINESS_OUTCOME
