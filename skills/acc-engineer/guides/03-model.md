@@ -14,6 +14,7 @@
 3. 记录 API 调用关系、原系统已有测试及可复用的安全测试数据。
 4. 把环境变量名称建模为引用；不得记录凭据值、动态 Host 或调用方可覆盖的认证 Header。
 5. 保留未确认事项，不用通用经验填补原系统事实。
+6. 对每个候选 Operation 比较 SourceContract：Operation 输入必须是源 `request_schema` 可接受范围的安全子集，Operation 输出必须覆盖源 `response_schema` 的可能结果；未知关系保持 unknown。
 
 ## 门禁
 
@@ -22,6 +23,7 @@
 - 模型不包含生产 Secret、生产地址、写接口或原系统改造方案。
 - 原系统只读基线无变化。
 - 每个候选 Operation 的 `scope_route_ids` 都存在于 `scope-inventory.yaml`，且不指向 excluded、ineligible 或 blocked 路由。
+- 不存在用样本 observation 收紧数组、长文本、枚举或对象字段的人工 Schema；限制必须有 provenance。
 
 ## 输出
 

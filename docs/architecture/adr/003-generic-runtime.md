@@ -49,7 +49,9 @@ Gateway v1 是单进程、`workers=1` 的进程内会话实现。所有请求先
 
 `DELETE /runtime/sessions/current` 会立即撤销 Gateway token，之后的 MCP 请求不再认证。但 MCP SDK 1.29 没有按单个 Gateway Session 立即 terminate 底层 Streamable HTTP 传输的公开 manager API；已建立 SSE/传输实例由有限 idle timeout 在上限内回收。这个限制不延长 token 的授权寿命。
 
-验证等级也是合同的一部分：Fake Runtime/Fake E2E 只能记录为 `offline_candidate`；只有明确授权且成功连接本地或测试源的运行才能记录为 `source_connected_verified`。任何本地结果都不能被表述为生产验证或未连接系统的验证。
+验证等级也是合同的一部分：直接 Fake Runtime 记录为 `offline_candidate`；真实 Gateway 与官方 MCP 客户端连接 Fake Source 的协议路径记录为 `gateway_offline_verified`；只有明确授权且成功连接本地或测试源的运行才能记录为 `source_connected_verified`。任何本地结果都不能被表述为生产验证或未连接系统的验证。
+
+v2 的质量与 Action 安全边界见 [ADR 007](007-versioned-quality-and-action-safety.md)。Generic Runtime 当前稳定 MCP 工具面仍只暴露 read Capability；Action Coordinator 尚未接入 MCP，且生产部署要求的 durable Store/审批/审计实现尚未提供。
 
 ## Consequences
 

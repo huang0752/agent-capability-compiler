@@ -18,7 +18,25 @@ from acc_testkit.fake_system import (
     SimulatedTimeoutError,
 )
 from acc_testkit.faults import Fault
-from acc_testkit.mcp_client import McpStdioTestClient, McpStreamableHttpTestClient
+from acc_testkit.live import (
+    LiveGatewayAccount,
+    LiveGatewayAttestation,
+    LiveGatewayCase,
+    LiveGatewayIsolationCase,
+    LiveGatewayProfile,
+    LiveGatewayReport,
+    LiveGatewayRunner,
+    LiveStepResult,
+    LiveStepStatus,
+    SecretRef,
+)
+from acc_testkit.mcp_client import (
+    GatewayLogoutProbe,
+    GatewayRawMcpSessionOwnerProbe,
+    GatewaySessionClient,
+    McpStdioTestClient,
+    McpStreamableHttpTestClient,
+)
 from acc_testkit.recording import (
     CallRecorder,
     OperationCallRecord,
@@ -35,6 +53,18 @@ __all__ = [
     "FakeRestSystem",
     "Fault",
     "FixtureConfigurationError",
+    "GatewayLogoutProbe",
+    "GatewayRawMcpSessionOwnerProbe",
+    "GatewaySessionClient",
+    "LiveGatewayAccount",
+    "LiveGatewayAttestation",
+    "LiveGatewayCase",
+    "LiveGatewayIsolationCase",
+    "LiveGatewayProfile",
+    "LiveGatewayReport",
+    "LiveGatewayRunner",
+    "LiveStepResult",
+    "LiveStepStatus",
     "McpStdioTestClient",
     "McpStreamableHttpTestClient",
     "OperationCallLike",
@@ -45,6 +75,7 @@ __all__ = [
     "RecordingOperationProvider",
     "ResponseSpec",
     "RouteFixture",
+    "SecretRef",
     "SimulatedTimeoutError",
     "assert_e2e",
     "assert_expected_calls",

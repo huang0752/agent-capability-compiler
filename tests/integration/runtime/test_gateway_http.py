@@ -21,9 +21,21 @@ from acc_runtime.context import PrincipalContext
 from acc_runtime.credentials import SecretValue
 from acc_runtime.gateway.app import create_gateway_app
 from acc_runtime.gateway.auth import GatewayPrincipalResolver, GatewayTokenVerifier
-from acc_runtime.gateway.models import GatewaySettings, SessionCreateResponse
+from acc_runtime.gateway.models import (
+    GatewayRuntimeInfo,
+    GatewaySettings,
+    SessionCreateResponse,
+)
 from acc_runtime.gateway.sessions import InMemoryGatewaySessionStore
 from acc_runtime.mcp import PrincipalCapabilityMcpServer
+
+_RUNTIME_INFO = GatewayRuntimeInfo(
+    pack_sha256="a" * 64,
+    project_id="project-a",
+    project_version="1.2.3",
+    tool_schema_sha256="b" * 64,
+    transport="streamable_http",
+)
 
 
 def _token(seed: int) -> str:
@@ -160,6 +172,7 @@ def _build_app(
         service=service,
         token_verifier=verifier,
         mcp_server=mcp_server,
+        runtime_info=_RUNTIME_INFO,
         max_request_body_size=4096,
     )
     return app, service
@@ -272,6 +285,44 @@ def test_session_login_is_public_but_strict_and_all_mcp_requests_are_authenticat
     assert service.closed is True
 
 
+def test_runtime_info_is_authenticated_host_origin_protected_and_contains_no_identity() -> None:
+    app, _ = _build_app()
+    with TestClient(app, base_url="http://gateway.test") as client:
+        assert client.get("/runtime/info").status_code == 401
+        token = _login(client, "a")
+        headers = {
+            "authorization": f"Bearer {token}",
+            "origin": "https://agent.test",
+        }
+
+        response = client.get("/runtime/info", headers=headers)
+
+        assert response.status_code == 200
+        assert response.json() == _RUNTIME_INFO.model_dump(mode="json")
+        for forbidden in (
+            "principal-a",
+            "tenant_id",
+            token,
+            "authorization",
+            "jwt",
+        ):
+            assert forbidden.casefold() not in response.text.casefold()
+        assert (
+            client.get(
+                "/runtime/info",
+                headers={**headers, "host": "evil.test"},
+            ).status_code
+            == 421
+        )
+        assert (
+            client.get(
+                "/runtime/info",
+                headers={**headers, "origin": "https://evil.test"},
+            ).status_code
+            == 403
+        )
+
+
 @pytest.mark.parametrize("method", ["POST", "GET", "DELETE"])
 def test_mcp_session_owner_is_checked_for_every_method(method: str) -> None:
     app, _ = _build_app()
@@ -368,6 +419,7 @@ async def test_login_cancellation_traceback_does_not_retain_credentials() -> Non
         service=service,
         token_verifier=verifier,
         mcp_server=PrincipalCapabilityMcpServer(ContextRuntime(), resolver=resolver),
+        runtime_info=_RUNTIME_INFO,
     )
     route = app.routes[0]
     assert isinstance(route, Route)
@@ -449,6 +501,7 @@ def _build_tracking_app(
         service=service,
         token_verifier=verifier,
         mcp_server=adapter,
+        runtime_info=_RUNTIME_INFO,
         mcp_session_idle_timeout_seconds=idle_timeout_seconds,
     )
     return app, service, adapter

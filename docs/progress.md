@@ -1,4 +1,4 @@
-# ACC MVP Progress
+# ACC Development Progress
 
 | Milestone | Status | Verification |
 | --- | --- | --- |
@@ -11,8 +11,20 @@
 | 6 — CRM acceptance | Complete | ACC gates 9/9 each; source 34 passed; repository 281 passed; deterministic Pack and real MCP stdio |
 | 7 — generic auth, identity, and scope governance | Complete | Provider auth, PrincipalContext, structured scope audit, stdio/source contracts |
 | 8 — optional multi-user HTTP Gateway | Complete | 1100 passed; Ruff; mypy; Schema/CRM compile; Skill validation; independent security reviews |
+| 9 — v2 quality contracts and Coverage | In progress | SourceContract, CapabilityQuality, Scope callability and Coverage v2 focused tests exist; release gate pending |
+| 10 — v2 Action and Live validation | In progress | compiler/runtime foundations exist; MCP Action, durable production Store and release gate pending |
 
 This file records fresh command evidence at each milestone. A status changes to complete only after its focused tests, the full test suite, lint, type checking, diff review, and milestone commit have succeeded.
+
+## Unreleased v2 boundary — 2026-08-10
+
+- Project v1、Operation v1、Capability v1、IR/Pack v1 继续保持只读兼容；部署默认 `allowed_effects={read}`，新模型不会让旧 Pack 自动获得写权限。
+- Core 已加入平台中立的 SourceContract/provenance、CapabilityQuality、Schema fidelity、constructability/discoverability/composition、保守输出预算和 Coverage v2 多轴 API。Coverage v2 不生成总分，route disposition closure 不代表 Capability usable。
+- Runtime/CLI 已加入路径感知 Scope callability：空 deployment ceiling 默认拒绝，确定不可调用项可由 strict mode 阻止启动，登录前未知的源权限保持 unknown。
+- v2 Action 已有严格模型、编译证明、Pack/Loader 合同、部署策略、直接 Runtime Coordinator、审批协议和显式开发/测试内存 Store。状态机为 `prepare → approve → commit → status`，不能简化为允许 `POST`。
+- Action semantics 已由 SourceContract 可信 Evidence 逐字段绑定，并在 compiler IR 与 Runtime 之间做摘要证明；Coordinator 也已有 durable/audit fail-closed 门禁和 secret-safe lifecycle audit 合同。当前 Generic Runtime 的普通 `tools()`/`call()` 和 MCP Server 仍未暴露 Action 生命周期；生产 durable Store、可信审批签发、集中审计后端及完整 MCP/CLI Action 接线尚未完成。因此 M9/M10 不能标记 Complete，也不能宣称生产 Action 已可用。
+- Live 验证术语分为 `offline_candidate`、`gateway_offline_verified` 和 `source_connected_verified`。历史里程碑使用的旧二层标签保留为当时记录，不自动升级为更高等级；新报告必须依据实际传输和源连接重新判定。
+- 本节描述当前未发布工作树边界，不替代完整 pytest、Ruff、mypy、Pack 重建和安全复审；完成状态必须等这些门禁真实通过后更新。
 
 ## Verification log
 
@@ -115,14 +127,7 @@ This file records fresh command evidence at each milestone. A status changes to 
 - 每个用户只在 `POST /runtime/sessions` 一次性提交 identity/password。密码在源登录交换后丢弃，源 JWT 只保留在进程内，客户端收到独立的短期 opaque Gateway token，Store 只用其摘要索引。MCP tool 拒绝凭据和身份覆盖参数。
 - 每个已认证 HTTP 请求都重新校验 Gateway Session，每次工具执行再恢复并绑定 `PrincipalContext`。A/B/C 的 Gateway 与 MCP Session 相互独立；MCP Session owner 绑定阻止跨 token 的 POST/GET/DELETE/SSE 访问。有效 Scope 是映射后的源 Scope 与部署 ceiling 的交集，源系统仍会授权每次 REST 调用。
 - `DELETE /runtime/sessions/current`、过期、重启和源 401 都会使受影响的 Gateway 授权路径失效。源 401 只将当前用户标记为 `reauth_required`。MCP SDK 1.29 没有立即终止单个底层 Streamable HTTP 传输的公开 manager API，因此已有 SSE/传输受配置的 idle timeout 上限约束，但被撤销 token 不能授权新请求。
-- 仓库包含一个领域中立的多用户 Fake 源 E2E，以及 CRM、Warehouse 和 `baogao-jin` 的代表性 Provider 配置夹具。这些 Fake 结果都是 `offline_candidate`，不暗示已验证任何生产源。
+- 仓库包含一个领域中立的多用户 Fake 源 E2E，以及多种代表性 Provider 认证形状夹具。这些历史 Fake 结果使用当时的 `offline_candidate` 标签，不暗示已验证任何生产源。
 - 最新聚焦验证命令为 `uv run --frozen pytest -q tests/unit/runtime/gateway tests/integration/runtime/test_gateway_http.py tests/e2e/test_multi_user_http_gateway.py tests/unit/testkit/test_mcp_client.py tests/unit/core/test_cli.py`，已通过。
 - 最终仓库门禁：`uv run --frozen pytest -q` 为 1100 passed，仅有既有 Starlette TestClient 弃用警告；Ruff format/check 检查 168 个文件通过；mypy 检查 122 个源码文件通过。
 - `acc schema`、FastAPI CRM `acc validate` 与 `acc compile --check` 均通过，Skill quick validation 返回 `Skill is valid!`。Gateway 认证、MCP owner、Testkit、ASGI 生命周期、CLI factory 和多用户 E2E 的最终独立复审均为 0 Critical / 0 Important。
-
-### `baogao-jin` 当前验证边界
-
-- `/Users/chou/code/baogao-jin` 仍是已有只读源系统，本仓库流程不修改它。
-- 当前 Gateway 回归用通用 Fake 源验证 A/B/C 隔离，并以 `baogao-jin-auth-shape` 元数据标记 email/password 认证形状；它只是 `offline_candidate`，不使用真实 `baogao-jin` 账号、JWT、服务状态或生产数据。
-- 目前记录的源码审阅仅支持三个只读 GET 表面：`/api/me`、`/api/customers/search` 和 `/api/customers/{id}/overview`。overview 响应包含摘要统计，不包含文档列表。在收集新的路由、Schema、权限和测试证据前，不宣称更广的文档/报告能力。
-- 未来的 `source_connected_verified` 需要用户明确授权，并成功连接已启动的本地或隔离测试服务；不能从源码阅读或 Fake 测试推导。

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import math
@@ -16,9 +17,11 @@ import httpx
 from jsonschema import Draft202012Validator
 from pydantic import JsonValue, ValidationError
 
-from acc_core.models import Operation
+from acc_core.models import ActionOperationV2, Operation, ReadOperationV2
+from acc_core.models.actions import BodyInjectionTargetV2, HeaderInjectionTargetV2
+from acc_runtime.actions.runtime_executor import ActionReadResult
 from acc_runtime.auth import AuthAttempt, AuthUnauthorizedError, HttpAuthStrategy
-from acc_runtime.context import PrincipalContext
+from acc_runtime.context import PrincipalContext, sensitive_auth_name_marker
 from acc_runtime.credentials import SecretValue, resolve_secret
 from acc_runtime.errors import RuntimeError
 
@@ -39,6 +42,14 @@ class _Cancelled:
 
 _CANCELLED = _Cancelled()
 type _ProviderOutcome = JsonValue | _ProviderFailure | _Cancelled
+type _ExecutableReadOperation = Operation | ReadOperationV2
+type _ExecutableHttpOperation = Operation | ReadOperationV2 | ActionOperationV2
+
+
+@dataclass(frozen=True, slots=True)
+class _DecodedResponse:
+    value: JsonValue
+    response_headers: Mapping[str, str]
 
 
 class HttpBaseUrlError(RuntimeError):
@@ -101,6 +112,11 @@ class HttpResponseTooLargeError(RuntimeError):
     status = 502
 
 
+class HttpRequestTooLargeError(RuntimeError):
+    code = "ACC_RUNTIME_HTTP_REQUEST_TOO_LARGE"
+    status = 400
+
+
 class ResolvedSecret(Protocol):
     """Minimal redacted secret value accepted at the provider boundary."""
 
@@ -123,6 +139,36 @@ class EnvironmentSecretResolver:
 
     def resolve(self, reference: str) -> SecretValue:
         return resolve_secret(reference, self._environment)
+
+
+def _load_read_operation(value: Mapping[str, object]) -> _ExecutableReadOperation:
+    if value.get("schema_version") == "2":
+        if value.get("kind") == "action":
+            try:
+                action = ActionOperationV2.model_validate(value)
+            except ValidationError:
+                raise HttpOperationError(
+                    "compiled HTTP operation is invalid",
+                    details={},
+                ) from None
+            raise HttpMethodDeniedError(
+                "Action operations require the Action lifecycle",
+                details={"operation": action.id},
+            )
+        try:
+            return ReadOperationV2.model_validate(value)
+        except ValidationError:
+            raise HttpOperationError(
+                "compiled HTTP operation is invalid",
+                details={},
+            ) from None
+    try:
+        return Operation.model_validate(value)
+    except ValidationError:
+        raise HttpOperationError(
+            "compiled HTTP operation is invalid",
+            details={},
+        ) from None
 
 
 class HttpProvider:
@@ -168,6 +214,134 @@ class HttpProvider:
         del self
         _raise_provider_failure(failure)
 
+    async def call_read(
+        self,
+        operation: ReadOperationV2,
+        arguments: Mapping[str, JsonValue],
+        principal_context: PrincipalContext,
+    ) -> ActionReadResult:
+        """Execute a v2 read while retaining only non-sensitive response metadata."""
+
+        provider = self
+        outcome = await provider._call_read_outcome(
+            operation,
+            arguments,
+            principal_context,
+        )
+        if isinstance(outcome, ActionReadResult):
+            return outcome
+        failure = outcome
+        del outcome
+        del operation
+        del arguments
+        del principal_context
+        del provider
+        del self
+        _raise_provider_failure(failure)
+
+    async def call_action(
+        self,
+        operation: ActionOperationV2,
+        arguments: Mapping[str, JsonValue],
+        principal_context: PrincipalContext,
+        *,
+        idempotency_key: SecretValue,
+        concurrency_token: JsonValue,
+    ) -> JsonValue:
+        """Execute one mutation once with Runtime-owned source controls."""
+
+        provider = self
+        outcome = await provider._call_action_outcome(
+            operation,
+            arguments,
+            principal_context,
+            idempotency_key=idempotency_key,
+            concurrency_token=concurrency_token,
+        )
+        if not isinstance(outcome, (_ProviderFailure, _Cancelled)):
+            return outcome
+        failure = outcome
+        del outcome
+        del operation
+        del arguments
+        del principal_context
+        del idempotency_key
+        del concurrency_token
+        del provider
+        del self
+        _raise_provider_failure(failure)
+
+    async def _call_read_outcome(
+        self,
+        operation: ReadOperationV2,
+        arguments: Mapping[str, JsonValue],
+        principal_context: PrincipalContext,
+    ) -> ActionReadResult | _ProviderFailure | _Cancelled:
+        try:
+            decoded = await self._execute_v2_read(operation, arguments, principal_context)
+            return ActionReadResult(
+                value=decoded.value,
+                response_headers=_nonsensitive_response_headers(decoded.response_headers),
+            )
+        except asyncio.CancelledError:
+            return _CANCELLED
+        except RuntimeError as error:
+            return _ProviderFailure(
+                error_type=type(error),
+                message="runtime request failed",
+                details=dict(error.details),
+            )
+        except httpx.TimeoutException:
+            return _ProviderFailure(
+                error_type=HttpTimeoutError,
+                message="upstream request timed out",
+                details={"operation": operation.id, "phase": "operation"},
+            )
+        except Exception:
+            return _ProviderFailure(
+                error_type=HttpRequestError,
+                message="upstream request failed",
+                details={"operation": operation.id},
+            )
+
+    async def _call_action_outcome(
+        self,
+        operation: ActionOperationV2,
+        arguments: Mapping[str, JsonValue],
+        principal_context: PrincipalContext,
+        *,
+        idempotency_key: SecretValue,
+        concurrency_token: JsonValue,
+    ) -> _ProviderOutcome:
+        try:
+            return await self._execute_action(
+                operation,
+                arguments,
+                principal_context,
+                idempotency_key=idempotency_key,
+                concurrency_token=concurrency_token,
+            )
+        except asyncio.CancelledError:
+            return _CANCELLED
+        except RuntimeError as error:
+            return _ProviderFailure(
+                error_type=type(error),
+                message="runtime request failed",
+                details=dict(error.details),
+            )
+        except httpx.TimeoutException:
+            return _ProviderFailure(
+                error_type=HttpTimeoutError,
+                message="upstream request timed out",
+                details={"operation": operation.id, "phase": "operation"},
+            )
+        except Exception:
+            return _ProviderFailure(
+                error_type=HttpRequestError,
+                message="upstream request failed",
+                details={"operation": operation.id},
+            )
+
     async def _call_outcome(
         self,
         operation: Mapping[str, object],
@@ -175,7 +349,7 @@ class HttpProvider:
         principal_context: PrincipalContext | None,
     ) -> _ProviderOutcome:
         try:
-            definition = Operation.model_validate(operation)
+            definition = _load_read_operation(operation)
         except ValidationError:
             return _ProviderFailure(
                 error_type=HttpOperationError,
@@ -190,7 +364,7 @@ class HttpProvider:
 
     async def execute(
         self,
-        operation: Operation,
+        operation: _ExecutableReadOperation,
         arguments: Mapping[str, JsonValue],
         *,
         principal_context: PrincipalContext | None = None,
@@ -216,7 +390,7 @@ class HttpProvider:
 
     async def _execute_outcome(
         self,
-        operation: Operation,
+        operation: _ExecutableReadOperation,
         arguments: Mapping[str, JsonValue],
         principal_context: PrincipalContext | None,
     ) -> _ProviderOutcome:
@@ -254,7 +428,7 @@ class HttpProvider:
 
     async def _execute_operation(
         self,
-        operation: Operation,
+        operation: _ExecutableReadOperation,
         arguments: Mapping[str, JsonValue],
         principal_context: PrincipalContext | None,
     ) -> JsonValue:
@@ -305,9 +479,119 @@ class HttpProvider:
         self._validate_schema(operation.output_schema, result, operation, input_value=False)
         return result
 
+    async def _execute_v2_read(
+        self,
+        operation: ReadOperationV2,
+        arguments: Mapping[str, JsonValue],
+        principal_context: PrincipalContext,
+    ) -> _DecodedResponse:
+        if not isinstance(operation, ReadOperationV2):
+            raise HttpOperationError("compiled HTTP read operation is invalid", details={})
+        self._validate_schema(operation.input_schema, arguments, operation, input_value=True)
+        base_url = self._fixed_base_url(operation)
+        if operation.http.method not in {"GET", "HEAD"}:
+            raise HttpMethodDeniedError(
+                "read provider permits only GET and HEAD operations",
+                details={"operation": operation.id},
+            )
+        url = self._request_url(base_url, operation, arguments)
+        attempt = await self._authentication_attempt(operation, principal_context)
+        headers = self._request_headers(operation, attempt)
+        if self.client is not None:
+            decoded = await self._send_decoded_with_retry(
+                self.client,
+                operation,
+                url,
+                headers,
+                principal_context,
+                attempt,
+            )
+        else:
+            async with httpx.AsyncClient(follow_redirects=False) as client:
+                decoded = await self._send_decoded_with_retry(
+                    client,
+                    operation,
+                    url,
+                    headers,
+                    principal_context,
+                    attempt,
+                )
+        self._validate_schema(
+            operation.output_schema,
+            decoded.value,
+            operation,
+            input_value=False,
+        )
+        return decoded
+
+    async def _execute_action(
+        self,
+        operation: ActionOperationV2,
+        arguments: Mapping[str, JsonValue],
+        principal_context: PrincipalContext,
+        *,
+        idempotency_key: SecretValue,
+        concurrency_token: JsonValue,
+    ) -> JsonValue:
+        if not isinstance(operation, ActionOperationV2):
+            raise HttpOperationError("compiled HTTP Action operation is invalid", details={})
+        if not isinstance(idempotency_key, SecretValue):
+            raise HttpOperationError(
+                "Action idempotency key must be Runtime-owned",
+                details={"operation": operation.id},
+            )
+        self._validate_schema(operation.input_schema, arguments, operation, input_value=True)
+        base_url = self._fixed_base_url(operation)
+        url = self._request_url(base_url, operation, arguments)
+        attempt = await self._authentication_attempt(operation, principal_context)
+        headers = self._request_headers(operation, attempt)
+        body = self._request_body(operation, arguments)
+        self._inject_action_controls(
+            operation,
+            headers,
+            body,
+            idempotency_key=idempotency_key,
+            concurrency_token=concurrency_token,
+        )
+        encoded_body = self._encode_request_body(operation, body)
+        if encoded_body is not None:
+            self._inject_header(headers, "Content-Type", "application/json", operation)
+
+        try:
+            if self.client is not None:
+                decoded = await self._send_decoded(
+                    self.client,
+                    operation,
+                    url,
+                    headers,
+                    body=encoded_body,
+                )
+            else:
+                async with httpx.AsyncClient(follow_redirects=False) as client:
+                    decoded = await self._send_decoded(
+                        client,
+                        operation,
+                        url,
+                        headers,
+                        body=encoded_body,
+                    )
+        except _OperationUnauthorized:
+            raise AuthUnauthorizedError(
+                "source authentication is unauthorized",
+                details={"operation": operation.id},
+            ) from None
+
+        self._validate_schema(
+            operation.output_schema,
+            decoded.value,
+            operation,
+            input_value=False,
+        )
+        return decoded.value
+
     async def _authentication_attempt(
         self,
-        operation: Operation,
+        operation: _ExecutableHttpOperation,
         principal_context: PrincipalContext | None,
     ) -> AuthAttempt | None:
         if self._auth_strategy is not None:
@@ -316,7 +600,7 @@ class HttpProvider:
                     "provider authentication requires a trusted PrincipalContext",
                     details={"operation": operation.id},
                 )
-            if operation.http.credential_ref is not None:
+            if getattr(operation.http, "credential_ref", None) is not None:
                 raise HttpOperationError(
                     "operation credential conflicts with provider authentication",
                     details={"operation": operation.id},
@@ -329,7 +613,7 @@ class HttpProvider:
                 )
             return attempt
 
-        credential_ref = operation.http.credential_ref
+        credential_ref = getattr(operation.http, "credential_ref", None)
         if credential_ref is None:
             raise HttpOperationError(
                 "operation credential is required without provider authentication",
@@ -339,11 +623,11 @@ class HttpProvider:
 
     def _request_headers(
         self,
-        operation: Operation,
+        operation: _ExecutableHttpOperation,
         attempt: AuthAttempt | None,
     ) -> dict[str, str]:
         if attempt is None:
-            credential_ref = operation.http.credential_ref
+            credential_ref = getattr(operation.http, "credential_ref", None)
             assert credential_ref is not None
             credential = self._secret_resolver.resolve(credential_ref)
             token = credential if isinstance(credential, str) else credential.get_secret_value()
@@ -367,14 +651,34 @@ class HttpProvider:
     async def _send_with_retry(
         self,
         client: httpx.AsyncClient,
-        operation: Operation,
+        operation: _ExecutableReadOperation,
         url: str,
         headers: Mapping[str, str],
         principal_context: PrincipalContext | None,
         attempt: AuthAttempt | None,
     ) -> JsonValue:
+        return (
+            await self._send_decoded_with_retry(
+                client,
+                operation,
+                url,
+                headers,
+                principal_context,
+                attempt,
+            )
+        ).value
+
+    async def _send_decoded_with_retry(
+        self,
+        client: httpx.AsyncClient,
+        operation: _ExecutableReadOperation,
+        url: str,
+        headers: Mapping[str, str],
+        principal_context: PrincipalContext | None,
+        attempt: AuthAttempt | None,
+    ) -> _DecodedResponse:
         try:
-            return await self._send(client, operation, url, headers)
+            return await self._send_decoded(client, operation, url, headers)
         except _OperationUnauthorized:
             if (
                 self._auth_strategy is None
@@ -398,7 +702,7 @@ class HttpProvider:
             )
         retry_headers = self._request_headers(operation, retry_attempt)
         try:
-            return await self._send(client, operation, url, retry_headers)
+            return await self._send_decoded(client, operation, url, retry_headers)
         except _OperationUnauthorized:
             await self._auth_strategy.on_unauthorized(
                 principal_context,
@@ -409,7 +713,7 @@ class HttpProvider:
                 details={"operation": operation.id},
             ) from None
 
-    def _fixed_base_url(self, operation: Operation) -> str:
+    def _fixed_base_url(self, operation: _ExecutableHttpOperation) -> str:
         source = os.environ if self._environment is None else self._environment
         raw = source.get(self.base_url_ref)
         if not isinstance(raw, str):
@@ -445,7 +749,7 @@ class HttpProvider:
     @staticmethod
     def _request_url(
         base_url: str,
-        operation: Operation,
+        operation: _ExecutableHttpOperation,
         arguments: Mapping[str, JsonValue],
     ) -> str:
         path = operation.http.path
@@ -480,7 +784,7 @@ class HttpProvider:
     def _scalar_parameter(
         arguments: Mapping[str, JsonValue],
         input_name: str,
-        operation: Operation,
+        operation: _ExecutableHttpOperation,
     ) -> str:
         if input_name not in arguments:
             raise InputSchemaError(
@@ -490,7 +794,11 @@ class HttpProvider:
         return HttpProvider._query_scalar(arguments[input_name], input_name, operation)
 
     @staticmethod
-    def _query_scalar(value: JsonValue, input_name: str, operation: Operation) -> str:
+    def _query_scalar(
+        value: JsonValue,
+        input_name: str,
+        operation: _ExecutableHttpOperation,
+    ) -> str:
         if isinstance(value, bool):
             return "true" if value else "false"
         if isinstance(value, float) and not math.isfinite(value):
@@ -505,18 +813,206 @@ class HttpProvider:
             details={"operation": operation.id, "parameter": input_name},
         )
 
+    @staticmethod
+    def _request_body(
+        operation: ActionOperationV2,
+        arguments: Mapping[str, JsonValue],
+    ) -> dict[str, JsonValue] | None:
+        request = operation.http.request
+        if request is None:
+            return None
+        body: dict[str, JsonValue] = {}
+        for pointer, input_name in request.body_parameters.items():
+            if input_name not in arguments:
+                continue
+            HttpProvider._inject_body_pointer(
+                body,
+                pointer,
+                copy.deepcopy(arguments[input_name]),
+                operation,
+            )
+        return body
+
+    def _inject_action_controls(
+        self,
+        operation: ActionOperationV2,
+        headers: dict[str, str],
+        body: dict[str, JsonValue] | None,
+        *,
+        idempotency_key: SecretValue,
+        concurrency_token: JsonValue,
+    ) -> None:
+        idempotency = operation.http.safety.idempotency
+        if idempotency.mode == "source_key":
+            target = idempotency.target
+            assert target is not None
+            self._inject_runtime_target(
+                operation,
+                headers,
+                body,
+                target,
+                idempotency_key.get_secret_value(),
+            )
+
+        concurrency = operation.http.safety.concurrency
+        if concurrency.mode == "required":
+            if concurrency_token is None:
+                raise HttpOperationError(
+                    "required Action concurrency token is unavailable",
+                    details={"operation": operation.id},
+                )
+            target = concurrency.precondition
+            assert target is not None
+            self._inject_runtime_target(
+                operation,
+                headers,
+                body,
+                target,
+                copy.deepcopy(concurrency_token),
+            )
+
+    @staticmethod
+    def _inject_runtime_target(
+        operation: ActionOperationV2,
+        headers: dict[str, str],
+        body: dict[str, JsonValue] | None,
+        target: HeaderInjectionTargetV2 | BodyInjectionTargetV2,
+        value: JsonValue,
+    ) -> None:
+        if isinstance(target, HeaderInjectionTargetV2):
+            rendered = HttpProvider._header_scalar(value, operation)
+            HttpProvider._inject_header(headers, target.name, rendered, operation)
+            return
+        if body is None:
+            raise HttpOperationError(
+                "Action body injection requires a declared JSON request",
+                details={"operation": operation.id},
+            )
+        HttpProvider._inject_body_pointer(body, target.pointer, value, operation)
+
+    @staticmethod
+    def _inject_header(
+        headers: dict[str, str],
+        name: str,
+        value: str,
+        operation: _ExecutableHttpOperation,
+    ) -> None:
+        if any(existing.casefold() == name.casefold() for existing in headers):
+            raise HttpOperationError(
+                "Runtime-owned Action header conflicts with an existing header",
+                details={"operation": operation.id},
+            )
+        headers[name] = value
+
+    @staticmethod
+    def _header_scalar(value: JsonValue, operation: ActionOperationV2) -> str:
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, float) and not math.isfinite(value):
+            raise HttpOperationError(
+                "Runtime-owned Action header value is invalid",
+                details={"operation": operation.id},
+            )
+        if isinstance(value, (str, int, float)):
+            return str(value)
+        raise HttpOperationError(
+            "Runtime-owned Action header value must be scalar",
+            details={"operation": operation.id},
+        )
+
+    @staticmethod
+    def _inject_body_pointer(
+        body: dict[str, JsonValue],
+        pointer: str,
+        value: JsonValue,
+        operation: ActionOperationV2,
+    ) -> None:
+        tokens = tuple(
+            token.replace("~1", "/").replace("~0", "~") for token in pointer.split("/")[1:]
+        )
+        if not tokens:
+            raise HttpOperationError(
+                "Action request body pointer is invalid",
+                details={"operation": operation.id},
+            )
+        current = body
+        for token in tokens[:-1]:
+            existing = current.get(token)
+            if existing is None and token not in current:
+                child: dict[str, JsonValue] = {}
+                current[token] = child
+                current = child
+            elif isinstance(existing, dict):
+                current = existing
+            else:
+                raise HttpOperationError(
+                    "Action request body mappings conflict",
+                    details={"operation": operation.id},
+                )
+        final = tokens[-1]
+        if final in current:
+            raise HttpOperationError(
+                "Action request body mappings conflict",
+                details={"operation": operation.id},
+            )
+        current[final] = copy.deepcopy(value)
+
+    @staticmethod
+    def _encode_request_body(
+        operation: ActionOperationV2,
+        body: dict[str, JsonValue] | None,
+    ) -> bytes | None:
+        request = operation.http.request
+        if request is None:
+            return None
+        try:
+            encoded = json.dumps(
+                body,
+                ensure_ascii=False,
+                allow_nan=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        except (TypeError, ValueError):
+            raise HttpOperationError(
+                "Action request body is not valid JSON",
+                details={"operation": operation.id},
+            ) from None
+        if len(encoded) > request.max_request_bytes:
+            raise HttpRequestTooLargeError(
+                "Action request body exceeded its configured size limit",
+                details={
+                    "operation": operation.id,
+                    "limit_bytes": request.max_request_bytes,
+                    "phase": "operation",
+                },
+            )
+        return encoded
+
     async def _send(
         self,
         client: httpx.AsyncClient,
-        operation: Operation,
+        operation: _ExecutableReadOperation,
         url: str,
         headers: Mapping[str, str],
     ) -> JsonValue:
+        return (await self._send_decoded(client, operation, url, headers)).value
+
+    async def _send_decoded(
+        self,
+        client: httpx.AsyncClient,
+        operation: _ExecutableHttpOperation,
+        url: str,
+        headers: Mapping[str, str],
+        *,
+        body: bytes | None = None,
+    ) -> _DecodedResponse:
         timeout = httpx.Timeout(operation.http.timeout_seconds)
         request = httpx.Request(
             operation.http.method,
             url,
             headers=headers,
+            content=body,
             extensions={"timeout": timeout.as_dict()},
         )
         response = await client.send(
@@ -546,7 +1042,11 @@ class HttpProvider:
                     "upstream resource was not found",
                     details={"operation": operation.id},
                 )
-            if not 200 <= response.status_code < 300:
+            if isinstance(operation, (ReadOperationV2, ActionOperationV2)):
+                successful = response.status_code in operation.http.success.statuses
+            else:
+                successful = 200 <= response.status_code < 300
+            if not successful:
                 self._log_status(operation, response.status_code)
                 raise HttpUpstreamError(
                     "upstream returned a non-success status",
@@ -555,9 +1055,6 @@ class HttpProvider:
                         "upstream_status": response.status_code,
                     },
                 )
-
-            if operation.http.method == "HEAD":
-                return {}
 
             content_length = response.headers.get("content-length")
             if content_length is not None:
@@ -568,14 +1065,42 @@ class HttpProvider:
                 if declared_length > operation.http.max_response_bytes:
                     raise self._response_too_large(operation)
 
-            body = bytearray()
+            response_body = bytearray()
             async for chunk in response.aiter_bytes():
-                body.extend(chunk)
-                if len(body) > operation.http.max_response_bytes:
+                response_body.extend(chunk)
+                if len(response_body) > operation.http.max_response_bytes:
                     raise self._response_too_large(operation)
+            response_headers = dict(response.headers)
         finally:
             await response.aclose()
 
+        if not isinstance(operation, (ReadOperationV2, ActionOperationV2)):
+            if operation.http.method == "HEAD":
+                return _DecodedResponse(value={}, response_headers=response_headers)
+            return _DecodedResponse(
+                value=self._decode_json_body(operation, response_body),
+                response_headers=response_headers,
+            )
+
+        body_mode = operation.http.success.body
+        if body_mode == "empty":
+            if response_body:
+                raise HttpInvalidJsonError(
+                    "upstream returned a body forbidden by the success contract",
+                    details={"operation": operation.id},
+                )
+            value: JsonValue = None
+        elif body_mode == "json_or_empty" and not response_body:
+            value = None
+        else:
+            value = self._decode_json_body(operation, response_body)
+        return _DecodedResponse(value=value, response_headers=response_headers)
+
+    def _decode_json_body(
+        self,
+        operation: _ExecutableHttpOperation,
+        body: bytes | bytearray,
+    ) -> JsonValue:
         try:
             value = json.loads(body, parse_constant=self._reject_json_constant)
         except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
@@ -587,7 +1112,9 @@ class HttpProvider:
         return cast(JsonValue, value)
 
     @staticmethod
-    def _response_too_large(operation: Operation) -> HttpResponseTooLargeError:
+    def _response_too_large(
+        operation: _ExecutableHttpOperation,
+    ) -> HttpResponseTooLargeError:
         LOGGER.warning("HTTP response exceeded limit operation=%s", operation.id)
         return HttpResponseTooLargeError(
             "upstream response exceeded the configured size limit",
@@ -611,7 +1138,7 @@ class HttpProvider:
     def _validate_schema(
         schema: Mapping[str, object],
         value: object,
-        operation: Operation,
+        operation: _ExecutableHttpOperation,
         *,
         input_value: bool,
     ) -> None:
@@ -636,7 +1163,7 @@ class HttpProvider:
         )
 
     @staticmethod
-    def _log_status(operation: Operation, status: int) -> None:
+    def _log_status(operation: _ExecutableHttpOperation, status: int) -> None:
         LOGGER.warning(
             "HTTP operation returned status operation=%s status=%d", operation.id, status
         )
@@ -652,6 +1179,7 @@ __all__ = [
     "HttpOperationError",
     "HttpProvider",
     "HttpRequestError",
+    "HttpRequestTooLargeError",
     "HttpResponseTooLargeError",
     "HttpTimeoutError",
     "HttpUpstreamError",
@@ -664,6 +1192,23 @@ __all__ = [
 
 class _OperationUnauthorized(Exception):
     """Internal response signal that never retains response content."""
+
+
+def _nonsensitive_response_headers(headers: Mapping[str, str]) -> dict[str, str]:
+    forbidden = {
+        "connection",
+        "proxy-authenticate",
+        "set-cookie",
+        "trailer",
+        "transfer-encoding",
+        "upgrade",
+        "www-authenticate",
+    }
+    return {
+        name: value
+        for name, value in headers.items()
+        if name.casefold() not in forbidden and sensitive_auth_name_marker(name) is None
+    }
 
 
 def _raise_provider_failure(failure: _ProviderFailure | _Cancelled) -> Never:

@@ -19,7 +19,7 @@ Outputs are confined to `acc_project`. The source checkout is evidence, never an
 2. Capture a source snapshot before work and verify it again before handoff.
 3. Read bounded regular files only. Do not follow repository symlinks or inspect common secret files.
 4. Evidence precedes every formal Operation. Unknown facts remain unknown.
-5. Operations are atomic, read-only REST calls; Capabilities are business-level compositions, not one-interface-one-tool mirrors.
+5. v1 Operations are atomic, read-only REST calls. v2 Action Operations require explicit effect and safety evidence. 一接口一工具不是天然缺陷; choose Capability boundaries from business intent and data flow, not tool count.
 6. Runtime behavior is deterministic and model-free. Credentials stay in SecretRef/environment boundaries.
 7. Permission, tenant, disclosure, timeout, and response-size controls are testable contracts.
 8. Failures remain visible in diagnostics and handoff artifacts.
@@ -29,6 +29,10 @@ Outputs are confined to `acc_project`. The source checkout is evidence, never an
 12. Request identity comes only from immutable `PrincipalContext`. `context_bindings` inject trusted principal/tenant values into evidenced path/query inputs and cannot be supplied by an Agent or Workflow.
 13. Frontend usage is normalized into `usage_evidence_sources`; excluding such a route always warns, and system-complete scope treats an unapproved exact route as an error.
 14. Scope Inventory is the only authority for exclusion rules, route decisions, Evidence, replacement closure, and exact user approval. Capability Plan stores references, not duplicate free-text exclusion facts.
+15. Convert captured Evidence into `SourceContract` request/response schemas and pointer-level `provenance`. Operation 输入 is an evidenced safe subset; Operation 输出 covers evidenced source responses; Capability 输出 may narrow only through a 可证明 deterministic projection.
+16. Every Capability plan records selector acquisition, an empty success path where list/search can legitimately return nothing, failure isolation, and output budget. Producer edges must make required selectors constructible.
+17. Coverage v2 keeps route disposition, Operation trace, scenarios, constructability, discoverability, composition, schema fidelity, output budget, and live observations independent; it does not generate an aggregate score or equate route closure with usability.
+18. v1 remains strictly read-only. A v2 Action uses `prepare → approve → commit → status`, complete safety contracts, trusted approval handles, and isolated sandbox validation; 不得简单放开 POST.
 
 ## State machine
 
@@ -49,7 +53,7 @@ Canonicalize both paths with `pwd -P` or `realpath`. Declare `system_readonly_co
 
 ### 1. Analyze
 
-Perform shallow global discovery across route registrations, OpenAPI, and client surfaces to establish `scope-inventory.yaml`. Normalize frontend usage Evidence into route fields; the scope auditor does not parse Vue, React, or other framework source. Only then use repeatable workspace-relative `--include` paths for deep Evidence inspection of relevant controllers, services, models, auth, tests, and docs. Bind every interface and permission claim to a locator plus digest. Produce a system map and analysis report; list gaps.
+Perform shallow global discovery across route registrations, OpenAPI, and client surfaces to establish `scope-inventory.yaml`. Normalize frontend usage Evidence into route fields; the scope auditor does not parse Vue, React, or other framework source. Only then use repeatable workspace-relative `--include` paths for deep Evidence inspection of relevant controllers, services, models, auth, tests, and docs. Bind every interface and permission claim to a locator plus digest, then normalize it into `SourceContract` `request_schema`, `response_schema`, completeness, and pointer-level `provenance`. Produce a system map and analysis report; list gaps.
 
 ### 2. Model
 
@@ -57,11 +61,11 @@ Normalize only the observed domain: entities, relations, read operations, permis
 
 ### 3. Plan
 
-Assign every eligible discovered route exactly one disposition: `planned`, `composed`, `excluded`, or `blocked_on_evidence`; `out_of_scope` is valid only where the declared mode permits it. System-complete exclusions require a structured rule and distinct route decision, which replace legacy reason only when valid; subjective and frontend-used exclusions require exact route approval. Ineligible, blocked, out-of-scope, and pilot/domain legacy exclusions keep reason plus Evidence. Capability Plan route lists and decision pointers exactly close over Inventory without duplicate free text. Never count `blocked_on_evidence` as complete. Reconcile the `source_scope` baseline before designing the smallest valuable business capabilities. Keep credentials, tenant identity, and server-derived values out of agent inputs. Require positive and permission-negative Evals where applicable. Do not advance with unresolved scope.
+Assign every eligible discovered route exactly one disposition: `planned`, `composed`, `excluded`, or `blocked_on_evidence`; `out_of_scope` is valid only where the declared mode permits it. System-complete exclusions require a structured rule and distinct route decision, which replace legacy reason only when valid; subjective and frontend-used exclusions require exact route approval. Ineligible, blocked, out-of-scope, and pilot/domain legacy exclusions keep reason plus Evidence. Capability Plan route lists and decision pointers exactly close over Inventory without duplicate free text. Never count `blocked_on_evidence` as complete. Reconcile the `source_scope` baseline, then design business capabilities with explicit selector acquisition, empty success path, failure isolation, and output budget. Keep credentials, tenant identity, and server-derived values out of agent inputs. Require positive and permission-negative Evals where applicable. Do not advance with unresolved scope.
 
 ### 4. Implement
 
-Write only under `acc_project`, and implement only routes disposed as `planned` or `composed`: Evidence, Operations, Capabilities, Policies, Evals, and fixtures. Select Provider auth from evidence: `none`, environment-backed `bearer_secret`, or `password_bearer`; new Operations never carry `credential_ref`. For `stdio`, password login uses `environment_secret`; `streamable_http` requires `gateway_session`. Add `context_bindings` only for evidenced trusted path/query inputs and keep those targets out of Capability inputs and Workflow arguments. Freeze evidence digests from exact source material. No source-system edits or generated artifacts outside the project.
+Write only under `acc_project`, and implement only routes disposed as `planned` or `composed`: Evidence, SourceContracts, Operations, Capabilities, CapabilityQuality, Policies, Evals, and fixtures. Prove Operation schema fidelity and every Capability output projection. Select Provider auth from evidence: `none`, environment-backed `bearer_secret`, or `password_bearer`; new Operations never carry `credential_ref`. For `stdio`, password login uses `environment_secret`; `streamable_http` requires `gateway_session`. Add `context_bindings` only for evidenced trusted path/query inputs and keep those targets out of Capability inputs and Workflow arguments. Freeze evidence digests from exact source material. No source-system edits or generated artifacts outside the project.
 
 ### 5. Validate
 
@@ -69,11 +73,11 @@ Run `scope_audit.py --project <acc_project>` first and retain `scope-audit-repor
 
 ### 6. Test
 
-Run contract, Fake Runtime, and Fake E2E suites and label the result `offline_candidate`. Exercise normal, empty, 404, insufficient scope, cross-tenant, redaction, timeout, response-too-large, error mapping, MCP list, and MCP call behavior. Test `PrincipalContext`, effective scopes, Provider auth, and every declared `context_bindings` target without exposing identity or credentials through MCP tools. Treat `stdio` as one fixed identity; do not claim `streamable_http` until its Gateway request identity path is actually exercised. A `source_connected_verified` result additionally requires explicit local/test connection authorization and a successful source-connected run; never infer it from Fake tests.
+Run contract and direct Fake Runtime suites as `offline_candidate`. Label the real Gateway protocol path against a Fake Source `gateway_offline_verified`. Exercise normal, empty, 404, insufficient scope, cross-tenant, redaction, timeout, response-too-large, error mapping, MCP list, and MCP call behavior. Test `PrincipalContext`, effective scopes, Provider auth, and every declared `context_bindings` target without exposing identity or credentials through MCP tools. Treat `stdio` as one fixed identity; do not claim `streamable_http` until its Gateway request identity path is actually exercised. A `source_connected_verified` result additionally requires explicit local/test connection authorization and a successful source-connected run; never infer it from Fake tests.
 
 ### 7. Refine
 
-Compare three layers independently: source-route disposition coverage, Operation-to-source trace coverage, and Capability/Eval scenario coverage. Detect duplicate decisions, whole-domain zero capability, frontend-used exclusions, and the high-exclusion heuristic (eligible `>= 10`, excluded `>= 70%`). Remove orphaned or duplicate definitions, tighten broad schemas, and add missing valuable or negative coverage. Rerun scope audit, validation, and tests after each material change.
+Compare all Coverage v2 axes independently: route disposition, Operation trace, scenario coverage, constructability, discoverability graph, composition, schema fidelity, output budget, and live observations. Do not generate a total score. Detect duplicate decisions, whole-domain zero capability, frontend-used exclusions, and the high-exclusion heuristic (eligible `>= 10`, excluded `>= 70%`). Remove orphaned or duplicate definitions, correct evidence-unsupported schemas, and add missing valuable or negative coverage. Rerun scope audit, validation, and tests after each material change.
 
 ### 8. Handoff
 

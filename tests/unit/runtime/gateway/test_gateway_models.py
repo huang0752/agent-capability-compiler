@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from acc_runtime.context import PrincipalContext
 from acc_runtime.credentials import SecretValue
 from acc_runtime.gateway.models import (
+    GatewayRuntimeInfo,
     GatewaySessionCreation,
     GatewaySessionRecord,
     GatewaySessionStatus,
@@ -13,6 +14,56 @@ from acc_runtime.gateway.models import (
     SessionCreateRequest,
     SessionCreateResponse,
 )
+
+
+def test_gateway_runtime_info_is_strict_public_attestation_metadata() -> None:
+    info = GatewayRuntimeInfo(
+        pack_sha256="a" * 64,
+        project_id="project-a",
+        project_version="1.2.3",
+        tool_schema_sha256="b" * 64,
+        transport="streamable_http",
+    )
+
+    assert info.model_dump(mode="json") == {
+        "pack_sha256": "a" * 64,
+        "project_id": "project-a",
+        "project_version": "1.2.3",
+        "tool_schema_sha256": "b" * 64,
+        "transport": "streamable_http",
+    }
+
+    with pytest.raises(ValidationError):
+        GatewayRuntimeInfo.model_validate(
+            {
+                **info.model_dump(mode="json"),
+                "principal_id": "must-not-be-an-attestation-field",
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("pack_sha256", "A" * 64),
+        ("tool_schema_sha256", "b" * 63),
+        ("project_id", " project-a"),
+        ("project_version", ""),
+        ("transport", "stdio"),
+    ],
+)
+def test_gateway_runtime_info_rejects_noncanonical_values(field: str, value: str) -> None:
+    payload = {
+        "pack_sha256": "a" * 64,
+        "project_id": "project-a",
+        "project_version": "1.2.3",
+        "tool_schema_sha256": "b" * 64,
+        "transport": "streamable_http",
+    }
+    payload[field] = value
+
+    with pytest.raises(ValidationError):
+        GatewayRuntimeInfo.model_validate(payload)
 
 
 def _context() -> PrincipalContext:

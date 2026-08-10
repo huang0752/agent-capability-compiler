@@ -10,7 +10,7 @@ Generic Runtime 需要一个可移交、可校验且不包含客户 Runtime 源�
 
 ## Decision
 
-ACC 将编译结果发布为扩展名为 `.accpkg` 的 Capability Pack。Pack 是 ZIP 或等价的确定性归档，并且只包含：
+ACC 将编译结果发布为扩展名为 `.accpkg` 的 Capability Pack。Pack 是 ZIP 或等价的确定性归档。v1 成员白名单为：
 
 ```text
 manifest.json
@@ -23,6 +23,8 @@ evidence/
 pack.lock
 ```
 
+v2 使用独立成员白名单，并增加 SourceContract、CapabilityQuality 与编译证明摘要。Loader 必须校验 Project、IR、manifest、lock 和成员版本一致；v1 Loader 不接受 v2 Pack，v2 支持也不会改变 v1 归档字节。
+
 构建必须使用稳定文件排序和归一化时间戳，并为内容生成稳定摘要，使相同输入产生完全相同的 Pack。构建器和 Runtime 都拒绝符号链接、路径穿越、绝对路径、重复或未知文件以及与 `pack.lock` 不一致的内容。Runtime 将 Pack 视为不可变输入。
 
 ## Consequences
@@ -30,7 +32,7 @@ pack.lock
 - Pack 成为编译期与运行时之间唯一、可复现的部署契约。
 - 发布、缓存、比较和回滚可以基于版本及内容摘要完成。
 - 每次定义或 Evidence 变化都需要重新编译、测试并打包。
-- Pack 格式及兼容性规则需要版本化；确定性归档会限制可携带的元数据。
+- Pack 格式及兼容性规则按版本白名单演进；确定性归档会限制可携带的元数据。
 
 ## Rejected alternatives
 

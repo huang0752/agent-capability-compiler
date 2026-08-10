@@ -22,6 +22,7 @@ from acc_runtime.context import (
     sensitive_auth_name_marker,
 )
 from acc_runtime.errors import RuntimeError as AccRuntimeError
+from acc_runtime.mcp.schema_projection import project_mcp_output_schema
 
 
 class McpRuntime(Protocol):
@@ -297,12 +298,7 @@ def _translate_tools(
                 title=title if isinstance(title, str) else None,
                 description=description if isinstance(description, str) else None,
                 inputSchema=cast(dict[str, Any], input_schema),
-                outputSchema={
-                    "type": "object",
-                    "additionalProperties": False,
-                    "required": ["result"],
-                    "properties": {"result": cast(dict[str, Any], output_schema)},
-                },
+                outputSchema=project_mcp_output_schema(name, output_schema),
             )
         )
     return tools

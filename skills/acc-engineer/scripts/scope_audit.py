@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import cast
 
 import yaml
+from pydantic import ValidationError
 from verify_read_only_workspace import (
     DEFAULT_MAX_FILE_BYTES,
     JsonArgumentParser,
@@ -19,6 +20,8 @@ from verify_read_only_workspace import (
     read_file_bytes,
     safe_existing_path,
 )
+
+from acc_core.scope import ScopeInventory
 
 SCOPE_MODES = {"pilot", "domain_complete", "system_readonly_complete"}
 DISPOSITIONS = {
@@ -234,6 +237,12 @@ def load_document(path: Path) -> dict[str, object]:
             path=path.name,
         )
     return cast(dict[str, object], value)
+
+
+def parse_core_inventory(document: Mapping[str, object]) -> ScopeInventory:
+    """Parse a valid inventory through the public Core route contract."""
+
+    return ScopeInventory.model_validate(document)
 
 
 def audit_exclusion_rules(
@@ -1480,6 +1489,17 @@ def main(argv: list[str] | None = None) -> int:
                 coverage_baseline=load_document(coverage_baseline_path),
             )
         )
+        if not has_error(diagnostics):
+            try:
+                parse_core_inventory(inventory)
+            except ValidationError:
+                add_issue(
+                    diagnostics,
+                    "ACC_SCOPE_CORE_CONTRACT_INVALID",
+                    "scope inventory does not satisfy the public Core contract",
+                    path="scope-inventory.yaml",
+                    pointer="/",
+                )
         diagnostics.sort(
             key=lambda item: (
                 str(item.get("path", "")),

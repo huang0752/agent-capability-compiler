@@ -5,7 +5,7 @@ import os
 import subprocess
 import sys
 from argparse import Namespace
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -25,11 +25,17 @@ ACC_CORE_SRC = REPOSITORY_ROOT / "packages" / "acc-core" / "src"
 JSON_SCHEMA_DRAFT_2020_12 = "https://json-schema.org/draft/2020-12/schema"
 EXPORTED_SCHEMAS = {
     "capability.schema.json",
+    "capability-quality.schema.json",
+    "capability-v2.schema.json",
     "eval.schema.json",
     "evidence.schema.json",
     "operation.schema.json",
+    "operation-v2.schema.json",
     "policy.schema.json",
     "project.schema.json",
+    "project-v2.schema.json",
+    "scope-inventory.schema.json",
+    "source-contract.schema.json",
 }
 PROJECT_DIRECTORIES = {"capabilities", "evals", "evidence", "operations", "policies"}
 
@@ -90,6 +96,101 @@ class _FakeGatewayComposition:
         self.close_calls += 1
 
 
+def _minimal_ir(project: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "ir_version": "1",
+        "project": project,
+        "operations": {},
+        "policies": {},
+        "capabilities": {},
+    }
+
+
+def _scoped_ir(project: Mapping[str, object]) -> dict[str, object]:
+    return {
+        **_minimal_ir(project),
+        "capabilities": {
+            "inspect_records": {
+                "scope_requirements": {
+                    "policy_always_required": ["records.read"],
+                    "always_required": ["records.read"],
+                    "conditionally_required": ["records.detail"],
+                    "all_referenced": ["records.detail", "records.read"],
+                    "completion_alternatives": [["records.read"]],
+                }
+            }
+        },
+    }
+
+
+def _gateway_project() -> dict[str, object]:
+    return {
+        "schema_version": "1",
+        "project": {"id": "fake-gateway", "version": "0.1.0"},
+        "source_workspace": {"path": "../system", "mode": "read_only"},
+        "runtime": {"transport": ["streamable_http"]},
+        "provider": {
+            "kind": "http",
+            "base_url_ref": "FAKE_BASE_URL",
+            "auth": {
+                "kind": "password_bearer",
+                "credentials": {"kind": "gateway_session"},
+                "login_path": "/auth/login",
+                "identity_field": "identity",
+                "password_field": "password",
+                "token_pointer": "/access_token",
+                "scopes_pointer": "/scopes",
+                "scope_mapping": {
+                    "source:records:read": ["records.read"],
+                    "source:records:detail": ["records.detail"],
+                },
+            },
+        },
+    }
+
+
+def _v2_project(*, transport: str) -> dict[str, object]:
+    project = (
+        _gateway_project()
+        if transport == "streamable_http"
+        else {
+            "schema_version": "1",
+            "project": {"id": "fake-v2", "version": "0.2.0"},
+            "source_workspace": {"path": "../system", "mode": "read_only"},
+            "runtime": {"transport": ["stdio"]},
+            "provider": {"kind": "http", "base_url_ref": "FAKE_BASE_URL"},
+        }
+    )
+    return {
+        **project,
+        "schema_version": "2",
+        "quality": {"profile": "standard"},
+    }
+
+
+def _patch_scoped_gateway(
+    monkeypatch: pytest.MonkeyPatch,
+    composition: _FakeGatewayComposition,
+) -> dict[str, object]:
+    import acc_runtime.gateway
+    import acc_runtime.loader
+
+    project = _gateway_project()
+    captured: dict[str, object] = {}
+
+    def create_gateway_runtime(**kwargs: object) -> _FakeGatewayComposition:
+        captured.update(kwargs)
+        return composition
+
+    monkeypatch.setattr(
+        acc_runtime.loader,
+        "load_pack",
+        lambda path: SimpleNamespace(ir=_scoped_ir(project)),
+    )
+    monkeypatch.setattr(acc_runtime.gateway, "create_gateway_runtime", create_gateway_runtime)
+    return captured
+
+
 def _patch_run_composition(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -118,7 +219,7 @@ def _patch_run_composition(
     monkeypatch.setattr(
         acc_runtime.loader,
         "load_pack",
-        lambda path: SimpleNamespace(ir={"project": project}),
+        lambda path: SimpleNamespace(ir=_minimal_ir(project)),
     )
     monkeypatch.setattr(acc_runtime.mcp, "CapabilityMcpServer", lambda value: adapter)
 
@@ -127,6 +228,8 @@ def _run_arguments(*, json_output: bool) -> Namespace:
     return Namespace(
         pack="offline.accpkg",
         scope=[],
+        scope_ceiling_from_pack=False,
+        strict_scope=False,
         tenant_id=None,
         host="127.0.0.1",
         port=8000,
@@ -180,7 +283,7 @@ def test_run_dispatches_streamable_http_and_json_only_inspects(
     monkeypatch.setattr(
         acc_runtime.loader,
         "load_pack",
-        lambda path: SimpleNamespace(ir={"project": project}),
+        lambda path: SimpleNamespace(ir=_minimal_ir(project)),
     )
     monkeypatch.setattr(acc_runtime.gateway, "create_gateway_runtime", create_gateway_runtime)
     monkeypatch.setattr(
@@ -204,6 +307,188 @@ def test_run_dispatches_streamable_http_and_json_only_inspects(
     assert settings.allowed_hosts == ("gateway.test:8443",)
     assert captured["deployment_scope_ceiling"] == frozenset({"customer.read"})
     assert composition.close_calls == 1
+
+
+def test_run_json_dispatches_v2_stdio_pack_with_scope_analysis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import acc_runtime
+    import acc_runtime.loader
+
+    runtime = _FakeRuntime()
+    project = _v2_project(transport="stdio")
+
+    class FakeGenericRuntime:
+        @classmethod
+        def from_pack(cls, *args: object, **kwargs: object) -> _FakeRuntime:
+            del cls, args, kwargs
+            return runtime
+
+    monkeypatch.setattr(acc_runtime, "GenericRuntime", FakeGenericRuntime)
+    monkeypatch.setattr(
+        acc_runtime.loader,
+        "load_pack",
+        lambda path: SimpleNamespace(ir=_scoped_ir(project)),
+    )
+    arguments = _run_arguments(json_output=True)
+    arguments.scope = ["records.read", "records.detail"]
+
+    exit_code, envelope = run_pack_command(arguments)
+
+    assert exit_code == EXIT_SUCCESS
+    assert envelope.ok is True
+    assert isinstance(envelope.result, dict)
+    assert envelope.result["transport"] == "stdio"
+    assert envelope.result["scope_analysis"]["summary"] == {
+        "callable": 1,
+        "conditional": 0,
+        "denied": 0,
+    }
+
+
+def test_run_json_dispatches_v2_streamable_http_pack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import acc_runtime.gateway
+    import acc_runtime.loader
+
+    composition = _FakeGatewayComposition()
+    captured: dict[str, object] = {}
+
+    def create_gateway_runtime(**kwargs: object) -> _FakeGatewayComposition:
+        captured.update(kwargs)
+        return composition
+
+    monkeypatch.setattr(
+        acc_runtime.loader,
+        "load_pack",
+        lambda path: SimpleNamespace(ir=_scoped_ir(_v2_project(transport="streamable_http"))),
+    )
+    monkeypatch.setattr(acc_runtime.gateway, "create_gateway_runtime", create_gateway_runtime)
+    arguments = _run_arguments(json_output=True)
+    arguments.allowed_host = ["127.0.0.1:8000"]
+
+    exit_code, envelope = run_pack_command(arguments)
+
+    assert exit_code == EXIT_SUCCESS
+    assert isinstance(envelope.result, dict)
+    assert envelope.result["transport"] == "streamable_http"
+    assert captured["pack_path"] == Path("offline.accpkg")
+    assert composition.close_calls == 1
+
+
+def test_run_json_reports_scope_callability_without_expanding_empty_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import uvicorn
+
+    composition = _FakeGatewayComposition()
+    captured = _patch_scoped_gateway(monkeypatch, composition)
+    monkeypatch.setattr(
+        uvicorn,
+        "run",
+        lambda *args, **kwargs: pytest.fail("JSON inspection must not start uvicorn"),
+    )
+    arguments = _run_arguments(json_output=True)
+    arguments.allowed_host = ["127.0.0.1:8000"]
+
+    exit_code, envelope = run_pack_command(arguments)
+
+    assert exit_code == EXIT_SUCCESS
+    assert envelope.result is not None
+    analysis = cast(dict[str, Any], envelope.result["scope_analysis"])
+    assert analysis["deployment_scope_ceiling"] == []
+    assert analysis["summary"] == {"callable": 0, "conditional": 0, "denied": 1}
+    capability = cast(list[dict[str, Any]], analysis["capabilities"])[0]
+    assert capability["capability"] == "inspect_records"
+    assert capability["deployment"]["status"] == "denied"
+    assert capability["user"]["status"] == "unknown"
+    assert capability["effective"]["status"] == "unknown"
+    assert [item.code for item in envelope.diagnostics] == [
+        "ACC_RUN_SCOPE_CEILING_EMPTY",
+        "ACC_RUN_CAPABILITY_SCOPE_DENIED",
+    ]
+    assert {item.severity for item in envelope.diagnostics} == {"warning"}
+    assert captured["deployment_scope_ceiling"] == frozenset()
+
+
+def test_run_scope_ceiling_from_pack_is_explicit_and_makes_full_scope_callable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    composition = _FakeGatewayComposition()
+    captured = _patch_scoped_gateway(monkeypatch, composition)
+    arguments = _run_arguments(json_output=True)
+    arguments.allowed_host = ["127.0.0.1:8000"]
+    arguments.scope_ceiling_from_pack = True
+
+    exit_code, envelope = run_pack_command(arguments)
+
+    assert exit_code == EXIT_SUCCESS
+    assert envelope.result is not None
+    analysis = cast(dict[str, Any], envelope.result["scope_analysis"])
+    assert analysis["deployment_scope_ceiling"] == ["records.detail", "records.read"]
+    assert analysis["summary"] == {"callable": 1, "conditional": 0, "denied": 0}
+    assert envelope.diagnostics == []
+    assert captured["deployment_scope_ceiling"] == frozenset({"records.detail", "records.read"})
+
+
+def test_run_strict_scope_refuses_to_start_when_capability_is_denied(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import acc_runtime.gateway
+    import acc_runtime.loader
+
+    project = _gateway_project()
+    monkeypatch.setattr(
+        acc_runtime.loader,
+        "load_pack",
+        lambda path: SimpleNamespace(ir=_scoped_ir(project)),
+    )
+    monkeypatch.setattr(
+        acc_runtime.gateway,
+        "create_gateway_runtime",
+        lambda **kwargs: pytest.fail("strict scope must stop before Gateway composition"),
+    )
+    arguments = _run_arguments(json_output=True)
+    arguments.allowed_host = ["127.0.0.1:8000"]
+    arguments.strict_scope = True
+
+    exit_code, envelope = run_pack_command(arguments)
+
+    assert exit_code == EXIT_RUNTIME
+    assert envelope.ok is False
+    assert envelope.result is None
+    denied = [
+        item for item in envelope.diagnostics if item.code == "ACC_RUN_CAPABILITY_SCOPE_DENIED"
+    ]
+    assert len(denied) == 1
+    assert denied[0].severity == "error"
+
+
+def test_run_non_json_emits_scope_warning_before_uvicorn(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import uvicorn
+
+    composition = _FakeGatewayComposition()
+    _patch_scoped_gateway(monkeypatch, composition)
+    observed: list[str] = []
+
+    def run_uvicorn(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        observed.append(capsys.readouterr().err)
+
+    monkeypatch.setattr(uvicorn, "run", run_uvicorn)
+    arguments = _run_arguments(json_output=False)
+    arguments.allowed_host = ["127.0.0.1:8000"]
+
+    exit_code, _ = run_pack_command(arguments)
+
+    assert exit_code == EXIT_SUCCESS
+    assert len(observed) == 1
+    assert "ACC_RUN_SCOPE_CEILING_EMPTY" in observed[0]
+    assert "ACC_RUN_CAPABILITY_SCOPE_DENIED" in observed[0]
 
 
 def test_run_streamable_http_starts_single_worker_and_closes_after_server_returns(
@@ -238,7 +523,7 @@ def test_run_streamable_http_starts_single_worker_and_closes_after_server_return
     monkeypatch.setattr(
         acc_runtime.loader,
         "load_pack",
-        lambda path: SimpleNamespace(ir={"project": project}),
+        lambda path: SimpleNamespace(ir=_minimal_ir(project)),
     )
     monkeypatch.setattr(
         acc_runtime.gateway,
@@ -303,7 +588,7 @@ def test_run_streamable_http_maps_uvicorn_system_exit_to_stable_runtime_error(
     monkeypatch.setattr(
         acc_runtime.loader,
         "load_pack",
-        lambda path: SimpleNamespace(ir={"project": project}),
+        lambda path: SimpleNamespace(ir=_minimal_ir(project)),
     )
     monkeypatch.setattr(
         acc_runtime.gateway,
@@ -365,7 +650,7 @@ def test_run_streamable_http_rejects_unsafe_gateway_configuration(
     monkeypatch.setattr(
         acc_runtime.loader,
         "load_pack",
-        lambda path: SimpleNamespace(ir={"project": project}),
+        lambda path: SimpleNamespace(ir=_minimal_ir(project)),
     )
     arguments = _run_arguments(json_output=True)
     arguments.allowed_host = ["127.0.0.1:8000"]
@@ -727,6 +1012,23 @@ def test_acc_console_entrypoint_help_lists_milestone_one_commands() -> None:
         assert command in help_text
 
 
+def test_run_scope_flags_are_mutually_exclusive() -> None:
+    completed = _run_acc(
+        "run",
+        "missing.accpkg",
+        "--scope",
+        "records.read",
+        "--scope-ceiling-from-pack",
+        "--json",
+    )
+
+    assert completed.returncode == 2
+    payload = json.loads(completed.stdout)
+    assert payload["ok"] is False
+    assert payload["diagnostics"][0]["code"] == "ACC_CLI_USAGE"
+    assert "not allowed with argument" in payload["diagnostics"][0]["message"]
+
+
 def test_init_creates_minimal_project_and_never_overwrites(tmp_path: Path) -> None:
     project = tmp_path / "my-acc-project"
 
@@ -807,6 +1109,15 @@ def test_schema_exports_all_models_as_draft_2020_12(tmp_path: Path) -> None:
     binding_schema = operation_schema["properties"]["context_bindings"]["additionalProperties"]
     assert "principal_id" in binding_schema["pattern"]
     assert "tenant_context" in binding_schema["pattern"]
+
+    source_contract_schema = json.loads(
+        (output / "source-contract.schema.json").read_text(encoding="utf-8")
+    )
+    assert source_contract_schema["properties"]["schema_version"]["const"] == "2"
+    scope_inventory_schema = json.loads(
+        (output / "scope-inventory.schema.json").read_text(encoding="utf-8")
+    )
+    assert scope_inventory_schema["properties"]["schema_version"]["const"] == "1"
 
 
 def test_validate_accepts_an_evidence_bound_project(tmp_path: Path) -> None:

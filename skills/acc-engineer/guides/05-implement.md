@@ -9,22 +9,26 @@
 
 ## 动作
 
-1. 仅为 disposition 是 `planned` 或 `composed` 的路由创建 Evidence 引用、Operations、Capabilities、Policies、Evals 和 Fake fixtures。
+1. 仅为 disposition 是 `planned` 或 `composed` 的路由创建 Evidence 引用、SourceContracts、Operations、Capabilities、CapabilityQuality、Policies、Evals 和 Fake fixtures。
 2. 从证据选择唯一的 Provider `auth`：`none`、环境引用的 `bearer_secret`，或 `password_bearer`。`password_bearer` 在 `stdio` 使用 `environment_secret`，在 `streamable_http` 使用 `gateway_session`。新 Operation 不得包含 `credential_ref`。
-3. 为 Operation 定义严格输入/输出 Schema、`GET`/`HEAD` 请求、Scope、超时和响应大小限制。需要受信 principal/tenant 值时才声明 `context_bindings`；目标必须映射到 path/query，且不得出现在 Capability input 或 Workflow arguments。
+3. 从 SourceContract 和 provenance 投影 Operation Schema：Operation 输入不得超出源接受范围，Operation 输出不得窄于源可能响应。需要受信 principal/tenant 值时才声明 `context_bindings`；目标必须映射到已证实的请求位置，且不得出现在 Capability input 或 Workflow arguments。
 4. 使用受限工作流步骤 `call/pick/map/filter/assert/redact/branch/parallel/foreach/emit`；引用、循环和并发保持静态有界。
 5. 将敏感字段限制落实到 Policy、redact 和 Eval 的 `forbidden_fields`。
 6. 每次修改后检查写入路径和原系统只读基线。
+7. 为 CapabilityQuality 落实 selector acquisition、producer graph、failure isolation、output budget 与长文本披露。Capability 输出收紧必须由工作流的 pick/map/filter/redact/dataflow 可证明，不能靠手写 Schema 假设。
+8. v1 只创建 `GET`/`HEAD` read Operation。仅在显式 v2 Action 项目中实现 `prepare → approve → commit → status`；commit 使用不透明 approval handle，并落实 idempotency、concurrency 和 retry 合同。不得简单放开 POST。
 
 ## 门禁
 
 - 正式 Operation 均有 Evidence，且不存在绝对 URL、动态 Host、Token 参数、Header 覆盖或路径穿越。
-- 不包含写方法、动态代码、Shell、`eval`、任意导入或运行时生成请求。
+- v1 不包含写方法、动态代码、Shell、`eval`、任意导入或运行时生成请求。v2 Action 只能使用模型允许且有 Evidence 的显式方法和 effect。
 - 定义中只有 SecretRef 名称，没有生产 Secret；fixtures 不复制生产数据。
 - Provider auth 与 transport 组合合法；Operation 级 `credential_ref` 只用于 legacy `stdio`，新项目不得依赖。
 - `PrincipalContext`、JWT、密码和 Header 不属于公共 Schema；`context_bindings` 目标不能由 Agent 或 Workflow 覆盖。
 - 原系统文件、数据库、认证和部署修改数量为零。
 - 每个实现的 Operation 都可经 `scope_route_ids` 回溯到 `planned`/`composed` 路由。
+- Schema fidelity 无 evidence conflict；unknown 保持诊断，不通过伪造上界消除。
+- v2 Action 的 approval、幂等、并发、重试和状态查询合同完整，且没有把 Secret/Principal/approval grant 暴露为 Agent 输入。
 
 ## 输出
 

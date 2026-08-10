@@ -9,7 +9,9 @@ import httpx
 import pytest
 from pydantic import JsonValue
 
-from acc_core.models import Operation, Policy
+from acc_core.models import Operation, Policy, ReadOperationV2
+from acc_runtime.auth import NoAuthStrategy
+from acc_runtime.context import PrincipalContext
 from acc_runtime.errors import RuntimeError as ACCRuntimeError
 from acc_runtime.policies import PolicyEnforcer
 from acc_runtime.providers import HttpProvider
@@ -74,6 +76,69 @@ def _client(handler: Any) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
 
+def _v2_read_operation() -> ReadOperationV2:
+    return ReadOperationV2.model_validate(
+        {
+            "schema_version": "2",
+            "kind": "read",
+            "id": "crm.get_customer_v2",
+            "title": "Get customer v2",
+            "input_schema": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["customer_id"],
+                "properties": {"customer_id": {"type": "string"}},
+            },
+            "output_schema": {
+                "type": "object",
+                "required": ["id"],
+                "properties": {"id": {"type": "string"}},
+            },
+            "http": {
+                "method": "GET",
+                "path": "/customers/{customer_id}",
+                "path_parameters": {"customer_id": "customer_id"},
+                "query_parameters": {},
+                "request": None,
+                "success": {"statuses": [200], "body": "json"},
+                "scopes": [],
+                "timeout_seconds": 15,
+                "max_response_bytes": 1_048_576,
+                "safety": {
+                    "effect": "read",
+                    "risk": "low",
+                    "reversibility": "reversible",
+                    "retry": {"mode": "idempotent_only"},
+                    "idempotency": {"mode": "unsupported"},
+                    "concurrency": {"mode": "not_supported"},
+                },
+            },
+            "context_bindings": {},
+            "evidence": [
+                {
+                    "source_id": "crm",
+                    "kind": "openapi",
+                    "path": "openapi.json",
+                    "json_pointer": "/paths/~1customers~1{id}/get",
+                    "digest": "sha256:" + "1" * 64,
+                }
+            ],
+        }
+    )
+
+
+def _v2_principal() -> PrincipalContext:
+    return PrincipalContext(
+        principal_id="user-1",
+        gateway_session_id=None,
+        target_system_id="crm",
+        source_scopes=None,
+        deployment_scope_ceiling=(),
+        tenant_context=None,
+        auth_state_handle="auth-user-1",
+    )
+
+
 @pytest.mark.asyncio
 async def test_http_provider_encodes_paths_maps_queries_and_injects_secret() -> None:
     captured: httpx.Request | None = None
@@ -116,6 +181,47 @@ async def test_http_provider_call_accepts_compiled_operation_mapping() -> None:
         )
 
     assert result == {"id": "one"}
+
+
+@pytest.mark.asyncio
+async def test_http_provider_accepts_a_v2_read_operation_without_enabling_actions() -> None:
+    async with _client(lambda request: httpx.Response(200, json={"id": "one"})) as client:
+        provider = HttpProvider(
+            base_url_ref="CRM_BASE_URL",
+            environment={"CRM_BASE_URL": "https://crm.example.test"},
+            auth_strategy=NoAuthStrategy(),
+            client=client,
+        )
+        result = await provider.call(
+            _v2_read_operation().model_dump(mode="json"),
+            {"customer_id": "one"},
+            principal_context=_v2_principal(),
+        )
+
+    assert result == {"id": "one"}
+
+
+@pytest.mark.asyncio
+async def test_v2_http_success_statuses_are_exact_instead_of_any_2xx() -> None:
+    async with _client(lambda request: httpx.Response(201, json={"id": "one"})) as client:
+        provider = HttpProvider(
+            base_url_ref="CRM_BASE_URL",
+            environment={"CRM_BASE_URL": "https://crm.example.test"},
+            auth_strategy=NoAuthStrategy(),
+            client=client,
+        )
+        with pytest.raises(ACCRuntimeError) as captured:
+            await provider.call(
+                _v2_read_operation().model_dump(mode="json"),
+                {"customer_id": "one"},
+                principal_context=_v2_principal(),
+            )
+
+    assert captured.value.code == "ACC_RUNTIME_HTTP_UPSTREAM_ERROR"
+    assert captured.value.details == {
+        "operation": "crm.get_customer_v2",
+        "upstream_status": 201,
+    }
 
 
 @pytest.mark.asyncio

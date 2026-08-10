@@ -9,8 +9,15 @@ from typing import Any, cast
 
 from pydantic import JsonValue
 
+from acc_core.compiler.actions import (
+    compile_action_semantics_attestation,
+    prove_action_capability,
+)
+from acc_core.contracts import SourceContract
 from acc_core.diagnostics import Diagnostic
 from acc_core.models import (
+    ActionCapabilityV2,
+    ActionOperationV2,
     AssertStep,
     BranchStep,
     CallStep,
@@ -22,9 +29,15 @@ from acc_core.models import (
     ParallelStep,
     PasswordBearerAuthConfig,
     PickStep,
+    ProjectV2,
+    ReadCapabilityV2,
     RedactStep,
     StrictModel,
     WorkflowStep,
+)
+from acc_core.scope import (
+    CapabilityScopeRequirements,
+    analyze_capability_scope_requirements,
 )
 from acc_core.validation import validate_project
 
@@ -32,7 +45,7 @@ type CompiledIR = dict[str, JsonValue]
 
 _REFERENCE_SEGMENT = r"[A-Za-z_][A-Za-z0-9_-]*"
 _REFERENCE_PATTERN = re.compile(
-    rf"^\$\.(?:(?P<root>input|item)(?:\.{_REFERENCE_SEGMENT})*"
+    rf"^\$\.(?:(?P<root>input|item|prepared)(?:\.{_REFERENCE_SEGMENT})*"
     rf"|steps\.(?P<step>{_REFERENCE_SEGMENT})(?:\.{_REFERENCE_SEGMENT})*)$"
 )
 
@@ -103,6 +116,8 @@ def _validate_reference(
     *,
     available_steps: set[str],
     allow_item: bool,
+    allow_input: bool,
+    allow_prepared: bool,
     require_reference: bool,
     path: str,
     pointer: str,
@@ -117,18 +132,39 @@ def _validate_reference(
                 code="ACC_COMPILE_REFERENCE_INVALID",
                 message=(
                     "Workflow expressions must be one static reference rooted at "
-                    "$.input, $.steps.<prior-step>, or $.item."
+                    "$.input, $.prepared, $.steps.<prior-step>, or $.item."
                 ),
                 path=path,
                 pointer=pointer,
             )
         return
 
-    if match.group("root") == "item" and not allow_item:
+    root = match.group("root")
+    if root == "item" and not allow_item:
         _diagnostic(
             diagnostics,
             code="ACC_COMPILE_ITEM_REFERENCE_OUTSIDE_LOOP",
             message="$.item is only available inside a bounded item workflow.",
+            path=path,
+            pointer=pointer,
+        )
+        return
+
+    if root == "input" and not allow_input:
+        _diagnostic(
+            diagnostics,
+            code="ACC_COMPILE_INPUT_REFERENCE_UNAVAILABLE",
+            message="$.input is not available in this workflow phase.",
+            path=path,
+            pointer=pointer,
+        )
+        return
+
+    if root == "prepared" and not allow_prepared:
+        _diagnostic(
+            diagnostics,
+            code="ACC_COMPILE_PREPARED_REFERENCE_UNAVAILABLE",
+            message="$.prepared is available only in an Action commit workflow.",
             path=path,
             pointer=pointer,
         )
@@ -150,6 +186,8 @@ def _validate_value(
     *,
     available_steps: set[str],
     allow_item: bool,
+    allow_input: bool,
+    allow_prepared: bool,
     require_reference: bool = False,
     path: str,
     pointer: str,
@@ -160,6 +198,8 @@ def _validate_value(
             value,
             available_steps=available_steps,
             allow_item=allow_item,
+            allow_input=allow_input,
+            allow_prepared=allow_prepared,
             require_reference=require_reference,
             path=path,
             pointer=pointer,
@@ -172,6 +212,8 @@ def _validate_value(
                 item,
                 available_steps=available_steps,
                 allow_item=allow_item,
+                allow_input=allow_input,
+                allow_prepared=allow_prepared,
                 require_reference=False,
                 path=path,
                 pointer=f"{pointer}/{index}",
@@ -184,6 +226,8 @@ def _validate_value(
                 item,
                 available_steps=available_steps,
                 allow_item=allow_item,
+                allow_input=allow_input,
+                allow_prepared=allow_prepared,
                 require_reference=False,
                 path=path,
                 pointer=f"{pointer}/{_pointer_token(key)}",
@@ -222,6 +266,8 @@ def _validate_step(
     operation_bindings: dict[str, set[str]],
     dependencies: set[str],
     allow_item: bool,
+    allow_input: bool,
+    allow_prepared: bool,
     path: str,
     pointer: str,
     diagnostics: list[Diagnostic],
@@ -262,6 +308,8 @@ def _validate_step(
             step.call.arguments,
             available_steps=available_steps,
             allow_item=allow_item,
+            allow_input=allow_input,
+            allow_prepared=allow_prepared,
             path=path,
             pointer=f"{pointer}/call/arguments",
             diagnostics=diagnostics,
@@ -271,6 +319,8 @@ def _validate_step(
             step.pick.value,
             available_steps=available_steps,
             allow_item=allow_item,
+            allow_input=allow_input,
+            allow_prepared=allow_prepared,
             path=path,
             pointer=f"{pointer}/pick/value",
             diagnostics=diagnostics,
@@ -280,6 +330,8 @@ def _validate_step(
             step.map.items,
             available_steps=available_steps,
             allow_item=allow_item,
+            allow_input=allow_input,
+            allow_prepared=allow_prepared,
             path=path,
             pointer=f"{pointer}/map/items",
             diagnostics=diagnostics,
@@ -288,6 +340,8 @@ def _validate_step(
             step.map.expression,
             available_steps=available_steps,
             allow_item=True,
+            allow_input=allow_input,
+            allow_prepared=allow_prepared,
             require_reference=True,
             path=path,
             pointer=f"{pointer}/map/expression",
@@ -298,6 +352,8 @@ def _validate_step(
             step.filter.items,
             available_steps=available_steps,
             allow_item=allow_item,
+            allow_input=allow_input,
+            allow_prepared=allow_prepared,
             path=path,
             pointer=f"{pointer}/filter/items",
             diagnostics=diagnostics,
@@ -306,6 +362,8 @@ def _validate_step(
             step.filter.condition,
             available_steps=available_steps,
             allow_item=True,
+            allow_input=allow_input,
+            allow_prepared=allow_prepared,
             require_reference=True,
             path=path,
             pointer=f"{pointer}/filter/condition",
@@ -316,6 +374,8 @@ def _validate_step(
             step.assert_.condition,
             available_steps=available_steps,
             allow_item=allow_item,
+            allow_input=allow_input,
+            allow_prepared=allow_prepared,
             require_reference=True,
             path=path,
             pointer=f"{pointer}/assert/condition",
@@ -326,6 +386,8 @@ def _validate_step(
             step.redact.value,
             available_steps=available_steps,
             allow_item=allow_item,
+            allow_input=allow_input,
+            allow_prepared=allow_prepared,
             path=path,
             pointer=f"{pointer}/redact/value",
             diagnostics=diagnostics,
@@ -335,6 +397,8 @@ def _validate_step(
             step.branch.condition,
             available_steps=available_steps,
             allow_item=allow_item,
+            allow_input=allow_input,
+            allow_prepared=allow_prepared,
             require_reference=True,
             path=path,
             pointer=f"{pointer}/branch/condition",
@@ -348,6 +412,8 @@ def _validate_step(
             operation_bindings=operation_bindings,
             dependencies=dependencies,
             allow_item=allow_item,
+            allow_input=allow_input,
+            allow_prepared=allow_prepared,
             path=path,
             pointer=f"{pointer}/branch/then",
             diagnostics=diagnostics,
@@ -360,6 +426,8 @@ def _validate_step(
             operation_bindings=operation_bindings,
             dependencies=dependencies,
             allow_item=allow_item,
+            allow_input=allow_input,
+            allow_prepared=allow_prepared,
             path=path,
             pointer=f"{pointer}/branch/else",
             diagnostics=diagnostics,
@@ -374,6 +442,8 @@ def _validate_step(
                 operation_bindings=operation_bindings,
                 dependencies=dependencies,
                 allow_item=allow_item,
+                allow_input=allow_input,
+                allow_prepared=allow_prepared,
                 path=path,
                 pointer=f"{pointer}/parallel/{index}",
                 diagnostics=diagnostics,
@@ -383,6 +453,8 @@ def _validate_step(
             step.foreach.items,
             available_steps=available_steps,
             allow_item=allow_item,
+            allow_input=allow_input,
+            allow_prepared=allow_prepared,
             path=path,
             pointer=f"{pointer}/foreach/items",
             diagnostics=diagnostics,
@@ -395,6 +467,8 @@ def _validate_step(
             operation_bindings=operation_bindings,
             dependencies=dependencies,
             allow_item=True,
+            allow_input=allow_input,
+            allow_prepared=allow_prepared,
             path=path,
             pointer=f"{pointer}/foreach/workflow",
             diagnostics=diagnostics,
@@ -404,6 +478,8 @@ def _validate_step(
             step.emit.value,
             available_steps=available_steps,
             allow_item=allow_item,
+            allow_input=allow_input,
+            allow_prepared=allow_prepared,
             path=path,
             pointer=f"{pointer}/emit/value",
             diagnostics=diagnostics,
@@ -419,6 +495,8 @@ def _validate_workflow(
     operation_bindings: dict[str, set[str]],
     dependencies: set[str],
     allow_item: bool,
+    allow_input: bool,
+    allow_prepared: bool,
     path: str,
     pointer: str,
     diagnostics: list[Diagnostic],
@@ -432,6 +510,8 @@ def _validate_workflow(
             operation_bindings=operation_bindings,
             dependencies=dependencies,
             allow_item=allow_item,
+            allow_input=allow_input,
+            allow_prepared=allow_prepared,
             path=path,
             pointer=f"{pointer}/{index}",
             diagnostics=diagnostics,
@@ -441,7 +521,7 @@ def _validate_workflow(
 
 
 def _compile_capability(
-    capability: Capability,
+    capability: Capability | ReadCapabilityV2,
     *,
     operations: set[str],
     operation_bindings: dict[str, set[str]],
@@ -488,6 +568,8 @@ def _compile_capability(
         operation_bindings=operation_bindings,
         dependencies=dependencies,
         allow_item=False,
+        allow_input=True,
+        allow_prepared=False,
         path=path,
         pointer="/workflow",
         diagnostics=diagnostics,
@@ -564,6 +646,137 @@ def _compile_capability(
     return dependencies
 
 
+def _compile_action_capability(
+    capability: ActionCapabilityV2,
+    *,
+    operations: dict[str, object],
+    source_contracts: dict[str, SourceContract],
+    operation_bindings: dict[str, set[str]],
+    policies: set[str],
+    evals: dict[str, str],
+    diagnostics: list[Diagnostic],
+) -> tuple[set[str], dict[str, JsonValue]]:
+    """Prove and compile one v2 Action without weakening the v1 workflow path."""
+
+    path = f"capabilities/{capability.id}.yaml"
+    if capability.policy not in policies:
+        _diagnostic(
+            diagnostics,
+            code="ACC_COMPILE_POLICY_NOT_FOUND",
+            message=f"Capability references an unknown policy: {capability.policy}",
+            path=path,
+            pointer="/policy",
+        )
+    for index, eval_id in enumerate(capability.evals):
+        target = evals.get(eval_id)
+        if target is None:
+            _diagnostic(
+                diagnostics,
+                code="ACC_COMPILE_EVAL_NOT_FOUND",
+                message=f"Capability references an unknown eval: {eval_id}",
+                path=path,
+                pointer=f"/evals/{index}",
+            )
+        elif target != capability.id:
+            _diagnostic(
+                diagnostics,
+                code="ACC_COMPILE_EVAL_CAPABILITY_MISMATCH",
+                message=f"Eval {eval_id} targets {target}, not capability {capability.id}.",
+                path=path,
+                pointer=f"/evals/{index}",
+            )
+    proof = prove_action_capability(
+        capability,
+        cast(dict[str, Any], operations),
+        path=path,
+    )
+    diagnostics.extend(proof.diagnostics)
+    dependencies: set[str] = set()
+    _validate_workflow(
+        capability.preview_workflow,
+        available_steps=set(),
+        seen_step_ids=set(),
+        operations=set(operations),
+        operation_bindings=operation_bindings,
+        dependencies=dependencies,
+        allow_item=False,
+        allow_input=True,
+        allow_prepared=False,
+        path=path,
+        pointer="/preview_workflow",
+        diagnostics=diagnostics,
+    )
+    _validate_workflow(
+        capability.commit_workflow,
+        available_steps=set(),
+        seen_step_ids=set(),
+        operations=set(operations),
+        operation_bindings=operation_bindings,
+        dependencies=dependencies,
+        allow_item=False,
+        allow_input=False,
+        allow_prepared=True,
+        path=path,
+        pointer="/commit_workflow",
+        diagnostics=diagnostics,
+    )
+    if not isinstance(capability.preview_workflow[-1], EmitStep):
+        _diagnostic(
+            diagnostics,
+            code="ACC_COMPILE_FINAL_EMIT_REQUIRED",
+            message="An Action preview_workflow must end with an emit step.",
+            path=path,
+            pointer="/preview_workflow",
+        )
+    if not isinstance(capability.commit_workflow[-1], EmitStep):
+        _diagnostic(
+            diagnostics,
+            code="ACC_COMPILE_FINAL_EMIT_REQUIRED",
+            message="An Action commit_workflow must end with an emit step.",
+            path=path,
+            pointer="/commit_workflow",
+        )
+    operation_semantics: dict[str, JsonValue] = {}
+    for operation_id in proof.mutation_operation_ids:
+        operation = operations.get(operation_id)
+        contract = source_contracts.get(operation_id)
+        if not isinstance(operation, ActionOperationV2) or contract is None:
+            continue
+        semantics = contract.action_semantics
+        if semantics is None:
+            continue
+        operation_semantics[operation_id] = compile_action_semantics_attestation(
+            operation,
+            semantics,
+        )
+    return dependencies, {
+        "approval_required": proof.approval_required,
+        "effects": list(proof.effects),
+        "maximum_risk": proof.maximum_risk,
+        "mutation_operation_ids": list(proof.mutation_operation_ids),
+        "operation_semantics": operation_semantics,
+        "required_scopes": list(proof.required_scopes),
+    }
+
+
+def _scope_requirements_json(
+    requirements: CapabilityScopeRequirements,
+) -> dict[str, JsonValue]:
+    normalized = _normalize_json(
+        {
+            "policy_always_required": sorted(requirements.policy_always_required),
+            "always_required": sorted(requirements.always_required),
+            "conditionally_required": sorted(requirements.conditionally_required),
+            "all_referenced": sorted(requirements.all_referenced),
+            "completion_alternatives": [
+                sorted(alternative) for alternative in requirements.completion_alternatives
+            ],
+        }
+    )
+    assert isinstance(normalized, dict)
+    return normalized
+
+
 def compile_project(project_root: str | Path = ".") -> CompilationReport:
     """Compile a validated project into deterministic, JSON-compatible IR."""
 
@@ -585,6 +798,9 @@ def compile_project(project_root: str | Path = ".") -> CompilationReport:
         mapped_inputs = set(operation.http.path_parameters.values()) | set(
             operation.http.query_parameters.values()
         )
+        request = getattr(operation.http, "request", None)
+        if request is not None:
+            mapped_inputs.update(request.body_parameters.values())
         for target, source in sorted(operation.context_bindings.items()):
             escaped_target = target.replace("~", "~0").replace("/", "~1")
             if target not in declared_inputs or target not in mapped_inputs:
@@ -593,7 +809,7 @@ def compile_project(project_root: str | Path = ".") -> CompilationReport:
                     code="ACC_COMPILE_CONTEXT_BINDING_TARGET_INVALID",
                     message=(
                         "A context binding target must be a declared Operation input mapped "
-                        f"to an HTTP path or query parameter: {target}"
+                        f"to an HTTP path, query, or body parameter: {target}"
                     ),
                     path=validation.operation_paths[operation_id],
                     pointer=f"/context_bindings/{escaped_target}",
@@ -612,15 +828,28 @@ def compile_project(project_root: str | Path = ".") -> CompilationReport:
     policy_ids = set(validation.policies)
     eval_targets = {eval_id: scenario.capability for eval_id, scenario in validation.evals.items()}
     dependencies: dict[str, set[str]] = {}
+    action_proofs: dict[str, dict[str, JsonValue]] = {}
     for capability_id in sorted(validation.capabilities):
-        dependencies[capability_id] = _compile_capability(
-            validation.capabilities[capability_id],
-            operations=operation_ids,
-            operation_bindings=operation_bindings,
-            policies=policy_ids,
-            evals=eval_targets,
-            diagnostics=diagnostics,
-        )
+        capability = validation.capabilities[capability_id]
+        if isinstance(capability, ActionCapabilityV2):
+            dependencies[capability_id], action_proofs[capability_id] = _compile_action_capability(
+                capability,
+                operations=cast(dict[str, object], validation.operations),
+                source_contracts=validation.source_contracts,
+                operation_bindings=operation_bindings,
+                policies=policy_ids,
+                evals=eval_targets,
+                diagnostics=diagnostics,
+            )
+        else:
+            dependencies[capability_id] = _compile_capability(
+                capability,
+                operations=operation_ids,
+                operation_bindings=operation_bindings,
+                policies=policy_ids,
+                evals=eval_targets,
+                diagnostics=diagnostics,
+            )
 
     if validation.project.runtime.transport == ["streamable_http"]:
         auth = validation.project.provider.auth
@@ -675,15 +904,71 @@ def compile_project(project_root: str | Path = ".") -> CompilationReport:
 
     compiled_capabilities: dict[str, JsonValue] = {}
     for capability_id in sorted(validation.capabilities):
-        compiled_capabilities[capability_id] = _normalize_json(
-            {
-                "definition": _model_json(validation.capabilities[capability_id]),
-                "operation_dependencies": sorted(dependencies[capability_id]),
-            }
+        compiled = cast(
+            dict[str, JsonValue],
+            _normalize_json(
+                {
+                    "definition": _model_json(validation.capabilities[capability_id]),
+                    "operation_dependencies": sorted(dependencies[capability_id]),
+                }
+            ),
         )
+        quality = validation.capability_quality.get(capability_id)
+        if quality is not None:
+            compiled["quality"] = _normalize_json(
+                {
+                    "max_output_bytes": quality.output_budget.max_bytes,
+                    "long_text_disclosures": [
+                        item.model_dump(mode="json")
+                        for item in quality.output_budget.long_text_disclosures
+                    ],
+                    "intent": quality.intent.model_dump(mode="json"),
+                    "inputs": {
+                        name: item.model_dump(mode="json")
+                        for name, item in sorted(quality.inputs.items())
+                    },
+                    "composition": quality.composition.model_dump(mode="json"),
+                }
+            )
+        if isinstance(validation.project, ProjectV2):
+            if capability_id in action_proofs:
+                compiled["action_proof"] = action_proofs[capability_id]
+                action_policy_scopes = frozenset(
+                    validation.policies[
+                        validation.capabilities[capability_id].policy
+                    ].required_scopes
+                )
+                proof_scopes = cast(
+                    list[str],
+                    action_proofs[capability_id]["required_scopes"],
+                )
+                action_scopes = frozenset(proof_scopes) | action_policy_scopes
+                compiled["scope_requirements"] = _scope_requirements_json(
+                    CapabilityScopeRequirements(
+                        capability_id=capability_id,
+                        policy_always_required=action_policy_scopes,
+                        always_required=action_scopes,
+                        conditionally_required=frozenset(),
+                        all_referenced=action_scopes,
+                        completion_alternatives=(action_scopes,),
+                    )
+                )
+            else:
+                capability = cast(
+                    Capability | ReadCapabilityV2,
+                    validation.capabilities[capability_id],
+                )
+                compiled["scope_requirements"] = _scope_requirements_json(
+                    analyze_capability_scope_requirements(
+                        capability=capability,
+                        policy=validation.policies[capability.policy],
+                        operations=validation.operations,
+                    )
+                )
+        compiled_capabilities[capability_id] = _normalize_json(compiled)
 
     raw_ir: dict[str, JsonValue] = {
-        "ir_version": "1",
+        "ir_version": validation.project.schema_version,
         "project": _model_json(validation.project),
         "operations": {
             operation_id: _model_json(validation.operations[operation_id])

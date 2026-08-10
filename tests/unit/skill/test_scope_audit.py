@@ -547,6 +547,33 @@ def test_source_scope_counts_only_eligible_route_dispositions(
     }
 
 
+def test_scope_audit_parses_valid_inventory_through_the_core_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _write_project(tmp_path)
+    inventory = yaml.safe_load((project / "scope-inventory.yaml").read_text(encoding="utf-8"))
+    monkeypatch.syspath_prepend(str(SCRIPT.parent))
+    script = runpy.run_path(str(SCRIPT))
+
+    typed = script["parse_core_inventory"](inventory)
+
+    assert typed.summary.model_dump() == inventory["summary"]
+    assert typed.routes[0].id == "customer.search"
+
+
+def test_scope_audit_rejects_inventory_outside_the_core_contract(tmp_path: Path) -> None:
+    project = _write_project(tmp_path)
+    path = project / "scope-inventory.yaml"
+    inventory = yaml.safe_load(path.read_text(encoding="utf-8"))
+    inventory["customer_specific_setting"] = True
+    path.write_text(yaml.safe_dump(inventory, sort_keys=False), encoding="utf-8")
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert [item["code"] for item in payload["diagnostics"]] == ["ACC_SCOPE_CORE_CONTRACT_INVALID"]
+
+
 def test_planned_and_composed_routes_must_exist_in_system_map_and_plan(
     tmp_path: Path,
 ) -> None:

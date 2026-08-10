@@ -1,0 +1,557 @@
+{
+  "$defs": {
+    "ActionSemantics": {
+      "additionalProperties": false,
+      "description": "Evidence-backed source semantics for one mutating Operation.",
+      "properties": {
+        "authority": {
+          "enum": [
+            "contract",
+            "implementation",
+            "test"
+          ],
+          "title": "Authority",
+          "type": "string"
+        },
+        "concurrency": {
+          "$ref": "#/$defs/ConcurrencyContractV2"
+        },
+        "effect": {
+          "$ref": "#/$defs/Effect"
+        },
+        "evidence": {
+          "$ref": "#/$defs/Evidence"
+        },
+        "idempotency": {
+          "$ref": "#/$defs/IdempotencyContractV2"
+        },
+        "method": {
+          "enum": [
+            "GET",
+            "HEAD",
+            "POST",
+            "PUT",
+            "PATCH",
+            "DELETE"
+          ],
+          "title": "Method",
+          "type": "string"
+        },
+        "retry": {
+          "$ref": "#/$defs/RetryContractV2"
+        },
+        "reversibility": {
+          "$ref": "#/$defs/Reversibility"
+        },
+        "risk": {
+          "$ref": "#/$defs/Risk"
+        }
+      },
+      "required": [
+        "method",
+        "effect",
+        "risk",
+        "reversibility",
+        "retry",
+        "idempotency",
+        "concurrency",
+        "evidence",
+        "authority"
+      ],
+      "title": "ActionSemantics",
+      "type": "object"
+    },
+    "BodyInjectionTargetV2": {
+      "additionalProperties": false,
+      "description": "A Runtime-owned value injected at one JSON request-body pointer.",
+      "properties": {
+        "kind": {
+          "const": "body",
+          "title": "Kind",
+          "type": "string"
+        },
+        "pointer": {
+          "minLength": 1,
+          "title": "Pointer",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "pointer"
+      ],
+      "title": "BodyInjectionTargetV2",
+      "type": "object"
+    },
+    "BodyTokenSourceV2": {
+      "additionalProperties": false,
+      "description": "Capture an optimistic-lock token from a preview response body.",
+      "properties": {
+        "kind": {
+          "const": "body",
+          "title": "Kind",
+          "type": "string"
+        },
+        "pointer": {
+          "minLength": 1,
+          "title": "Pointer",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "pointer"
+      ],
+      "title": "BodyTokenSourceV2",
+      "type": "object"
+    },
+    "ConcurrencyContractV2": {
+      "additionalProperties": false,
+      "description": "Describe capture and Runtime-owned injection of a concurrency token.",
+      "properties": {
+        "mode": {
+          "enum": [
+            "required",
+            "not_supported"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "precondition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuntimeInjectionTargetV2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "token": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConcurrencyTokenSourceV2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "title": "ConcurrencyContractV2",
+      "type": "object"
+    },
+    "ConcurrencyTokenSourceV2": {
+      "discriminator": {
+        "mapping": {
+          "body": "#/$defs/BodyTokenSourceV2",
+          "response_header": "#/$defs/ResponseHeaderTokenSourceV2"
+        },
+        "propertyName": "kind"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ResponseHeaderTokenSourceV2"
+        },
+        {
+          "$ref": "#/$defs/BodyTokenSourceV2"
+        }
+      ]
+    },
+    "Effect": {
+      "enum": [
+        "read",
+        "create",
+        "update",
+        "delete",
+        "transition",
+        "execute"
+      ],
+      "type": "string"
+    },
+    "Evidence": {
+      "additionalProperties": false,
+      "description": "A digest-bound locator supporting the milestone one evidence forms.",
+      "properties": {
+        "digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Digest",
+          "type": "string"
+        },
+        "json_pointer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Json Pointer"
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "source_file",
+                "json_document",
+                "openapi",
+                "openapi_operation",
+                "content",
+                "content_summary"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Kind"
+        },
+        "line_end": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Line End"
+        },
+        "line_start": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Line Start"
+        },
+        "locator": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Locator"
+        },
+        "openapi_operation": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Openapi Operation"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        },
+        "source_id": {
+          "minLength": 1,
+          "title": "Source Id",
+          "type": "string"
+        },
+        "summary": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Summary"
+        }
+      },
+      "required": [
+        "source_id",
+        "digest"
+      ],
+      "title": "Evidence",
+      "type": "object"
+    },
+    "HeaderInjectionTargetV2": {
+      "additionalProperties": false,
+      "description": "A Runtime-owned value injected into one non-sensitive HTTP header.",
+      "properties": {
+        "kind": {
+          "const": "header",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "name"
+      ],
+      "title": "HeaderInjectionTargetV2",
+      "type": "object"
+    },
+    "IdempotencyContractV2": {
+      "additionalProperties": false,
+      "description": "Separate source idempotency from Runtime-local duplicate suppression.",
+      "properties": {
+        "mode": {
+          "enum": [
+            "unsupported",
+            "runtime_deduplicate",
+            "source_key"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuntimeInjectionTargetV2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "title": "IdempotencyContractV2",
+      "type": "object"
+    },
+    "JsonValue": {},
+    "ResponseHeaderTokenSourceV2": {
+      "additionalProperties": false,
+      "description": "Capture an allowlisted response header as an optimistic-lock token.",
+      "properties": {
+        "kind": {
+          "const": "response_header",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "name"
+      ],
+      "title": "ResponseHeaderTokenSourceV2",
+      "type": "object"
+    },
+    "RetryContractV2": {
+      "additionalProperties": false,
+      "description": "Declare whether a mutation is ever eligible for a controlled replay.",
+      "properties": {
+        "mode": {
+          "enum": [
+            "never",
+            "idempotent_only"
+          ],
+          "title": "Mode",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "title": "RetryContractV2",
+      "type": "object"
+    },
+    "Reversibility": {
+      "enum": [
+        "reversible",
+        "compensatable",
+        "irreversible",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "Risk": {
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ],
+      "type": "string"
+    },
+    "RuntimeInjectionTargetV2": {
+      "discriminator": {
+        "mapping": {
+          "body": "#/$defs/BodyInjectionTargetV2",
+          "header": "#/$defs/HeaderInjectionTargetV2"
+        },
+        "propertyName": "kind"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/HeaderInjectionTargetV2"
+        },
+        {
+          "$ref": "#/$defs/BodyInjectionTargetV2"
+        }
+      ]
+    },
+    "SchemaProvenance": {
+      "additionalProperties": false,
+      "description": "Bind one source-schema claim to immutable evidence.",
+      "properties": {
+        "authority": {
+          "enum": [
+            "contract",
+            "implementation",
+            "test",
+            "observation"
+          ],
+          "title": "Authority",
+          "type": "string"
+        },
+        "evidence": {
+          "$ref": "#/$defs/Evidence"
+        },
+        "evidence_schema_pointer": {
+          "title": "Evidence Schema Pointer",
+          "type": "string"
+        },
+        "target_pointer": {
+          "title": "Target Pointer",
+          "type": "string"
+        }
+      },
+      "required": [
+        "target_pointer",
+        "evidence",
+        "evidence_schema_pointer",
+        "authority"
+      ],
+      "title": "SchemaProvenance",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "An evidence-backed request and response contract for one Operation.",
+  "properties": {
+    "action_semantics": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ActionSemantics"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "id": {
+      "minLength": 1,
+      "title": "Id",
+      "type": "string"
+    },
+    "operation_id": {
+      "minLength": 1,
+      "title": "Operation Id",
+      "type": "string"
+    },
+    "provenance": {
+      "items": {
+        "$ref": "#/$defs/SchemaProvenance"
+      },
+      "title": "Provenance",
+      "type": "array"
+    },
+    "request_completeness": {
+      "enum": [
+        "complete",
+        "partial",
+        "unknown"
+      ],
+      "title": "Request Completeness",
+      "type": "string"
+    },
+    "request_schema": {
+      "additionalProperties": {
+        "$ref": "#/$defs/JsonValue"
+      },
+      "title": "Request Schema",
+      "type": "object"
+    },
+    "response_completeness": {
+      "enum": [
+        "complete",
+        "partial",
+        "unknown"
+      ],
+      "title": "Response Completeness",
+      "type": "string"
+    },
+    "response_schema": {
+      "additionalProperties": {
+        "$ref": "#/$defs/JsonValue"
+      },
+      "title": "Response Schema",
+      "type": "object"
+    },
+    "schema_version": {
+      "const": "2",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "id",
+    "operation_id",
+    "request_schema",
+    "response_schema",
+    "request_completeness",
+    "response_completeness",
+    "provenance"
+  ],
+  "title": "SourceContract",
+  "type": "object"
+}

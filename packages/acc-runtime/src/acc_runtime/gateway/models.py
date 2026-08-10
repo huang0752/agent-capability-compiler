@@ -9,7 +9,7 @@ import unicodedata
 from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlsplit
 
 from pydantic import (
@@ -156,6 +156,21 @@ class GatewaySettings(_StrictModel):
         if not listen_address.is_loopback and not self.tls_enabled:
             raise ValueError("non-loopback Gateway listeners require TLS")
         return self
+
+
+class GatewayRuntimeInfo(_StrictModel):
+    """Non-secret attestation metadata for one assembled Gateway runtime."""
+
+    pack_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    project_id: str
+    project_version: str
+    tool_schema_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    transport: Literal["streamable_http"]
+
+    @field_validator("project_id", "project_version")
+    @classmethod
+    def _validate_project_identity(cls, value: str, info: Any) -> str:
+        return _exact_text(value, field_name=info.field_name)
 
 
 class SessionCreateRequest(_StrictModel):
@@ -308,6 +323,7 @@ class GatewaySessionCreation:
 
 
 __all__ = [
+    "GatewayRuntimeInfo",
     "GatewaySessionCreation",
     "GatewaySessionRecord",
     "GatewaySessionStatus",

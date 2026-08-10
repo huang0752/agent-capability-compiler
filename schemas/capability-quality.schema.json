@@ -1,0 +1,228 @@
+{
+  "$defs": {
+    "CapabilityInputQuality": {
+      "additionalProperties": false,
+      "description": "Describe how one public capability input can be obtained safely.",
+      "properties": {
+        "acquisition": {
+          "enum": [
+            "caller",
+            "trusted_context",
+            "default",
+            "upstream_step",
+            "capability_output"
+          ],
+          "title": "Acquisition",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "query",
+            "filter",
+            "resource_selector",
+            "trusted_context",
+            "literal"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "producers": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Producers",
+          "type": "array"
+        },
+        "resource_type": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resource Type"
+        }
+      },
+      "required": [
+        "kind",
+        "acquisition"
+      ],
+      "title": "CapabilityInputQuality",
+      "type": "object"
+    },
+    "CapabilityIntent": {
+      "additionalProperties": false,
+      "description": "Describe the business action and resources of a capability.",
+      "properties": {
+        "action": {
+          "enum": [
+            "search",
+            "list",
+            "get",
+            "aggregate",
+            "monitor",
+            "compare",
+            "inspect",
+            "create",
+            "update",
+            "delete",
+            "transition",
+            "execute"
+          ],
+          "title": "Action",
+          "type": "string"
+        },
+        "resource_types": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Resource Types",
+          "type": "array"
+        }
+      },
+      "required": [
+        "action",
+        "resource_types"
+      ],
+      "title": "CapabilityIntent",
+      "type": "object"
+    },
+    "CompositionQuality": {
+      "additionalProperties": false,
+      "description": "Record the supported workflow failure behavior and any composition rationale.",
+      "properties": {
+        "failure_mode": {
+          "const": "fail_fast",
+          "title": "Failure Mode",
+          "type": "string"
+        },
+        "justification": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Justification"
+        }
+      },
+      "required": [
+        "failure_mode"
+      ],
+      "title": "CompositionQuality",
+      "type": "object"
+    },
+    "LongTextDisclosure": {
+      "additionalProperties": false,
+      "description": "Record human review of one potentially context-heavy output field.",
+      "properties": {
+        "acknowledged": {
+          "title": "Acknowledged",
+          "type": "boolean"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        }
+      },
+      "required": [
+        "path",
+        "acknowledged"
+      ],
+      "title": "LongTextDisclosure",
+      "type": "object"
+    },
+    "OutputBudget": {
+      "additionalProperties": false,
+      "description": "Bound one complete capability result independently of provider responses.",
+      "properties": {
+        "long_text_disclosures": {
+          "items": {
+            "$ref": "#/$defs/LongTextDisclosure"
+          },
+          "title": "Long Text Disclosures",
+          "type": "array"
+        },
+        "max_bytes": {
+          "maximum": 104857600,
+          "minimum": 1,
+          "title": "Max Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "max_bytes"
+      ],
+      "title": "OutputBudget",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Constructability, composition, and output-budget contract for one Capability.",
+  "properties": {
+    "capability_id": {
+      "minLength": 1,
+      "title": "Capability Id",
+      "type": "string"
+    },
+    "composition": {
+      "$ref": "#/$defs/CompositionQuality"
+    },
+    "inputs": {
+      "additionalProperties": {
+        "$ref": "#/$defs/CapabilityInputQuality"
+      },
+      "propertyNames": {
+        "minLength": 1
+      },
+      "title": "Inputs",
+      "type": "object"
+    },
+    "intent": {
+      "$ref": "#/$defs/CapabilityIntent"
+    },
+    "output_budget": {
+      "$ref": "#/$defs/OutputBudget"
+    },
+    "schema_version": {
+      "const": "2",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "capability_id",
+    "intent",
+    "inputs",
+    "composition",
+    "output_budget"
+  ],
+  "title": "CapabilityQuality",
+  "type": "object"
+}

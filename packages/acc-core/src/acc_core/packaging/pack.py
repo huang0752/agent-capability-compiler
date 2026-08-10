@@ -31,9 +31,21 @@ from acc_core.io import (
 
 PACK_FORMAT = "acc.capability-pack"
 PACK_FORMAT_VERSION = 1
+SUPPORTED_PACK_FORMAT_VERSIONS = frozenset({1, 2})
 FIXED_ZIP_TIME = (1980, 1, 1, 0, 0, 0)
 
-_DOCUMENT_DIRECTORIES = ("capabilities", "evals", "evidence", "operations", "policies")
+_V1_DOCUMENT_DIRECTORIES = (
+    "capabilities",
+    "evals",
+    "evidence",
+    "operations",
+    "policies",
+)
+_V2_DOCUMENT_DIRECTORIES = (
+    *_V1_DOCUMENT_DIRECTORIES,
+    "capability-quality",
+    "source-contracts",
+)
 _DOCUMENT_SUFFIXES = {".json", ".yaml", ".yml"}
 _REQUIRED_ENTRIES = {"manifest.json", "pack.lock", "project.yaml"}
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
@@ -182,7 +194,11 @@ def _record(path: str, contents: bytes) -> PackFileRecord:
     return PackFileRecord(path=path, sha256=_sha256(contents), size=len(contents))
 
 
-def _is_allowed_entry(path: str) -> bool:
+def _document_directories(format_version: int) -> tuple[str, ...]:
+    return _V2_DOCUMENT_DIRECTORIES if format_version == 2 else _V1_DOCUMENT_DIRECTORIES
+
+
+def _is_allowed_entry(path: str, *, format_version: int | None = None) -> bool:
     if path in _REQUIRED_ENTRIES:
         return True
     if path == "compiled/ir.json":
@@ -190,7 +206,12 @@ def _is_allowed_entry(path: str) -> bool:
     parts = path.split("/")
     return (
         len(parts) == 2
-        and parts[0] in _DOCUMENT_DIRECTORIES
+        and parts[0]
+        in (
+            _V2_DOCUMENT_DIRECTORIES
+            if format_version is None
+            else _document_directories(format_version)
+        )
         and bool(parts[1])
         and PurePosixPath(parts[1]).suffix.lower() in _DOCUMENT_SUFFIXES
     )
@@ -229,7 +250,8 @@ def _collect_project_payloads(root: Path, max_file_bytes: int) -> dict[str, byte
         raise PackFormatError(f"project root is not a directory: {root}", path=".")
 
     payloads = {"project.yaml": _read_project_member(root, "project.yaml", max_file_bytes)}
-    for directory in _DOCUMENT_DIRECTORIES:
+    manifest = _project_manifest(payloads["project.yaml"])
+    for directory in _document_directories(manifest.format_version):
         directory_path = root / directory
         if not directory_path.exists():
             continue
@@ -253,7 +275,10 @@ def _collect_project_payloads(root: Path, max_file_bytes: int) -> dict[str, byte
             if (
                 not entry.is_file()
                 or entry.suffix.lower() not in _DOCUMENT_SUFFIXES
-                or not _is_allowed_entry(relative_path)
+                or not _is_allowed_entry(
+                    relative_path,
+                    format_version=manifest.format_version,
+                )
             ):
                 raise PackUnknownEntryError(
                     f"unknown project member: {relative_path}",
@@ -268,13 +293,24 @@ def _project_manifest(project_contents: bytes) -> PackManifest:
         document = yaml.safe_load(project_contents.decode("utf-8"))
     except (UnicodeDecodeError, yaml.YAMLError) as exc:
         raise PackFormatError("project.yaml must be a valid UTF-8 YAML document") from exc
-    if not isinstance(document, dict) or set(document) != {
+    if not isinstance(document, dict):
+        raise PackFormatError("project.yaml does not have the required project shape")
+    schema_version = document.get("schema_version")
+    expected_fields = {
         "project",
         "provider",
         "runtime",
         "schema_version",
         "source_workspace",
-    }:
+    }
+    if schema_version == "2":
+        expected_fields.add("quality")
+        format_version = 2
+    elif schema_version == "1":
+        format_version = 1
+    else:
+        raise PackFormatError("project.yaml declares an unsupported schema version")
+    if set(document) != expected_fields:
         raise PackFormatError("project.yaml does not have the required project shape")
     identity = document.get("project")
     if not isinstance(identity, dict) or set(identity) != {"id", "version"}:
@@ -287,7 +323,7 @@ def _project_manifest(project_contents: bytes) -> PackManifest:
         raise PackFormatError("project version must be a non-empty string")
     return PackManifest(
         format=PACK_FORMAT,
-        format_version=PACK_FORMAT_VERSION,
+        format_version=format_version,
         project_id=project_id,
         project_version=project_version,
     )
@@ -317,10 +353,15 @@ def _read_compiled_path(path: Path, max_file_bytes: int) -> bytes:
 def _compiled_payload(
     compiled_ir: Mapping[str, object] | str | os.PathLike[str] | None,
     max_file_bytes: int,
+    *,
+    format_version: int,
 ) -> bytes | None:
     if compiled_ir is None:
         return None
     if isinstance(compiled_ir, Mapping):
+        ir_version = compiled_ir.get("ir_version")
+        if ir_version != str(format_version) and not (format_version == 1 and ir_version is None):
+            raise PackFormatError("compiled IR version does not match the pack format")
         contents = _canonical_json(dict(compiled_ir), description="compiled IR")
         if len(contents) > max_file_bytes:
             raise PackFileTooLargeError(
@@ -360,6 +401,9 @@ def _compiled_payload(
         raise PackFormatError("compiled IR must be a valid UTF-8 JSON object") from exc
     if not isinstance(value, dict):
         raise PackFormatError("compiled IR must be a JSON object")
+    ir_version = value.get("ir_version")
+    if ir_version != str(format_version) and not (format_version == 1 and ir_version is None):
+        raise PackFormatError("compiled IR version does not match the pack format")
     contents = _canonical_json(value, description="compiled IR")
     if len(contents) > max_file_bytes:
         raise PackFileTooLargeError(
@@ -368,12 +412,16 @@ def _compiled_payload(
     return contents
 
 
-def _lock_contents(payloads: Mapping[str, bytes]) -> tuple[bytes, tuple[PackFileRecord, ...]]:
+def _lock_contents(
+    payloads: Mapping[str, bytes],
+    *,
+    format_version: int,
+) -> tuple[bytes, tuple[PackFileRecord, ...]]:
     records = tuple(_record(path, payloads[path]) for path in sorted(payloads))
     lock = {
         "algorithm": "sha256",
         "files": [record.to_dict() for record in records],
-        "format_version": PACK_FORMAT_VERSION,
+        "format_version": format_version,
     }
     return _canonical_json(lock, description="pack lock"), records
 
@@ -404,7 +452,7 @@ def build_pack(
         )
     resolved_root = root.resolve(strict=False)
     resolved_destination = destination.resolve(strict=False)
-    for directory in _DOCUMENT_DIRECTORIES:
+    for directory in _V2_DOCUMENT_DIRECTORIES:
         if resolved_destination.is_relative_to(resolved_root / directory):
             raise PackPathError(
                 "capability-pack output cannot overwrite a project definition directory",
@@ -413,10 +461,17 @@ def build_pack(
     payloads = _collect_project_payloads(root, max_file_bytes)
     manifest = _project_manifest(payloads["project.yaml"])
     payloads["manifest.json"] = _canonical_json(manifest.to_dict(), description="manifest")
-    compiled_contents = _compiled_payload(compiled_ir, max_file_bytes)
+    compiled_contents = _compiled_payload(
+        compiled_ir,
+        max_file_bytes,
+        format_version=manifest.format_version,
+    )
     if compiled_contents is not None:
         payloads["compiled/ir.json"] = compiled_contents
-    lock_contents, _ = _lock_contents(payloads)
+    lock_contents, _ = _lock_contents(
+        payloads,
+        format_version=manifest.format_version,
+    )
     payloads["pack.lock"] = lock_contents
 
     if destination.is_symlink():
@@ -496,10 +551,12 @@ def _parse_manifest(contents: bytes) -> PackManifest:
     format_version = value.get("format_version")
     project_id = project.get("id")
     project_version = project.get("version")
-    if pack_format != PACK_FORMAT or format_version != PACK_FORMAT_VERSION:
+    if (
+        pack_format != PACK_FORMAT
+        or isinstance(format_version, bool)
+        or format_version not in SUPPORTED_PACK_FORMAT_VERSIONS
+    ):
         raise PackFormatError("unsupported capability-pack format or version", path="manifest.json")
-    if isinstance(format_version, bool):
-        raise PackFormatError("manifest format_version must be an integer", path="manifest.json")
     if not isinstance(project_id, str) or not project_id:
         raise PackFormatError(
             "manifest project id must be a non-empty string", path="manifest.json"
@@ -516,11 +573,15 @@ def _parse_manifest(contents: bytes) -> PackManifest:
     )
 
 
-def _parse_lock(contents: bytes) -> tuple[PackFileRecord, ...]:
+def _parse_lock(
+    contents: bytes,
+    *,
+    format_version: int,
+) -> tuple[PackFileRecord, ...]:
     value = _parse_json_object(contents, name="pack.lock")
     if set(value) != {"algorithm", "files", "format_version"}:
         raise PackFormatError("pack.lock has unknown or missing fields", path="pack.lock")
-    if value.get("algorithm") != "sha256" or value.get("format_version") != PACK_FORMAT_VERSION:
+    if value.get("algorithm") != "sha256" or value.get("format_version") != format_version:
         raise PackFormatError("pack.lock has an unsupported algorithm or version", path="pack.lock")
     if isinstance(value.get("format_version"), bool):
         raise PackFormatError("pack.lock format_version must be an integer", path="pack.lock")
@@ -541,7 +602,7 @@ def _parse_lock(contents: bytes) -> tuple[PackFileRecord, ...]:
         _validate_member_path(path)
         if path == "pack.lock":
             raise PackFormatError("pack.lock cannot checksum itself", path="pack.lock")
-        if not _is_allowed_entry(path):
+        if not _is_allowed_entry(path, format_version=format_version):
             raise PackUnknownEntryError("pack.lock lists an unknown member", path=path)
         if path in seen:
             raise PackDuplicateEntryError("pack.lock repeats a member", path=path)
@@ -612,7 +673,20 @@ def verify_pack(
     if missing:
         raise PackFormatError(f"capability pack is missing required members: {', '.join(missing)}")
 
-    records = _parse_lock(members["pack.lock"])
+    manifest = _parse_manifest(members["manifest.json"])
+    for member_name in members:
+        if not _is_allowed_entry(
+            member_name,
+            format_version=manifest.format_version,
+        ):
+            raise PackUnknownEntryError(
+                "unknown capability-pack member for format version",
+                path=member_name,
+            )
+    records = _parse_lock(
+        members["pack.lock"],
+        format_version=manifest.format_version,
+    )
     expected_paths = set(members) - {"pack.lock"}
     locked_paths = {record.path for record in records}
     if expected_paths != locked_paths:
@@ -624,7 +698,6 @@ def verify_pack(
                 "capability-pack member does not match pack.lock", path=record.path
             )
 
-    manifest = _parse_manifest(members["manifest.json"])
     project_manifest = _project_manifest(members["project.yaml"])
     if manifest != project_manifest:
         raise PackFormatError("manifest project identity does not match project.yaml")

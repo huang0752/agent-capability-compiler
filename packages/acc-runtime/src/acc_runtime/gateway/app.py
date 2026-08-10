@@ -27,7 +27,12 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from acc_runtime.errors import RuntimeError as AccRuntimeError
 from acc_runtime.gateway.auth import GatewayTokenVerifier
-from acc_runtime.gateway.models import GatewaySettings, SessionCreateRequest, SessionCreateResponse
+from acc_runtime.gateway.models import (
+    GatewayRuntimeInfo,
+    GatewaySettings,
+    SessionCreateRequest,
+    SessionCreateResponse,
+)
 from acc_runtime.gateway.security import RequestSecurityMiddleware
 from acc_runtime.mcp import PrincipalCapabilityMcpServer
 
@@ -68,6 +73,7 @@ def create_gateway_app(
     service: GatewaySessionApplicationService,
     token_verifier: GatewayTokenVerifier,
     mcp_server: PrincipalCapabilityMcpServer,
+    runtime_info: GatewayRuntimeInfo,
     max_request_body_size: int = DEFAULT_GATEWAY_BODY_LIMIT,
     mcp_session_idle_timeout_seconds: float | None = None,
 ) -> Starlette:
@@ -160,6 +166,9 @@ def create_gateway_app(
             raise asyncio.CancelledError() from None
         return outcome
 
+    async def get_runtime_info(_: Request) -> Response:
+        return JSONResponse(runtime_info.model_dump(mode="json"))
+
     protected = [Middleware(RequireAuthMiddleware, required_scopes=[])]
     routes = [
         Route("/runtime/sessions", create_session, methods=["POST"]),
@@ -167,6 +176,12 @@ def create_gateway_app(
             "/runtime/sessions/current",
             delete_session,
             methods=["DELETE"],
+            middleware=protected,
+        ),
+        Route(
+            "/runtime/info",
+            get_runtime_info,
+            methods=["GET"],
             middleware=protected,
         ),
         Route(

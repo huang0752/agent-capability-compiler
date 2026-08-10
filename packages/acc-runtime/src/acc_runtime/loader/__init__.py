@@ -147,7 +147,11 @@ def _read_compiled_ir(path: Path, max_ir_bytes: int) -> bytes:
     return contents
 
 
-def _parse_compiled_ir(contents: bytes) -> dict[str, object]:
+def _parse_compiled_ir(
+    contents: bytes,
+    *,
+    format_version: int,
+) -> dict[str, object]:
     try:
         text = contents.decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -172,6 +176,12 @@ def _parse_compiled_ir(contents: bytes) -> dict[str, object]:
             "compiled IR must be a JSON object",
             details={"path": _COMPILED_IR_PATH, "reason": "not_an_object"},
         )
+    ir_version = value.get("ir_version")
+    if ir_version != str(format_version) and not (format_version == 1 and ir_version is None):
+        raise RuntimeIRFormatError(
+            "compiled IR version does not match the pack format",
+            details={"path": _COMPILED_IR_PATH, "reason": "version_mismatch"},
+        )
     return value
 
 
@@ -188,7 +198,10 @@ def load_pack(
     except CapabilityPackError as exc:
         raise _verification_error(exc) from exc
     contents = _read_compiled_ir(verification.path, max_ir_bytes)
-    ir = _parse_compiled_ir(contents)
+    ir = _parse_compiled_ir(
+        contents,
+        format_version=verification.manifest.format_version,
+    )
     return LoadedPack(
         path=verification.path,
         manifest=verification.manifest,

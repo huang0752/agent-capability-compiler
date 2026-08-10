@@ -16,16 +16,20 @@ from pathlib import Path
 from typing import Any, Never, cast
 
 import yaml
-from pydantic import JsonValue
+from pydantic import JsonValue, ValidationError
 
+from acc_core.cli.scope_diagnostics import analyze_run_scope_configuration
 from acc_core.compiler import compile_project
 from acc_core.compiler.diff import semantic_diff
-from acc_core.coverage import analyze_coverage
+from acc_core.coverage import analyze_coverage, analyze_coverage_v2
 from acc_core.diagnostics import Diagnostic, ResultEnvelope
 from acc_core.evals import ContractEvalRunner
 from acc_core.evidence import EvidenceFreezeError, freeze_operation_evidence
+from acc_core.io import ProjectIOError, load_project_object
+from acc_core.models import ProjectV2
 from acc_core.packaging import CapabilityPackError, build_pack
 from acc_core.schemas import export_schemas
+from acc_core.scope import ScopeInventory
 from acc_core.validation import validate_project
 
 EXIT_SUCCESS = 0
@@ -85,6 +89,7 @@ def _parser() -> AccArgumentParser:
 
     coverage_parser = subparsers.add_parser("coverage", help="analyze capability coverage")
     coverage_parser.add_argument("path", nargs="?", default=".")
+    coverage_parser.add_argument("--version", choices=("1", "2"))
     _add_json_argument(coverage_parser)
     coverage_parser.set_defaults(handler=_coverage_command)
 
@@ -108,11 +113,22 @@ def _parser() -> AccArgumentParser:
 
     run_parser = subparsers.add_parser("run", help="serve a capability pack over its MCP transport")
     run_parser.add_argument("pack")
-    run_parser.add_argument(
+    run_scope_group = run_parser.add_mutually_exclusive_group()
+    run_scope_group.add_argument(
         "--scope",
         action="append",
         default=[],
         help="grant one runtime scope (repeatable)",
+    )
+    run_scope_group.add_argument(
+        "--scope-ceiling-from-pack",
+        action="store_true",
+        help="explicitly use every Pack-declared scope as the deployment ceiling",
+    )
+    run_parser.add_argument(
+        "--strict-scope",
+        action="store_true",
+        help="refuse startup when any capability has no callable scope path",
     )
     run_parser.add_argument(
         "--tenant-id",
@@ -162,6 +178,19 @@ def _parser() -> AccArgumentParser:
         suite_parser.add_argument("path", nargs="?", default=".")
         _add_json_argument(suite_parser)
         suite_parser.set_defaults(handler=_test_command)
+    live_parser = test_subparsers.add_parser("live", help="attach tests to a live Gateway")
+    live_parser.add_argument("pack")
+    live_parser.add_argument("--gateway-url", required=True)
+    live_parser.add_argument("--profile", required=True)
+    live_parser.add_argument("--allow-source-connect", action="store_true")
+    live_parser.add_argument(
+        "--allowed-gateway-host",
+        action="append",
+        default=[],
+        help="exact non-loopback Gateway authority allowlist entry (repeatable)",
+    )
+    _add_json_argument(live_parser)
+    live_parser.set_defaults(handler=_live_test_command)
     return parser
 
 
@@ -412,9 +441,41 @@ def _compile_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope
 
 
 def _coverage_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope]:
-    report = validate_project(Path(str(arguments.path)))
+    project_root = Path(str(arguments.path))
+    report = validate_project(project_root)
     if not report.ok or report.project is None:
         return EXIT_INPUT, _compilation_failure("coverage", report.diagnostics)
+    requested_version = getattr(arguments, "version", None)
+    if requested_version == "1" and isinstance(report.project, ProjectV2):
+        return EXIT_INPUT, _failure(
+            "coverage",
+            Diagnostic(
+                code="ACC_COVERAGE_VERSION_UNSUPPORTED",
+                severity="error",
+                message="Coverage v1 supports only Project v1.",
+                path="project.yaml",
+                pointer="/schema_version",
+            ),
+        )
+    coverage_version = requested_version or ("2" if isinstance(report.project, ProjectV2) else "1")
+    if coverage_version == "2":
+        try:
+            inventory = ScopeInventory.model_validate(
+                load_project_object(project_root, "scope-inventory.yaml")
+            )
+        except (ProjectIOError, ValidationError):
+            return EXIT_INPUT, _failure(
+                "coverage",
+                Diagnostic(
+                    code="ACC_COVERAGE_SCOPE_INVENTORY_INVALID",
+                    severity="error",
+                    message="Coverage v2 requires a valid scope-inventory.yaml.",
+                    path="scope-inventory.yaml",
+                    pointer=None,
+                ),
+            )
+        result = analyze_coverage_v2(report, inventory).model_dump(mode="json")
+        return EXIT_SUCCESS, _success("coverage", result, report.diagnostics)
     return EXIT_SUCCESS, _success("coverage", analyze_coverage(report), report.diagnostics)
 
 
@@ -642,6 +703,14 @@ def _test_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope]:
     )
 
 
+def _live_test_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope]:
+    """Load the optional live-test integration only for the explicit subcommand."""
+
+    from acc_core.cli.live import run_live_command
+
+    return run_live_command(arguments, environment=os.environ)
+
+
 async def _run_runtime_eval_report(
     compiled_ir: dict[str, Any],
     project_root: Path,
@@ -817,22 +886,47 @@ def _run_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope]:
     """Load one verified pack and either inspect or serve its capabilities."""
 
     try:
-        from acc_core.models import Project
+        from acc_core.models import load_project_document
         from acc_runtime.errors import RuntimeError as AccRuntimeError
         from acc_runtime.loader import load_pack
         from acc_runtime.runtime import RuntimeConfigurationError
 
         pack_path = Path(str(arguments.pack))
         loaded_pack = load_pack(pack_path)
-        project = Project.model_validate(loaded_pack.ir.get("project"))
+        project = load_project_document(loaded_pack.ir.get("project"))
+        scope_configuration = analyze_run_scope_configuration(
+            loaded_pack.ir,
+            requested_scopes=(
+                frozenset()
+                if bool(arguments.scope_ceiling_from_pack)
+                else _runtime_scopes(cast(Sequence[str], arguments.scope))
+            ),
+            ceiling_from_pack=bool(arguments.scope_ceiling_from_pack),
+            strict=bool(arguments.strict_scope),
+        )
+        if scope_configuration.has_errors:
+            return EXIT_RUNTIME, ResultEnvelope(
+                ok=False,
+                command="run",
+                result=None,
+                diagnostics=list(scope_configuration.diagnostics),
+            )
+        if not bool(arguments.json_output):
+            for diagnostic in scope_configuration.diagnostics:
+                print(f"{diagnostic.code}: {diagnostic.message}", file=sys.stderr)
         transport = project.runtime.transport[0]
         if transport == "stdio":
-            tools = _run_stdio_runtime(arguments, pack_path=pack_path)
+            tools = _run_stdio_runtime(
+                arguments,
+                pack_path=pack_path,
+                deployment_scope_ceiling=scope_configuration.deployment_scope_ceiling,
+            )
             safe_configuration: dict[str, object] = {}
         elif transport == "streamable_http":
             tools, safe_configuration = _run_streamable_http_gateway(
                 arguments,
                 pack_path=pack_path,
+                deployment_scope_ceiling=scope_configuration.deployment_scope_ceiling,
             )
         else:  # pragma: no cover - Project restricts the transport union
             raise RuntimeConfigurationError(
@@ -845,8 +939,10 @@ def _run_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope]:
                 "pack": str(Path(str(arguments.pack)).resolve()),
                 "transport": transport,
                 "tools": tools,
+                "scope_analysis": scope_configuration.analysis,
                 **safe_configuration,
             },
+            list(scope_configuration.diagnostics),
         )
     except (AccRuntimeError, OSError, ValueError) as exc:
         code = getattr(exc, "code", "ACC_RUNTIME_START_FAILED")
@@ -866,6 +962,7 @@ def _run_stdio_runtime(
     arguments: argparse.Namespace,
     *,
     pack_path: Path,
+    deployment_scope_ceiling: frozenset[str],
 ) -> list[dict[str, object]]:
     """Inspect or serve one stdio Pack while retaining its legacy lifecycle."""
 
@@ -878,7 +975,7 @@ def _run_stdio_runtime(
     runtime = GenericRuntime.from_pack(
         pack_path,
         environment=os.environ,
-        granted_scopes=_runtime_scopes(cast(Sequence[str], arguments.scope)),
+        granted_scopes=deployment_scope_ceiling,
         tenant_id=tenant_id,
     )
 
@@ -897,6 +994,7 @@ def _run_streamable_http_gateway(
     arguments: argparse.Namespace,
     *,
     pack_path: Path,
+    deployment_scope_ceiling: frozenset[str],
 ) -> tuple[list[dict[str, object]], dict[str, object]]:
     """Inspect or synchronously serve one single-worker HTTP Gateway."""
 
@@ -939,7 +1037,7 @@ def _run_streamable_http_gateway(
         pack_path=pack_path,
         settings=settings,
         environment=os.environ,
-        deployment_scope_ceiling=_runtime_scopes(cast(Sequence[str], arguments.scope)),
+        deployment_scope_ceiling=deployment_scope_ceiling,
         mcp_session_idle_timeout_seconds=arguments.mcp_idle_timeout,
         max_request_body_size=arguments.body_limit,
     )

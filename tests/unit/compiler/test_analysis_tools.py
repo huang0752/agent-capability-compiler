@@ -9,11 +9,19 @@ import yaml
 
 from acc_core.compiler import CompilationReport
 from acc_core.compiler.diff import semantic_diff
-from acc_core.coverage import analyze_coverage
+from acc_core.contracts import SourceContract
+from acc_core.coverage import (
+    LiveObservation,
+    analyze_coverage,
+    analyze_coverage_v1,
+    analyze_coverage_v2,
+)
 from acc_core.evidence import EvidenceFreezeError, freeze_operation_evidence
 from acc_core.io import InvalidProjectPathError, ProjectFileTooLargeError, ProjectSymlinkError
 from acc_core.models import Capability, Eval, Operation, Policy
 from acc_core.packaging import PackManifest
+from acc_core.quality import CapabilityQuality
+from acc_core.scope import ScopeInventory
 from acc_core.validation import ValidationReport
 
 
@@ -161,6 +169,230 @@ def test_coverage_recognizes_a_linked_permission_negative_eval() -> None:
 
     assert result["capabilities_without_negative_evals"] == []
     assert result["capabilities_without_permission_negative_evals"] == []
+
+
+def _scope_inventory(
+    *,
+    operation_id: str = "crm.get_customer",
+    method: str = "GET",
+    path: str = "/customers",
+) -> ScopeInventory:
+    return ScopeInventory.model_validate(
+        {
+            "schema_version": "1",
+            "scope": {
+                "mode": "domain_complete",
+                "selected_domains": ["crm"],
+                "exclusion_approval": {},
+            },
+            "discovery": None,
+            "domains": [{"id": "crm", "status": "selected"}],
+            "routes": [
+                {
+                    "id": f"{method} {path}",
+                    "domain": "crm",
+                    "method": method,
+                    "path": path,
+                    "evidence_sources": ["routes.py"],
+                    "eligibility": "eligible",
+                    "disposition": "composed",
+                    "operation_id": operation_id,
+                    "capability_ids": ["get_customer"],
+                },
+                {
+                    "id": "GET /internal/export",
+                    "domain": "crm",
+                    "method": "GET",
+                    "path": "/internal/export",
+                    "evidence_sources": ["routes.py"],
+                    "eligibility": "ineligible",
+                    "disposition": "excluded",
+                    "reason": "Binary export is outside the JSON capability boundary.",
+                },
+            ],
+            "summary": {
+                "discovered_routes": 2,
+                "eligible_read_routes": 1,
+                "planned": 0,
+                "composed": 1,
+                "excluded": 1,
+                "blocked_on_evidence": 0,
+                "out_of_scope": 0,
+                "unresolved": 0,
+            },
+        }
+    )
+
+
+def _capability_quality() -> CapabilityQuality:
+    return CapabilityQuality.model_validate(
+        {
+            "schema_version": "2",
+            "capability_id": "get_customer",
+            "intent": {"action": "get", "resource_types": ["customer"]},
+            "inputs": {},
+            "composition": {"failure_mode": "fail_fast"},
+            "output_budget": {"max_bytes": 65_536, "long_text_disclosures": []},
+        }
+    )
+
+
+def _source_contract(operation: Operation) -> SourceContract:
+    return SourceContract.model_validate(
+        {
+            "schema_version": "2",
+            "id": "crm.get_customer.contract",
+            "operation_id": operation.id,
+            "request_schema": operation.input_schema,
+            "response_schema": operation.output_schema,
+            "request_completeness": "complete",
+            "response_completeness": "complete",
+            "provenance": [],
+        }
+    )
+
+
+def test_coverage_v1_named_api_preserves_the_exact_legacy_document() -> None:
+    report = ValidationReport(
+        operations={"crm.get_customer": _operation("crm.get_customer")},
+        capabilities={
+            "get_customer": _capability(
+                "get_customer", "crm.get_customer", ["get-customer-positive"]
+            )
+        },
+        policies={"customer-read": _policy()},
+        evals={"get-customer-positive": _eval("get-customer-positive", "get_customer")},
+    )
+
+    assert analyze_coverage_v1(report) == analyze_coverage(report)
+
+
+def test_coverage_v2_reports_independent_axes_without_a_total_score() -> None:
+    operation = _operation("crm.get_customer")
+    report = ValidationReport(
+        operations={operation.id: operation},
+        capabilities={
+            "get_customer": _capability("get_customer", operation.id, ["get-customer-positive"])
+        },
+        source_contracts={operation.id: _source_contract(operation)},
+        capability_quality={"get_customer": _capability_quality()},
+        policies={"customer-read": _policy()},
+        evals={"get-customer-positive": _eval("get-customer-positive", "get_customer")},
+    )
+
+    result = analyze_coverage_v2(report, _scope_inventory())
+    document = result.model_dump(mode="json")
+
+    assert list(document) == [
+        "coverage_version",
+        "route_disposition",
+        "operation_trace",
+        "scenario_coverage",
+        "constructability",
+        "discoverability_graph",
+        "composition",
+        "schema_fidelity",
+        "output_budget",
+        "live_observations",
+    ]
+    assert "score" not in json.dumps(document)
+    assert result.route_disposition.composed == ["GET /customers"]
+    assert result.route_disposition.excluded == ["GET /internal/export"]
+    assert result.operation_trace.traced_route_ids == ["GET /customers"]
+    assert result.operation_trace.broken_route_ids == []
+    assert result.scenario_coverage.with_success == ["get_customer"]
+    assert result.scenario_coverage.without_negative == ["get_customer"]
+    assert result.constructability.reachable == ["get_customer"]
+    assert result.discoverability_graph.nodes == ["get_customer"]
+    assert result.composition.components == {"get_customer": 1}
+    assert result.composition.diagnostics == []
+    assert result.schema_fidelity.analyzed_operation_ids == ["crm.get_customer"]
+    assert result.schema_fidelity.diagnostics == []
+    assert result.output_budget.status_by_capability == {"get_customer": "unknown"}
+    assert result.live_observations.status == "not_observed"
+    assert result.live_observations.unobserved_capability_ids == ["get_customer"]
+
+
+def test_coverage_v2_does_not_treat_route_disposition_as_usable() -> None:
+    operation = _operation("crm.get_customer")
+    report = ValidationReport(
+        operations={operation.id: operation},
+        capabilities={
+            "get_customer": _capability("get_customer", operation.id, ["get-customer-positive"])
+        },
+        capability_quality={"get_customer": _capability_quality()},
+        policies={"customer-read": _policy()},
+        evals={"get-customer-positive": _eval("get-customer-positive", "get_customer")},
+    )
+
+    result = analyze_coverage_v2(
+        report,
+        _scope_inventory(operation_id="crm.operation_not_compiled"),
+    )
+
+    assert result.route_disposition.composed == ["GET /customers"]
+    assert result.operation_trace.broken_route_ids == ["GET /customers"]
+    assert "usable" not in result.route_disposition.model_dump(mode="json")
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("HEAD", "/customers"),
+        ("GET", "/customers/{customer_id}"),
+    ],
+)
+def test_coverage_v2_marks_route_broken_when_http_mapping_is_not_exact(
+    method: str,
+    path: str,
+) -> None:
+    operation = _operation("crm.get_customer")
+    report = ValidationReport(
+        operations={operation.id: operation},
+        capabilities={
+            "get_customer": _capability("get_customer", operation.id, ["get-customer-positive"])
+        },
+        capability_quality={"get_customer": _capability_quality()},
+        policies={"customer-read": _policy()},
+        evals={"get-customer-positive": _eval("get-customer-positive", "get_customer")},
+    )
+
+    result = analyze_coverage_v2(
+        report,
+        _scope_inventory(method=method, path=path),
+    )
+
+    route_id = f"{method} {path}"
+    assert result.operation_trace.traced_route_ids == []
+    assert result.operation_trace.broken_route_ids == [route_id]
+
+
+def test_coverage_v2_keeps_live_observations_separate_from_static_output_bounds() -> None:
+    operation = _operation("crm.get_customer")
+    report = ValidationReport(
+        operations={operation.id: operation},
+        capabilities={
+            "get_customer": _capability("get_customer", operation.id, ["get-customer-positive"])
+        },
+        capability_quality={"get_customer": _capability_quality()},
+        policies={"customer-read": _policy()},
+        evals={"get-customer-positive": _eval("get-customer-positive", "get_customer")},
+    )
+    observation = LiveObservation(
+        capability_id="get_customer",
+        verification_level="source_connected_verified",
+        sample_count=20,
+        response_bytes_p50=1_024,
+        response_bytes_p95=4_096,
+        response_bytes_max=8_192,
+    )
+
+    result = analyze_coverage_v2(report, _scope_inventory(), live_observations=[observation])
+
+    assert result.output_budget.status_by_capability == {"get_customer": "unknown"}
+    assert result.live_observations.status == "observed"
+    assert result.live_observations.observations == [observation]
+    assert result.live_observations.unobserved_capability_ids == []
 
 
 def test_semantic_diff_ignores_mapping_order_and_reports_recursive_changes() -> None:

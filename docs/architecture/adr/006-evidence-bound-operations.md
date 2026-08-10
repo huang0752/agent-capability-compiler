@@ -16,6 +16,8 @@ Coding Agent 擅长从源码、OpenAPI、测试和文档中提炼接口，但也
 
 Operation 还必须使用封闭的输入输出 Schema，并在第一版明确声明 `safety.effect: read`；仅允许有证据支持的 `GET`/`HEAD`，不得用常识补造接口、字段或权限。
 
+v2 通过 SourceContract 将 Evidence 归一化为请求/响应 Schema、完整性与 pointer-level provenance。Operation 输入必须是源接受范围的安全子集，Operation 输出必须覆盖源可能响应；observation 不能证明业务上界。v2 Action 的 effect 与安全合同遵循 [ADR 007](007-versioned-quality-and-action-safety.md)，不会放宽 v1。
+
 ## Consequences
 
 - 每个运行时操作都可以回溯到原系统事实，审查者能定位并复核依据。

@@ -24,6 +24,7 @@ from acc_runtime.gateway.auth import (
     GatewayTokenVerifier,
 )
 from acc_runtime.gateway.models import (
+    GatewayRuntimeInfo,
     GatewaySessionRecord,
     GatewaySessionStatus,
     GatewaySettings,
@@ -53,6 +54,7 @@ __all__ = [
     "GatewayPrincipalResolver",
     "GatewayReauthRequiredError",
     "GatewayRuntimeComposition",
+    "GatewayRuntimeInfo",
     "GatewaySessionApplicationService",
     "GatewaySessionCapacityError",
     "GatewaySessionExpiredError",

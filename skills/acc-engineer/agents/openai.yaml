@@ -1,4 +1,4 @@
 interface:
   display_name: "ACC Engineer"
-  short_description: "Compile evidence-bound read-only agent capabilities"
+  short_description: "Compile evidence-bound ACC capabilities safely"
   default_prompt: "Use $acc-engineer to inspect an existing system and build a verified ACC capability project."

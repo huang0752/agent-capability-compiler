@@ -1,0 +1,462 @@
+{
+  "$defs": {
+    "ExclusionApproval": {
+      "additionalProperties": false,
+      "description": "Explicit approval for exact excluded route identifiers.",
+      "properties": {
+        "approval_text": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Approval Text"
+        },
+        "approved_route_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Approved Route Ids",
+          "type": "array"
+        }
+      },
+      "title": "ExclusionApproval",
+      "type": "object"
+    },
+    "ExclusionRule": {
+      "additionalProperties": false,
+      "description": "Shared authority for an exact set of excluded routes.",
+      "properties": {
+        "category": {
+          "enum": [
+            "binary_or_download",
+            "sensitive_configuration",
+            "alternate_identity_boundary",
+            "unsafe_dynamic_authorization",
+            "unavailable_or_disabled",
+            "operational_polling",
+            "duplicate_or_subsumed",
+            "low_business_value"
+          ],
+          "title": "Category",
+          "type": "string"
+        },
+        "evidence_sources": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Evidence Sources",
+          "type": "array"
+        },
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "rationale": {
+          "minLength": 1,
+          "title": "Rationale",
+          "type": "string"
+        },
+        "route_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Route Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "category",
+        "route_ids",
+        "rationale",
+        "evidence_sources"
+      ],
+      "title": "ExclusionRule",
+      "type": "object"
+    },
+    "ScopeDiscovery": {
+      "additionalProperties": false,
+      "description": "Evidence sources used to establish the route denominator.",
+      "properties": {
+        "evidence_sources": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Evidence Sources",
+          "type": "array"
+        },
+        "include_paths": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Include Paths",
+          "type": "array"
+        },
+        "methods": {
+          "items": {
+            "enum": [
+              "GET",
+              "HEAD"
+            ],
+            "type": "string"
+          },
+          "title": "Methods",
+          "type": "array"
+        },
+        "source_commit": {
+          "minLength": 1,
+          "title": "Source Commit",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_commit",
+        "methods",
+        "include_paths",
+        "evidence_sources"
+      ],
+      "title": "ScopeDiscovery",
+      "type": "object"
+    },
+    "ScopeDomain": {
+      "additionalProperties": false,
+      "description": "A discovered source-system domain.",
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "enum": [
+                "selected",
+                "excluded",
+                "blocked_on_evidence",
+                "out_of_scope"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Status"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "ScopeDomain",
+      "type": "object"
+    },
+    "ScopeRoute": {
+      "additionalProperties": false,
+      "description": "One discovered GET/HEAD route and its exact disposition.",
+      "properties": {
+        "capability_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Capability Ids",
+          "type": "array"
+        },
+        "disposition": {
+          "enum": [
+            "planned",
+            "composed",
+            "excluded",
+            "blocked_on_evidence",
+            "out_of_scope"
+          ],
+          "title": "Disposition",
+          "type": "string"
+        },
+        "domain": {
+          "minLength": 1,
+          "title": "Domain",
+          "type": "string"
+        },
+        "eligibility": {
+          "enum": [
+            "eligible",
+            "ineligible"
+          ],
+          "title": "Eligibility",
+          "type": "string"
+        },
+        "evidence_sources": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Evidence Sources",
+          "type": "array"
+        },
+        "exclusion_decision": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exclusion Decision"
+        },
+        "exclusion_rule_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exclusion Rule Id"
+        },
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "method": {
+          "enum": [
+            "GET",
+            "HEAD"
+          ],
+          "title": "Method",
+          "type": "string"
+        },
+        "operation_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Operation Id"
+        },
+        "path": {
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
+        "usage_evidence_sources": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Usage Evidence Sources",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "domain",
+        "method",
+        "path",
+        "evidence_sources",
+        "eligibility",
+        "disposition"
+      ],
+      "title": "ScopeRoute",
+      "type": "object"
+    },
+    "ScopeSelection": {
+      "additionalProperties": false,
+      "description": "Declared route-discovery scope.",
+      "properties": {
+        "exclusion_approval": {
+          "$ref": "#/$defs/ExclusionApproval"
+        },
+        "mode": {
+          "enum": [
+            "pilot",
+            "domain_complete",
+            "system_readonly_complete"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "selected_domains": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Selected Domains",
+          "type": "array"
+        },
+        "user_confirmation": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "User Confirmation"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "title": "ScopeSelection",
+      "type": "object"
+    },
+    "ScopeSummary": {
+      "additionalProperties": false,
+      "description": "Deterministic counters derived from routes.",
+      "properties": {
+        "blocked_on_evidence": {
+          "minimum": 0,
+          "title": "Blocked On Evidence",
+          "type": "integer"
+        },
+        "composed": {
+          "minimum": 0,
+          "title": "Composed",
+          "type": "integer"
+        },
+        "discovered_routes": {
+          "minimum": 0,
+          "title": "Discovered Routes",
+          "type": "integer"
+        },
+        "eligible_read_routes": {
+          "minimum": 0,
+          "title": "Eligible Read Routes",
+          "type": "integer"
+        },
+        "excluded": {
+          "minimum": 0,
+          "title": "Excluded",
+          "type": "integer"
+        },
+        "out_of_scope": {
+          "minimum": 0,
+          "title": "Out Of Scope",
+          "type": "integer"
+        },
+        "planned": {
+          "minimum": 0,
+          "title": "Planned",
+          "type": "integer"
+        },
+        "unresolved": {
+          "minimum": 0,
+          "title": "Unresolved",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "discovered_routes",
+        "eligible_read_routes",
+        "planned",
+        "composed",
+        "excluded",
+        "blocked_on_evidence",
+        "out_of_scope",
+        "unresolved"
+      ],
+      "title": "ScopeSummary",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Typed source-route denominator shared by Core and the Engineer Skill.",
+  "properties": {
+    "discovery": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ScopeDiscovery"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "domains": {
+      "items": {
+        "$ref": "#/$defs/ScopeDomain"
+      },
+      "title": "Domains",
+      "type": "array"
+    },
+    "exclusion_rules": {
+      "items": {
+        "$ref": "#/$defs/ExclusionRule"
+      },
+      "title": "Exclusion Rules",
+      "type": "array"
+    },
+    "routes": {
+      "items": {
+        "$ref": "#/$defs/ScopeRoute"
+      },
+      "title": "Routes",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "#/$defs/ScopeSelection"
+    },
+    "summary": {
+      "$ref": "#/$defs/ScopeSummary"
+    }
+  },
+  "required": [
+    "schema_version",
+    "scope",
+    "domains",
+    "routes",
+    "summary"
+  ],
+  "title": "ScopeInventory",
+  "type": "object"
+}

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import os
 import secrets
 from collections.abc import Collection, Mapping
@@ -13,7 +15,7 @@ import httpx
 from pydantic import JsonValue, ValidationError
 from starlette.applications import Starlette
 
-from acc_core.models import PasswordBearerAuthConfig, Project
+from acc_core.models import PasswordBearerAuthConfig, load_project_document
 from acc_runtime.auth import AuthUnauthorizedError, PasswordBearerAuthStrategy
 from acc_runtime.auth.strategies import AsyncClientFactory
 from acc_runtime.context import PrincipalContext
@@ -24,11 +26,11 @@ from acc_runtime.gateway.app import (
 )
 from acc_runtime.gateway.audit import AuditCollector, AuditSink, LoggingAuditSink
 from acc_runtime.gateway.auth import GatewayPrincipalResolver, GatewayTokenVerifier
-from acc_runtime.gateway.models import GatewaySettings, SessionCreateResponse
+from acc_runtime.gateway.models import GatewayRuntimeInfo, GatewaySettings, SessionCreateResponse
 from acc_runtime.gateway.service import GatewaySessionService
 from acc_runtime.gateway.sessions import InMemoryGatewaySessionStore
 from acc_runtime.loader import load_pack
-from acc_runtime.mcp import PrincipalCapabilityMcpServer
+from acc_runtime.mcp import PrincipalCapabilityMcpServer, project_mcp_output_schema
 from acc_runtime.providers import HttpProvider
 
 if TYPE_CHECKING:
@@ -117,7 +119,7 @@ class _OwnedGatewayService:
 class GatewayRuntimeComposition:
     """One safe public handle for an assembled Gateway and its lifecycle."""
 
-    __slots__ = ("_owned_service", "_runtime", "app")
+    __slots__ = ("_owned_service", "_runtime", "_runtime_info", "app")
 
     def __init__(
         self,
@@ -125,10 +127,12 @@ class GatewayRuntimeComposition:
         app: Starlette,
         owned_service: _OwnedGatewayService,
         runtime: GenericRuntime,
+        runtime_info: GatewayRuntimeInfo,
     ) -> None:
         self.app = app
         self._owned_service = owned_service
         self._runtime = runtime
+        self._runtime_info = runtime_info
 
     def __repr__(self) -> str:
         return "GatewayRuntimeComposition(app=<protected>)"
@@ -138,10 +142,47 @@ class GatewayRuntimeComposition:
 
         return self._runtime.tools()
 
+    def runtime_info(self) -> GatewayRuntimeInfo:
+        """Return immutable, non-secret Pack and tool-schema attestation metadata."""
+
+        return self._runtime_info
+
     async def aclose(self) -> None:
         """Close resources if startup failed before ASGI lifespan entered."""
 
         await self._owned_service.aclose()
+
+
+def _tool_schema_sha256(tools: Collection[Mapping[str, object]]) -> str:
+    """Digest the public MCP tool-schema projection deterministically."""
+
+    schemas: list[dict[str, object]] = []
+    for tool in tools:
+        name = tool.get("name")
+        input_schema = tool.get("input_schema")
+        output_schema = tool.get("output_schema")
+        if (
+            not isinstance(name, str)
+            or not isinstance(input_schema, Mapping)
+            or not isinstance(output_schema, Mapping)
+        ):
+            raise TypeError("runtime tool metadata is invalid")
+        schemas.append(
+            {
+                "name": name,
+                "input_schema": dict(input_schema),
+                "output_schema": project_mcp_output_schema(name, output_schema),
+            }
+        )
+    schemas.sort(key=lambda item: str(item["name"]))
+    encoded = json.dumps(
+        schemas,
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def create_gateway_runtime(
@@ -163,7 +204,7 @@ def create_gateway_runtime(
 
     loaded = load_pack(pack_path)
     try:
-        project = Project.model_validate(loaded.ir.get("project"))
+        project = load_project_document(loaded.ir.get("project"))
     except ValidationError:
         raise RuntimeConfigurationError("compiled project contract is invalid") from None
     if project.runtime.transport != ["streamable_http"]:
@@ -207,6 +248,13 @@ def create_gateway_runtime(
         loaded_pack=loaded,
         audit_collector=collector,
     )
+    runtime_info = GatewayRuntimeInfo(
+        pack_sha256=loaded.verification.sha256,
+        project_id=loaded.manifest.project_id,
+        project_version=loaded.manifest.project_version,
+        tool_schema_sha256=_tool_schema_sha256(runtime.tools()),
+        transport="streamable_http",
+    )
     store = InMemoryGatewaySessionStore(
         max_sessions=settings.max_sessions,
         ttl_seconds=settings.session_ttl_seconds,
@@ -228,6 +276,7 @@ def create_gateway_runtime(
         service=owned_service,
         token_verifier=token_verifier,
         mcp_server=mcp_server,
+        runtime_info=runtime_info,
         max_request_body_size=max_request_body_size,
         mcp_session_idle_timeout_seconds=mcp_session_idle_timeout_seconds,
     )
@@ -235,6 +284,7 @@ def create_gateway_runtime(
         app=app,
         owned_service=owned_service,
         runtime=runtime,
+        runtime_info=runtime_info,
     )
 
 

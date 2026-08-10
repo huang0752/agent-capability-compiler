@@ -14,6 +14,18 @@ capabilities:
     runtime_only_inputs:
       - base_url_ref
       - provider_auth
+    quality:
+      selector_acquisition:
+        resource_id:
+          kind: resource_selector
+          acquisition: caller
+          resource_type: REPLACE_WITH_RESOURCE_TYPE
+          producers: []
+      empty_success_path: not_applicable
+      failure_isolation: fail_fast
+      output_budget:
+        max_bytes: 65536
+        long_text_disclosures: []
     policy: REPLACE_WITH_POLICY_ID
     evals:
       positive: replace_capability_positive

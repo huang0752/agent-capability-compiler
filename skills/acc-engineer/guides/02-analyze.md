@@ -15,6 +15,7 @@
 4. Evidence 使用文件与行号、JSON Pointer、OpenAPI Operation 或内容摘要，并记录稳定摘要值。 bundled capture 脚本的行号是 locator，digest 始终覆盖整个有界文件，与 `acc freeze` 一致。
 5. 将前端调用证据归一化为路由的 `usage_evidence_sources`（稳定文件 locator、OpenAPI 引用或 Evidence ID）；审计器只消费该字段，不解析 Vue、React 或其他前端框架源码。
 6. 将无法确认的内容标为未知，不补造接口、字段或权限。
+7. 把捕获的 Evidence 归一化为 `SourceContract`：分别记录 `request_schema`、`response_schema`、完整性和 JSON Pointer 级 `provenance`。合同、实现、测试和 observation 必须区分；observation 不能证明 `maxItems`、`maxLength` 等业务上界。
 
 ## 门禁
 
@@ -24,6 +25,7 @@
 - 事实、冲突和推测已明确分开。
 - 全局发现分母独立于 Evidence `--include` 列表，每条路由都有稳定 ID。
 - 前端已使用的路由均有非空、去重的 `usage_evidence_sources`，没有用前端扫描结果替代路由分母。
+- 每个候选 Operation 都有 SourceContract；Schema 约束能回溯到 provenance，证据冲突或未知没有被伪装成通过。
 
 ## 输出
 
@@ -31,6 +33,7 @@
 - `scope-inventory.yaml`
 - `analysis-report.md`
 - `evidence/`
+- `source-contracts/` 候选及 provenance ledger
 
 ## 停止条件
 

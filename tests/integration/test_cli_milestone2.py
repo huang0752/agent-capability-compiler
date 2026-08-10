@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import subprocess
@@ -17,7 +18,9 @@ import yaml
 from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
+from acc_core.cli.main import _parser
 from acc_core.packaging import verify_pack
+from acc_testkit.live import LiveGatewayReport, LiveStepResult, LiveStepStatus
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 ACC_CORE_SRC = REPOSITORY_ROOT / "packages" / "acc-core" / "src"
@@ -213,6 +216,40 @@ def test_milestone_two_cli_compiles_analyzes_packs_diffs_and_freezes(tmp_path: P
     assert runtime["command"] == "run"
     assert runtime["result"] == {
         "pack": str(pack_path.resolve()),
+        "scope_analysis": {
+            "deployment_scope_ceiling": [],
+            "summary": {"callable": 0, "conditional": 0, "denied": 1},
+            "capabilities": [
+                {
+                    "capability": "get_customer",
+                    "always_required": ["customer.read"],
+                    "conditionally_required": [],
+                    "all_referenced": ["customer.read"],
+                    "completion_alternatives": [["customer.read"]],
+                    "deployment": {
+                        "status": "denied",
+                        "available_scopes": [],
+                        "missing_always": ["customer.read"],
+                        "missing_conditional": [],
+                        "unmet_alternatives": [["customer.read"]],
+                    },
+                    "user": {
+                        "status": "unknown",
+                        "available_scopes": None,
+                        "missing_always": [],
+                        "missing_conditional": [],
+                        "unmet_alternatives": [],
+                    },
+                    "effective": {
+                        "status": "unknown",
+                        "available_scopes": None,
+                        "missing_always": [],
+                        "missing_conditional": [],
+                        "unmet_alternatives": [],
+                    },
+                }
+            ],
+        },
         "tools": [
             {
                 "description": "Get one visible customer.",
@@ -229,6 +266,10 @@ def test_milestone_two_cli_compiles_analyzes_packs_diffs_and_freezes(tmp_path: P
         ],
         "transport": "stdio",
     }
+    assert [item["code"] for item in runtime["diagnostics"]] == [
+        "ACC_RUN_SCOPE_CEILING_EMPTY",
+        "ACC_RUN_CAPABILITY_SCOPE_DENIED",
+    ]
 
     before = (project / "operations" / "crm.get_customer.yaml").read_text(encoding="utf-8")
     frozen = _payload(_run_acc("freeze", "crm.get_customer", "--json", cwd=project))
@@ -245,6 +286,232 @@ def test_run_reports_pack_failures_as_stable_json(tmp_path: Path) -> None:
     payload = json.loads(completed.stdout)
     assert payload["ok"] is False
     assert payload["diagnostics"][0]["code"] == "ACC_RUNTIME_PACK_VERIFICATION_FAILED"
+
+
+def _live_profile(pack_sha256: str) -> dict[str, object]:
+    return {
+        "attestation": {
+            "pack_sha256": pack_sha256,
+            "project_id": "example-crm",
+            "project_version": "0.1.0",
+            "tool_schema_sha256": "b" * 64,
+        },
+        "accounts": [
+            {
+                "alias": "a",
+                "identity": {"env": "LIVE_A_IDENTITY"},
+                "password": {"env": "LIVE_A_PASSWORD"},
+            },
+            {
+                "alias": "b",
+                "identity": {"env": "LIVE_B_IDENTITY"},
+                "password": {"env": "LIVE_B_PASSWORD"},
+            },
+        ],
+        "cases": [
+            {
+                "id": "generic-read",
+                "account": "a",
+                "tool": "records.current",
+                "arguments": {},
+            }
+        ],
+        "isolation": {
+            "accounts": ["a", "b"],
+            "tool": "records.current",
+            "arguments": {},
+            "expected_structured_content": {
+                "a": {"result": {"owner": "a"}},
+                "b": {"result": {"owner": "b"}},
+            },
+        },
+    }
+
+
+def _live_arguments(
+    pack_path: Path,
+    profile_path: Path,
+    *,
+    gateway_url: str = "http://127.0.0.1:8765",
+    allow_source_connect: bool = True,
+    allowed_gateway_host: str | None = None,
+) -> argparse.Namespace:
+    arguments = [
+        "test",
+        "live",
+        str(pack_path),
+        "--gateway-url",
+        gateway_url,
+        "--profile",
+        str(profile_path),
+        "--json",
+    ]
+    if allow_source_connect:
+        arguments.append("--allow-source-connect")
+    if allowed_gateway_host is not None:
+        arguments.extend(["--allowed-gateway-host", allowed_gateway_host])
+    return _parser().parse_args(arguments)
+
+
+def _make_live_pack_and_profile(tmp_path: Path) -> tuple[Path, Path]:
+    project = _make_project(tmp_path)
+    packed = _payload(_run_acc("pack", "--output", "live.accpkg", "--json", cwd=project))
+    pack_path = Path(packed["result"]["path"])
+    profile_path = project / "live-tests.yaml"
+    _write_yaml(profile_path, _live_profile(verify_pack(pack_path).sha256))
+    return pack_path, profile_path
+
+
+def test_live_cli_requires_explicit_source_connection_authorization(tmp_path: Path) -> None:
+    pack_path, profile_path = _make_live_pack_and_profile(tmp_path)
+
+    arguments = _live_arguments(
+        pack_path,
+        profile_path,
+        allow_source_connect=False,
+    )
+    exit_code, envelope = arguments.handler(arguments)
+
+    assert exit_code == 5
+    assert envelope.ok is False
+    assert envelope.diagnostics[0].code == "ACC_LIVE_SOURCE_CONNECT_NOT_ALLOWED"
+
+
+@pytest.mark.parametrize(
+    "gateway_url",
+    [
+        "http://user:password@127.0.0.1:8765",
+        "http://127.0.0.1:8765?token=private",
+        "http://127.0.0.1:8765/#private",
+    ],
+)
+def test_live_cli_rejects_secret_bearing_or_ambiguous_gateway_urls(
+    tmp_path: Path,
+    gateway_url: str,
+) -> None:
+    pack_path, profile_path = _make_live_pack_and_profile(tmp_path)
+
+    arguments = _live_arguments(pack_path, profile_path, gateway_url=gateway_url)
+    exit_code, envelope = arguments.handler(arguments)
+
+    assert exit_code == 5
+    assert envelope.diagnostics[0].code == "ACC_LIVE_GATEWAY_URL_INVALID"
+
+
+def test_live_cli_requires_exact_allowlist_for_non_loopback_gateway(tmp_path: Path) -> None:
+    pack_path, profile_path = _make_live_pack_and_profile(tmp_path)
+
+    arguments = _live_arguments(
+        pack_path,
+        profile_path,
+        gateway_url="https://gateway.example.test:8443",
+    )
+    exit_code, envelope = arguments.handler(arguments)
+
+    assert exit_code == 5
+    assert envelope.diagnostics[0].code == "ACC_LIVE_GATEWAY_NOT_ALLOWED"
+
+
+def test_live_cli_json_missing_profile_secret_is_a_stable_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pack_path, profile_path = _make_live_pack_and_profile(tmp_path)
+    monkeypatch.delenv("LIVE_A_IDENTITY", raising=False)
+    monkeypatch.delenv("LIVE_A_PASSWORD", raising=False)
+    monkeypatch.delenv("LIVE_B_IDENTITY", raising=False)
+    monkeypatch.delenv("LIVE_B_PASSWORD", raising=False)
+
+    arguments = _live_arguments(
+        pack_path,
+        profile_path,
+        gateway_url="https://gateway.example.test:8443",
+        allowed_gateway_host="gateway.example.test:8443",
+    )
+    exit_code, envelope = arguments.handler(arguments)
+
+    assert exit_code == 5
+    assert envelope.ok is False
+    assert envelope.diagnostics[0].code == "ACC_LIVE_SECRET_MISSING"
+
+
+def test_live_cli_invokes_runner_and_returns_structured_verification_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pack_path, profile_path = _make_live_pack_and_profile(tmp_path)
+    for name in (
+        "LIVE_A_IDENTITY",
+        "LIVE_A_PASSWORD",
+        "LIVE_B_IDENTITY",
+        "LIVE_B_PASSWORD",
+    ):
+        monkeypatch.setenv(name, f"{name}-private")
+    expected = LiveGatewayReport.from_steps(
+        [
+            LiveStepResult(
+                id="runtime.attestation",
+                required=True,
+                status=LiveStepStatus.PASSED,
+            )
+        ],
+        pack_sha256=verify_pack(pack_path).sha256,
+    )
+    called: list[str] = []
+
+    async def fake_execute(profile: object, environment: object) -> LiveGatewayReport:
+        del environment
+        called.append(type(profile).__name__)
+        return expected
+
+    monkeypatch.setattr("acc_core.cli.live._execute_live_profile", fake_execute)
+    arguments = _live_arguments(pack_path, profile_path)
+    exit_code, envelope = arguments.handler(arguments)
+
+    assert exit_code == 0
+    assert envelope.ok is True
+    assert envelope.command == "test live"
+    assert envelope.result == expected.model_dump(mode="json")
+    assert called == ["LiveGatewayProfile"]
+
+
+def test_live_cli_unverified_report_is_a_failed_envelope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pack_path, profile_path = _make_live_pack_and_profile(tmp_path)
+    for name in (
+        "LIVE_A_IDENTITY",
+        "LIVE_A_PASSWORD",
+        "LIVE_B_IDENTITY",
+        "LIVE_B_PASSWORD",
+    ):
+        monkeypatch.setenv(name, f"{name}-private")
+    expected = LiveGatewayReport.from_steps(
+        [
+            LiveStepResult(
+                id="runtime.attestation",
+                required=True,
+                status=LiveStepStatus.FAILED,
+            )
+        ],
+        pack_sha256=verify_pack(pack_path).sha256,
+    )
+
+    async def fake_execute(profile: object, environment: object) -> LiveGatewayReport:
+        del profile, environment
+        return expected
+
+    monkeypatch.setattr("acc_core.cli.live._execute_live_profile", fake_execute)
+    arguments = _live_arguments(pack_path, profile_path)
+
+    exit_code, envelope = arguments.handler(arguments)
+
+    assert exit_code == 5
+    assert envelope.ok is False
+    assert envelope.result is None
+    assert envelope.diagnostics[0].code == "ACC_LIVE_VERIFICATION_INCOMPLETE"
+    assert envelope.diagnostics[0].severity == "error"
 
 
 def test_run_inspects_streamable_http_gateway_without_starting_server(tmp_path: Path) -> None:
@@ -507,7 +774,16 @@ async def test_run_serves_real_mcp_stdio_tool_listing(tmp_path: Path) -> None:
 
     assert initialized.serverInfo.name == "acc-runtime"
     assert [tool.name for tool in result.tools] == ["get_customer"]
-    assert error_output == ""
+    assert error_output.splitlines() == [
+        (
+            "ACC_RUN_SCOPE_CEILING_EMPTY: The deployment scope ceiling is empty while the Pack "
+            "declares scoped capabilities."
+        ),
+        (
+            "ACC_RUN_CAPABILITY_SCOPE_DENIED: Capability get_customer has no callable path under "
+            "the deployment scope ceiling."
+        ),
+    ]
 
 
 def test_compile_refuses_to_overwrite_project_contracts(tmp_path: Path) -> None:

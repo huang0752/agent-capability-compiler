@@ -94,6 +94,7 @@ def test_openai_metadata_and_platform_wrappers_delegate_to_the_single_harness() 
     interface = metadata["interface"]
     assert interface["display_name"] == "ACC Engineer"
     assert 25 <= len(interface["short_description"]) <= 64
+    assert "read-only" not in interface["short_description"]
     assert "$acc-engineer" in interface["default_prompt"]
 
     command_files = sorted((ROOT / "integrations" / "claude-code" / "commands").glob("*.md"))
@@ -308,6 +309,106 @@ def test_skill_workflow_enforces_provider_auth_and_trusted_context_contracts() -
 
     assert "Operation 级 `credential_ref` 只用于 legacy `stdio`" in workflow
     assert "Agent 输入" in workflow
+
+
+def test_skill_requires_evidence_backed_quality_contracts_without_tool_count_bias() -> None:
+    skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+    harness = (SKILL / "HARNESS.md").read_text(encoding="utf-8")
+    analyze = (SKILL / "guides" / "02-analyze.md").read_text(encoding="utf-8")
+    implement = (SKILL / "guides" / "05-implement.md").read_text(encoding="utf-8")
+    refine = (SKILL / "guides" / "08-refine.md").read_text(encoding="utf-8")
+    workflow = "\n".join((skill, harness, analyze, implement, refine))
+
+    for contract in (
+        "SourceContract",
+        "provenance",
+        "request_schema",
+        "response_schema",
+        "Operation 输入",
+        "Operation 输出",
+        "Capability 输出",
+        "可证明",
+    ):
+        assert contract in workflow
+
+    assert "一接口一工具不是天然缺陷" in workflow
+    assert "工具数量" in refine
+
+
+def test_plan_requires_constructible_selectors_empty_paths_failure_isolation_and_budgets() -> None:
+    harness = (SKILL / "HARNESS.md").read_text(encoding="utf-8")
+    plan_guide = (SKILL / "guides" / "04-plan.md").read_text(encoding="utf-8")
+    plan = _yaml(SKILL / "templates" / "capability-plan.yaml")
+    workflow = "\n".join((harness, plan_guide))
+
+    for contract in (
+        "selector acquisition",
+        "empty success path",
+        "failure isolation",
+        "output budget",
+    ):
+        assert contract in workflow
+
+    quality = plan["capabilities"][0]["quality"]
+    assert quality["selector_acquisition"] == {
+        "resource_id": {
+            "kind": "resource_selector",
+            "acquisition": "caller",
+            "resource_type": "REPLACE_WITH_RESOURCE_TYPE",
+            "producers": [],
+        }
+    }
+    assert quality["empty_success_path"] == "not_applicable"
+    assert quality["failure_isolation"] == "fail_fast"
+    assert quality["output_budget"] == {
+        "max_bytes": 65536,
+        "long_text_disclosures": [],
+    }
+
+
+def test_coverage_and_validation_guidance_use_independent_v2_axes_and_three_levels() -> None:
+    skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+    validate = (SKILL / "guides" / "06-validate.md").read_text(encoding="utf-8")
+    test_guide = (SKILL / "guides" / "07-test.md").read_text(encoding="utf-8")
+    refine = (SKILL / "guides" / "08-refine.md").read_text(encoding="utf-8")
+    handoff = (SKILL / "guides" / "09-handoff.md").read_text(encoding="utf-8")
+    coverage = "\n".join((validate, refine, handoff))
+    validation = "\n".join((test_guide, handoff))
+
+    for axis in (
+        "route_disposition",
+        "operation_trace",
+        "scenario_coverage",
+        "constructability",
+        "discoverability_graph",
+        "composition",
+        "schema_fidelity",
+        "output_budget",
+        "live_observations",
+    ):
+        assert axis in coverage
+    assert "不生成总分" in coverage
+    assert "acc coverage --version 2 --json" in skill
+    for level in (
+        "offline_candidate",
+        "gateway_offline_verified",
+        "source_connected_verified",
+    ):
+        assert level in validation
+
+
+def test_skill_keeps_v1_read_only_and_requires_action_lifecycle_in_v2() -> None:
+    skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+    harness = (SKILL / "HARNESS.md").read_text(encoding="utf-8")
+    plan = (SKILL / "guides" / "04-plan.md").read_text(encoding="utf-8")
+    implement = (SKILL / "guides" / "05-implement.md").read_text(encoding="utf-8")
+    test_guide = (SKILL / "guides" / "07-test.md").read_text(encoding="utf-8")
+    workflow = "\n".join((skill, harness, plan, implement, test_guide))
+
+    assert "v1" in workflow and "只读" in workflow
+    assert "prepare → approve → commit → status" in workflow
+    assert "不得简单放开 POST" in workflow
+    assert "隔离沙箱" in workflow
 
 
 def test_installers_copy_thin_integrations_and_refuse_overwrite(tmp_path: Path) -> None:

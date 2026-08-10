@@ -340,6 +340,7 @@ class _Harness:
     http: httpx.AsyncClient
     composition: GatewayRuntimeComposition
     audit: MemoryAuditSink
+    pack_sha256: str
 
 
 @asynccontextmanager
@@ -378,7 +379,7 @@ async def _gateway_harness(
             headers={"origin": "http://gateway.test"},
         ) as http,
     ):
-        yield _Harness(transport, http, composition, audit)
+        yield _Harness(transport, http, composition, audit, pack.sha256)
 
 
 async def _login(http: httpx.AsyncClient, identity: str) -> SecretValue:
@@ -430,6 +431,25 @@ async def test_baogao_jin_auth_shape_offline_candidate_isolates_a_b_c(
     with _fake_source(state) as source_url:
         async with _gateway_harness(project, source_url) as harness:
             tokens = [await _login(harness.http, identity) for identity in PASSWORDS]
+            runtime_info = harness.composition.runtime_info()
+            runtime_info_response = await harness.http.get(
+                "/runtime/info",
+                headers={"authorization": f"Bearer {tokens[0].get_secret_value()}"},
+            )
+            assert runtime_info_response.status_code == 200
+            assert runtime_info_response.json() == runtime_info.model_dump(mode="json")
+            assert runtime_info.pack_sha256 == harness.pack_sha256
+            assert runtime_info.project_id == PROJECT_ID
+            assert runtime_info.project_version == "0.1.0"
+            assert runtime_info.transport == "streamable_http"
+            assert set(runtime_info_response.json()) == {
+                "pack_sha256",
+                "project_id",
+                "project_version",
+                "tool_schema_sha256",
+                "transport",
+            }
+            _secret_scan(runtime_info_response.content, tokens)
             clients = [
                 McpStreamableHttpTestClient(
                     "http://gateway.test/mcp", token, transport=harness.transport

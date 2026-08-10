@@ -12,7 +12,9 @@ ACC 面向已有业务系统。为了接入 Agent 而修改原系统代码、认
 
 原系统源码目录在整个 ACC 工程阶段一律视为只读。ACC Engineer Skill、工具和流程不得修改或提交原系统文件，不得添加 Controller、MCP 或 Agent SDK，也不得修改数据库和认证逻辑。
 
-所有生成的 System Map、Evidence、Operation、Capability、Policy、Eval、Adapter 和报告都写入独立 ACC 项目目录。Runtime 仅通过原系统已有 REST API，或独立部署的旁路 Adapter，按原系统权限和 ACC Policy 访问数据。第一版只允许只读能力，不执行生产写入。
+所有生成的 System Map、Evidence、SourceContract、Operation、CapabilityQuality、Capability、Policy、Eval、Adapter 和报告都写入独立 ACC 项目目录。Runtime 仅通过原系统已有 REST API，或独立部署的旁路 Adapter，按原系统权限和 ACC Policy 访问数据。第一版只允许只读能力，不执行生产写入。
+
+v2 Action 不改变源码零侵入原则：它只能调用已有且有 Evidence 的源 API，并受 [ADR 007](007-versioned-quality-and-action-safety.md) 的默认拒绝状态机约束。当前没有生产 durable Action 实现，因此不能由模型或合同存在推导出生产写入能力。
 
 ## Consequences
 

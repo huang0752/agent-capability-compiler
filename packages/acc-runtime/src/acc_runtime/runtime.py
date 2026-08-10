@@ -16,6 +16,8 @@ from jsonschema import Draft202012Validator
 from pydantic import JsonValue, ValidationError
 
 from acc_core.models import (
+    ActionCapabilityV2,
+    ActionOperationV2,
     BearerSecretAuthConfig,
     Capability,
     NoAuthConfig,
@@ -23,7 +25,11 @@ from acc_core.models import (
     PasswordBearerAuthConfig,
     Policy,
     Project,
+    ProjectV2,
+    ReadCapabilityV2,
+    ReadOperationV2,
 )
+from acc_core.quality.output_size import canonical_json_bytes
 from acc_runtime.auth import (
     BearerSecretAuthStrategy,
     EnvironmentCredentialSource,
@@ -120,7 +126,7 @@ class _PolicyOperationCaller:
         arguments: Mapping[str, JsonValue],
     ) -> JsonValue:
         try:
-            definition = Operation.model_validate(operation)
+            definition = _load_operation(operation)
         except ValidationError:
             raise RuntimeConfigurationError(
                 "compiled operation is invalid",
@@ -242,7 +248,7 @@ class GenericRuntime:
         loaded = load_pack(pack_path)
         project_value = loaded.ir.get("project")
         try:
-            project = Project.model_validate(project_value)
+            project = _load_project_document(project_value)
         except ValidationError:
             raise RuntimeConfigurationError("compiled project contract is invalid") from None
         principal_context = _stdio_principal_context(
@@ -269,13 +275,34 @@ class GenericRuntime:
         runtime._owned_auth_strategy = auth_strategy
         return runtime
 
-    def _load_project(self) -> Project:
-        try:
-            return Project.model_validate(self.ir.get("project"))
-        except ValidationError:
-            raise RuntimeConfigurationError("compiled project contract is invalid") from None
+    def _load_project(self) -> Project | ProjectV2:
+        return _load_project_document(self.ir.get("project"))
 
-    def _capability(self, capability_id: str) -> Capability:
+    def _capability(self, capability_id: str) -> Capability | ReadCapabilityV2:
+        compiled = self._compiled_capability(capability_id)
+        definition = compiled.get("definition")
+        try:
+            if isinstance(definition, Mapping) and definition.get("schema_version") == "2":
+                if definition.get("kind") == "action":
+                    action = ActionCapabilityV2.model_validate(definition)
+                    raise RuntimeConfigurationError(
+                        "Action capability requires the Action lifecycle",
+                        details={
+                            "capability_id": action.id,
+                            "reason": "action_lifecycle_required",
+                        },
+                    )
+                return ReadCapabilityV2.model_validate(definition)
+            return Capability.model_validate(definition)
+        except RuntimeConfigurationError:
+            raise
+        except ValidationError:
+            raise RuntimeConfigurationError(
+                "compiled capability is invalid",
+                details={"capability_id": capability_id},
+            ) from None
+
+    def _compiled_capability(self, capability_id: str) -> Mapping[str, Any]:
         capabilities = self.ir.get("capabilities")
         if not isinstance(capabilities, Mapping):
             raise RuntimeConfigurationError("compiled capabilities are missing")
@@ -286,13 +313,7 @@ class GenericRuntime:
                 "capability is not present in the loaded pack",
                 details={"capability_id": capability_id},
             )
-        try:
-            return Capability.model_validate(compiled.get("definition"))
-        except ValidationError:
-            raise RuntimeConfigurationError(
-                "compiled capability is invalid",
-                details={"capability_id": capability_id},
-            ) from None
+        return compiled
 
     def _policy(self, policy_id: str) -> Policy:
         policies = self.ir.get("policies")
@@ -314,6 +335,17 @@ class GenericRuntime:
         for capability_id in sorted(capabilities):
             if not isinstance(capability_id, str):
                 raise RuntimeConfigurationError("capability ids must be strings")
+            compiled = capabilities.get(capability_id)
+            definition = compiled.get("definition") if isinstance(compiled, Mapping) else None
+            if (
+                isinstance(definition, Mapping)
+                and definition.get("schema_version") == "2"
+                and definition.get("kind") == "action"
+            ):
+                # Action capabilities are projected only by the explicit lifecycle
+                # runtime.  Keeping them out of the read surface prevents a mixed
+                # Pack from breaking or accidentally enabling mutations.
+                continue
             capability = self._capability(capability_id)
             tools.append(
                 {
@@ -476,6 +508,32 @@ class GenericRuntime:
                     "schema_role": "filtered_capability_output",
                 },
             )
+        compiled = self._compiled_capability(capability_id)
+        quality = compiled.get("quality")
+        if isinstance(quality, Mapping) and self.ir.get("ir_version") == "2":
+            limit = quality.get("max_output_bytes")
+            if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
+                raise RuntimeConfigurationError(
+                    "compiled output budget is invalid",
+                    details={"capability_id": capability_id, "reason": "output_budget_invalid"},
+                )
+            try:
+                actual_bytes = len(canonical_json_bytes(filtered))
+            except (TypeError, ValueError):
+                raise RuntimeConfigurationError(
+                    "capability output could not be encoded",
+                    details={"capability_id": capability_id, "reason": "output_encoding_invalid"},
+                ) from None
+            if actual_bytes > limit:
+                raise ExecutionError(
+                    "ACC_RUNTIME_CAPABILITY_OUTPUT_TOO_LARGE",
+                    "capability output exceeded its declared budget",
+                    details={
+                        "capability_id": capability_id,
+                        "actual_bytes": actual_bytes,
+                        "limit_bytes": limit,
+                    },
+                )
         return filtered
 
     async def aclose(self) -> None:
@@ -548,6 +606,38 @@ class GenericRuntime:
         _raise_runtime_failure(failure)
 
 
+def _load_project_document(value: object) -> Project | ProjectV2:
+    try:
+        if isinstance(value, Mapping) and value.get("schema_version") == "2":
+            return ProjectV2.model_validate(value)
+        return Project.model_validate(value)
+    except ValidationError:
+        raise RuntimeConfigurationError("compiled project contract is invalid") from None
+
+
+def _load_operation(value: Mapping[str, object]) -> Operation | ReadOperationV2:
+    try:
+        if value.get("schema_version") == "2":
+            if value.get("kind") == "action":
+                action = ActionOperationV2.model_validate(value)
+                raise RuntimeConfigurationError(
+                    "Action operation requires the Action lifecycle",
+                    details={
+                        "operation_id": action.id,
+                        "reason": "action_lifecycle_required",
+                    },
+                )
+            return ReadOperationV2.model_validate(value)
+        return Operation.model_validate(value)
+    except RuntimeConfigurationError:
+        raise
+    except ValidationError:
+        raise RuntimeConfigurationError(
+            "compiled operation is invalid",
+            details={"operation_id": str(value.get("id", "unknown"))},
+        ) from None
+
+
 def _field_path(field: str) -> tuple[str, ...]:
     value = field[2:] if field.startswith("$.") else field
     if value.startswith("/"):
@@ -605,7 +695,7 @@ def _legacy_tenant_id(context: PrincipalContext) -> JsonValue | None:
 
 
 def _stdio_principal_context(
-    project: Project,
+    project: Project | ProjectV2,
     *,
     environment: Mapping[str, str] | None,
     granted_scopes: Collection[str],
@@ -626,7 +716,7 @@ def _stdio_principal_context(
 
 
 def _auth_strategy_from_project(
-    project: Project,
+    project: Project | ProjectV2,
     *,
     environment: Mapping[str, str] | None,
 ) -> HttpAuthStrategy | None:
@@ -664,7 +754,7 @@ def _auth_strategy_from_project(
 
 
 def _authentication_base_url(
-    project: Project,
+    project: Project | ProjectV2,
     environment: Mapping[str, str] | None,
 ) -> str:
     source = os.environ if environment is None else environment

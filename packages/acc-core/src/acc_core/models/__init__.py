@@ -663,8 +663,26 @@ _RECURSIVE_MODELS = (
 for _model in _RECURSIVE_MODELS:
     _model.model_rebuild(_types_namespace={"WorkflowStep": WorkflowStep})
 
+from acc_core.models.v2 import (  # noqa: E402  # import after v1 recursive model rebuild
+    ActionCapabilityV2,
+    ActionContractV2,
+    ActionOperationV2,
+    ApprovalContractV2,
+    CapabilityV2,
+    OperationV2,
+    ProjectDocument,
+    ProjectV2,
+    QualityProfileV2,
+    ReadCapabilityV2,
+    ReadOperationV2,
+    load_project_document,
+)
 
 __all__ = [
+    "ActionCapabilityV2",
+    "ActionContractV2",
+    "ActionOperationV2",
+    "ApprovalContractV2",
     "AssertAction",
     "AssertStep",
     "BearerSecretAuthConfig",
@@ -673,6 +691,7 @@ __all__ = [
     "CallAction",
     "CallStep",
     "Capability",
+    "CapabilityV2",
     "ContextBindingReference",
     "EmitAction",
     "EmitStep",
@@ -692,6 +711,7 @@ __all__ = [
     "NoAuthConfig",
     "Operation",
     "OperationSafety",
+    "OperationV2",
     "ParallelStep",
     "PasswordBearerAuthConfig",
     "PasswordBearerCredentials",
@@ -699,9 +719,14 @@ __all__ = [
     "PickStep",
     "Policy",
     "Project",
+    "ProjectDocument",
     "ProjectIdentity",
+    "ProjectV2",
     "ProviderAuthConfig",
     "ProviderConfig",
+    "QualityProfileV2",
+    "ReadCapabilityV2",
+    "ReadOperationV2",
     "RedactAction",
     "RedactStep",
     "RedactionRule",
@@ -710,4 +735,5 @@ __all__ = [
     "StrictModel",
     "TenantContextBindingReference",
     "WorkflowStep",
+    "load_project_document",
 ]
