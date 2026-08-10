@@ -46,11 +46,11 @@ prepare -> approve -> commit -> status
 
 ## Current implementation boundary
 
-当前实现已包含单一格式模型、Schema、项目 sidecar 校验、Schema fidelity、Capability quality、基础质量轴与十个交互轴 Coverage、Scope callability、Action 编译证明、部署策略、直接 Runtime Action Coordinator、开发/测试内存 Store 和 Live Gateway 测试基础。
+当前实现已包含单一格式模型、Schema、项目 sidecar 校验、Schema fidelity、Capability quality、基础质量轴与十个交互轴 Coverage、Scope callability、Action 编译证明、部署策略、Runtime Action Coordinator、开发/测试内存 Store 和 Live Gateway 测试基础。
 
 跨行业 fixture 以完整的当前格式 Project、Operation、Capability、Policy、Eval、SourceContract、CapabilityQuality、Scope 和 UI 合同运行 fidelity analyzer、compiler 与 Coverage，证明同一平台中立合同可表达 CRM list→detail、ERP 共享标识与真实 Action Capability 生命周期声明、独立 selector、单 job 监控、长文本展示、增长列表和纯客户端交互。它们使用受控 client artifact Evidence，不代表这些行业的生产客户端、权限源或线上数据已经验证。
 
-普通 Generic Runtime/MCP 工具面仍拒绝 Action 并要求专用生命周期；尚无生产 durable Action Store、可信审批签发服务或集中审计后端。Action 的 MCP/CLI 接线和生产部署门禁仍是后续工作。因此当前已完成发布门禁并稳定对 Agent 暴露的执行面仍是 Read Capability，不能宣称生产 Action 运行链路已完成。
+普通 Generic Runtime 的 `tools()`/`call()` 仍拒绝 Action。多用户 Gateway 只从当前已验证 Pack、同一 Provider 和显式 Action 部署依赖构造 Coordinator；允许的 Action 以业务专属 prepare 工具加通用 approve/commit/status 工具暴露，且绑定 Principal、Gateway session、Pack、审批、并发令牌和审计。官方 MCP SDK 已完成 Fake Source 下的多用户离线生命周期验证。仓库仍未提供生产 durable Action Store、可信审批签发服务或集中审计后端，因此这证明 `gateway_offline_verified`，不等于生产 Action 已发布或真实业务写入已验证。
 
 ## Consequences
 

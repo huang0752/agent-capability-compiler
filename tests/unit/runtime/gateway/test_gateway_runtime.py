@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from pydantic import JsonValue
@@ -19,6 +19,7 @@ from acc_runtime.gateway.runtime import (
     _tool_schema_sha256,
     create_gateway_runtime,
 )
+from acc_runtime.gateway.service import GatewaySessionService
 from acc_runtime.runtime import GenericRuntime
 
 
@@ -72,6 +73,57 @@ class _Service:
         self.marked.append(session_id)
         if self.failure is not None:
             raise self.failure
+
+
+class _CloseCounter:
+    def __init__(self) -> None:
+        self.close_calls = 0
+
+    async def aclose(self) -> None:
+        self.close_calls += 1
+
+
+class _StoreCloseCounter:
+    def __init__(self) -> None:
+        self.close_calls = 0
+
+    async def close(self) -> tuple[()]:
+        self.close_calls += 1
+        return ()
+
+
+@pytest.mark.asyncio
+async def test_owned_gateway_closes_transferred_action_store_exactly_once() -> None:
+    service = _CloseCounter()
+    runtime = _CloseCounter()
+    store = _StoreCloseCounter()
+    owned = _OwnedGatewayService(
+        cast(GatewaySessionService, service),
+        cast(GenericRuntime, runtime),
+        action_store=cast(Any, store),
+    )
+
+    await owned.aclose()
+    await owned.aclose()
+
+    assert service.close_calls == 1
+    assert runtime.close_calls == 1
+    assert store.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_owned_read_only_gateway_has_no_action_store_lifecycle() -> None:
+    service = _CloseCounter()
+    runtime = _CloseCounter()
+    owned = _OwnedGatewayService(
+        cast(GatewaySessionService, service), cast(GenericRuntime, runtime)
+    )
+
+    await owned.aclose()
+    await owned.aclose()
+
+    assert service.close_calls == 1
+    assert runtime.close_calls == 1
 
 
 def test_tool_schema_sha256_is_canonical_and_ignores_presentation_metadata() -> None:

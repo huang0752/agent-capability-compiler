@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import traceback
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import cast
 
 import pytest
+from mcp.server.auth.provider import AccessToken
 from pydantic import JsonValue
 
 from acc_core.compiler.actions import ActionProof
@@ -33,6 +35,7 @@ from acc_runtime.actions.coordinator import (
 from acc_runtime.actions.errors import ActionExpiredError
 from acc_runtime.context import PrincipalContext
 from acc_runtime.deployment import DeploymentPolicy
+from acc_runtime.mcp import PrincipalCapabilityMcpServer
 
 PACK_DIGEST = "sha256:" + "a" * 64
 OTHER_PACK_DIGEST = "sha256:" + "b" * 64
@@ -190,6 +193,352 @@ def _coordinator(
         executor=selected_executor,
         idempotency_key_generator=lambda: "idem-private-value",
     )
+
+
+class _McpReadRuntime:
+    def tools(self) -> list[dict[str, object]]:
+        return [
+            {
+                "name": "orders.get",
+                "input_schema": {"type": "object", "additionalProperties": False},
+                "output_schema": {"type": "object"},
+            }
+        ]
+
+    def interaction_manifest(self) -> dict[str, JsonValue]:
+        return {
+            "schema_version": "2",
+            "digest": "a" * 64,
+            "inventory": {"status": "not_declared"},
+            "contracts": {},
+            "dependencies": [],
+        }
+
+    async def call_with_context(
+        self,
+        capability_id: str,
+        arguments: Mapping[str, JsonValue],
+        principal_context: PrincipalContext,
+    ) -> JsonValue:
+        del capability_id, arguments, principal_context
+        return None
+
+
+class _McpResolver:
+    async def resolve(self, access_token: AccessToken | None = None) -> PrincipalContext:
+        if access_token is None or access_token.subject is None:
+            raise AssertionError("test access token is required")
+        principal = access_token.subject
+        return _principal(principal, session_id=f"session-{principal}")
+
+
+def _mcp_access(principal: str) -> AccessToken:
+    return AccessToken(
+        token=f"opaque-{principal}",
+        client_id="orders-system",
+        scopes=["orders.read", "orders.write"],
+        subject=principal,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool_name",
+    ["acc_action_approve", "acc_action_commit", "acc_action_status"],
+)
+async def test_read_only_mcp_rejects_unpublished_action_tools_as_not_found(
+    tool_name: str,
+) -> None:
+    adapter = PrincipalCapabilityMcpServer(_McpReadRuntime(), resolver=_McpResolver())
+
+    response = await adapter.call_tool(
+        tool_name,
+        {"action_handle": "private-handle"},
+        access_token=_mcp_access("user-a"),
+    )
+
+    assert response.isError is True
+    assert response.structuredContent == {
+        "error": {
+            "code": "ACC_RUNTIME_ACTION_TOOL_UNAVAILABLE",
+            "status": 404,
+            "details": {},
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_action_mcp_direct_invalid_lifecycle_arguments_are_client_error() -> None:
+    adapter = PrincipalCapabilityMcpServer(
+        _McpReadRuntime(), resolver=_McpResolver(), action_coordinator=_coordinator()
+    )
+
+    response = await adapter.call_tool(
+        "acc_action_approve",
+        {"action_handle": "private-handle"},
+        access_token=_mcp_access("user-a"),
+    )
+
+    assert response.isError is True
+    assert response.structuredContent == {
+        "error": {
+            "code": "ACC_RUNTIME_ACTION_INPUT_INVALID",
+            "status": 400,
+            "details": {},
+        }
+    }
+
+
+def test_action_mcp_lists_only_fixed_lifecycle_tools_and_safe_manifest() -> None:
+    adapter = PrincipalCapabilityMcpServer(
+        _McpReadRuntime(),
+        resolver=_McpResolver(),
+        action_coordinator=_coordinator(),
+    )
+
+    tools = {tool.name: tool for tool in adapter.list_tools()}
+    resources = {str(resource.uri) for resource in adapter.list_resources()}
+    manifest = json.loads(str(adapter.read_resource("acc://actions/v2/manifest")[0].content))
+
+    assert set(tools) == {
+        "orders.get",
+        "orders.update.prepare",
+        "acc_action_approve",
+        "acc_action_commit",
+        "acc_action_status",
+    }
+    assert "orders.update" not in tools
+    assert tools["acc_action_commit"].annotations is not None
+    assert tools["acc_action_commit"].annotations.destructiveHint is True
+    assert tools["acc_action_commit"].annotations.idempotentHint is True
+    assert tools["acc_action_status"].annotations is not None
+    assert tools["acc_action_status"].annotations.readOnlyHint is True
+    assert "acc://actions/v2/manifest" in resources
+    assert manifest == {
+        "schema_version": "2",
+        "pack_digest": PACK_DIGEST,
+        "capabilities": [
+            {
+                "approval_required": True,
+                "capability_id": "orders.update",
+                "effects": ["update"],
+                "input_schema": _capability().input_schema,
+                "maximum_risk": "medium",
+                "proof_digest": CompiledActionDefinition(
+                    capability=_capability(), proof=_proof()
+                ).proof_digest,
+                "title": "Update order",
+            }
+        ],
+    }
+    serialized = json.dumps(manifest, sort_keys=True)
+    assert "mutation_operation_ids" not in serialized
+    assert "evidence" not in serialized
+    assert "policy" not in serialized
+
+
+def test_action_mcp_rejects_read_tool_name_collision_with_lifecycle() -> None:
+    class CollidingRuntime(_McpReadRuntime):
+        def tools(self) -> list[dict[str, object]]:
+            tools = super().tools()
+            tools[0]["name"] = "orders.update.prepare"
+            return tools
+
+    adapter = PrincipalCapabilityMcpServer(
+        CollidingRuntime(), resolver=_McpResolver(), action_coordinator=_coordinator()
+    )
+
+    with pytest.raises(TypeError, match="Action lifecycle tool name collision"):
+        adapter.list_tools()
+
+
+def test_action_mcp_lifecycle_output_schemas_are_closed_and_phase_specific() -> None:
+    adapter = PrincipalCapabilityMcpServer(
+        _McpReadRuntime(), resolver=_McpResolver(), action_coordinator=_coordinator()
+    )
+    tools = {tool.name: tool for tool in adapter.list_tools()}
+
+    prepare_tool = tools["orders.update.prepare"]
+    prepare_schema = cast(dict[str, object], prepare_tool.outputSchema)
+    commit_schema = cast(dict[str, object], tools["acc_action_commit"].outputSchema)
+    status_schema = cast(dict[str, object], tools["acc_action_status"].outputSchema)
+    prepare_result = cast(
+        dict[str, object], cast(dict[str, object], prepare_schema["properties"])["result"]
+    )
+    commit_result = cast(
+        dict[str, object], cast(dict[str, object], commit_schema["properties"])["result"]
+    )
+    status_result = cast(
+        dict[str, object], cast(dict[str, object], status_schema["properties"])["result"]
+    )
+    prepare_properties = cast(dict[str, object], prepare_result["properties"])
+    commit_properties = cast(dict[str, object], commit_result["properties"])
+    status_properties = cast(dict[str, object], status_result["properties"])
+
+    assert prepare_tool.inputSchema == _capability().input_schema
+    assert prepare_tool.annotations is not None
+    assert prepare_tool.annotations.readOnlyHint is True
+    assert prepare_result["additionalProperties"] is False
+    assert prepare_result["required"] == [
+        "action_handle",
+        "approval_required",
+        "capability_id",
+        "expires_at",
+        "preview",
+        "status",
+    ]
+    assert prepare_properties["action_handle"] == {
+        "type": "string",
+        "minLength": 43,
+    }
+    assert commit_result["additionalProperties"] is False
+    assert commit_result["required"] == [
+        "capability_id",
+        "replayed",
+        "result",
+        "status",
+    ]
+    assert commit_properties["replayed"] == {"type": "boolean"}
+    assert cast(dict[str, object], status_properties["status"])["enum"] == [
+        "approved",
+        "committing",
+        "expired",
+        "failed",
+        "outcome_unknown",
+        "prepared",
+        "succeeded",
+    ]
+
+
+def test_action_mcp_rejects_prepare_schema_with_reserved_gateway_identity() -> None:
+    capability = _capability().model_copy(
+        update={
+            "input_schema": {
+                "type": "object",
+                "properties": {"principal_id": {"type": "string"}},
+            }
+        }
+    )
+    definition = CompiledActionDefinition(capability=capability, proof=_proof())
+    executor = FakeExecutor(verified_definitions={capability.id: definition})
+    coordinator = ActionCoordinator(
+        definitions={capability.id: definition},
+        pack_digest=PACK_DIGEST,
+        deployment_policy=DeploymentPolicy(
+            allowed_effects=frozenset({"read", "update"}),
+            max_risk="medium",
+            capability_allowlist=frozenset({capability.id}),
+            require_durable_action_store=False,
+            action_audit_mode="best_effort",
+        ),
+        store=_store(),
+        approval_authority=_authority(),
+        executor=executor,
+        idempotency_key_generator=lambda: "private-idempotency",
+    )
+
+    with pytest.raises(TypeError, match="reserved Gateway argument"):
+        PrincipalCapabilityMcpServer(
+            _McpReadRuntime(),
+            resolver=_McpResolver(),
+            action_coordinator=coordinator,
+        ).list_tools()
+
+
+def test_action_mcp_does_not_advertise_deployment_denied_prepare() -> None:
+    coordinator = _coordinator(
+        policy=DeploymentPolicy(
+            allowed_effects=frozenset({"read"}),
+            max_risk="low",
+            require_durable_action_store=False,
+            action_audit_mode="best_effort",
+        )
+    )
+    adapter = PrincipalCapabilityMcpServer(
+        _McpReadRuntime(), resolver=_McpResolver(), action_coordinator=coordinator
+    )
+
+    names = {tool.name for tool in adapter.list_tools()}
+    manifest = json.loads(str(adapter.read_resource("acc://actions/v2/manifest")[0].content))
+
+    assert "orders.update.prepare" not in names
+    assert manifest == {
+        "schema_version": "2",
+        "pack_digest": PACK_DIGEST,
+        "capabilities": [],
+    }
+    assert "orders.update" not in json.dumps(manifest)
+
+
+@pytest.mark.asyncio
+async def test_action_mcp_runs_prepare_approve_commit_status_with_resolved_owner() -> None:
+    authority = _authority()
+    coordinator = _coordinator(authority=authority)
+    adapter = PrincipalCapabilityMcpServer(
+        _McpReadRuntime(), resolver=_McpResolver(), action_coordinator=coordinator
+    )
+    access = _mcp_access("user-a")
+
+    prepared = await adapter.call_tool(
+        "orders.update.prepare",
+        {"order_id": "o-1", "comment": "approved"},
+        access_token=access,
+    )
+    assert prepared.isError is False
+    prepared_content = cast(dict[str, JsonValue], prepared.structuredContent)
+    prepared_result = cast(dict[str, JsonValue], prepared_content["result"])
+    action_handle = cast(str, prepared_result["action_handle"])
+    binding = await coordinator.approval_binding_for_trusted_host(
+        action_handle,
+        _principal("user-a", session_id="session-user-a"),
+    )
+    approval_handle = await authority.issue_for_testing(binding, expires_in_seconds=100)
+    approved = await adapter.call_tool(
+        "acc_action_approve",
+        {
+            "action_handle": action_handle,
+            "approval_handle": approval_handle.get_secret_value(),
+        },
+        access_token=access,
+    )
+    committed = await adapter.call_tool(
+        "acc_action_commit", {"action_handle": action_handle}, access_token=access
+    )
+    status = await adapter.call_tool(
+        "acc_action_status", {"action_handle": action_handle}, access_token=access
+    )
+
+    assert approved.structuredContent["result"]["status"] == "approved"  # type: ignore[index]
+    assert committed.structuredContent["result"] == {  # type: ignore[index]
+        "capability_id": "orders.update",
+        "status": "succeeded",
+        "result": {"status": "approved", "version": 4},
+        "replayed": False,
+    }
+    assert status.structuredContent["result"]["status"] == "succeeded"  # type: ignore[index]
+
+
+@pytest.mark.asyncio
+async def test_action_mcp_rejects_foreign_gateway_owner_for_opaque_handle() -> None:
+    adapter = PrincipalCapabilityMcpServer(
+        _McpReadRuntime(), resolver=_McpResolver(), action_coordinator=_coordinator()
+    )
+    prepared = await adapter.call_tool(
+        "orders.update.prepare",
+        {"order_id": "o-1", "comment": "private"},
+        access_token=_mcp_access("user-a"),
+    )
+    prepared_content = cast(dict[str, JsonValue], prepared.structuredContent)
+    prepared_result = cast(dict[str, JsonValue], prepared_content["result"])
+
+    foreign = await adapter.call_tool(
+        "acc_action_status",
+        {"action_handle": prepared_result["action_handle"]},
+        access_token=_mcp_access("user-b"),
+    )
+
+    assert foreign.isError is True
+    assert foreign.structuredContent["error"]["code"] == "ACC_RUNTIME_ACTION_BINDING_MISMATCH"  # type: ignore[index]
 
 
 @pytest.mark.parametrize(

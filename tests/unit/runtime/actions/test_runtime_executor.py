@@ -18,15 +18,23 @@ from acc_core.models.v2 import (
     OperationV2,
     ReadOperationV2,
 )
+from acc_runtime.actions.approval import InMemoryApprovalAuthority
+from acc_runtime.actions.audit import ActionAuditEvent, ActionAuditSink
 from acc_runtime.actions.coordinator import ActionCommitExecution
+from acc_runtime.actions.runtime import (
+    ActionRuntimeDependencies,
+    create_runtime_action_coordinator,
+)
 from acc_runtime.actions.runtime_executor import (
     ActionOperationProvider,
     ActionReadResult,
     ActionRuntimeConfigurationError,
     RuntimeActionWorkflowExecutor,
 )
+from acc_runtime.actions.store import InMemoryActionStore
 from acc_runtime.context import PrincipalContext
 from acc_runtime.credentials import SecretValue
+from acc_runtime.deployment import DeploymentPolicy
 from acc_runtime.execution import ExecutionError
 from acc_runtime.policies import PolicyScopeDeniedError
 
@@ -38,6 +46,43 @@ def test_runtime_action_executor_has_public_action_api_exports() -> None:
     assert public_actions.ActionReadResult is ActionReadResult
     assert public_actions.ActionRuntimeConfigurationError is ActionRuntimeConfigurationError
     assert public_actions.RuntimeActionWorkflowExecutor is RuntimeActionWorkflowExecutor
+    assert public_actions.ActionRuntimeDependencies is ActionRuntimeDependencies
+    assert public_actions.create_runtime_action_coordinator is create_runtime_action_coordinator
+
+
+@dataclass
+class _ActionAudit(ActionAuditSink):
+    events: list[ActionAuditEvent] = field(default_factory=list)
+
+    async def emit(self, event: ActionAuditEvent) -> None:
+        self.events.append(event)
+
+
+def test_runtime_action_factory_derives_definitions_only_from_compiled_ir() -> None:
+    coordinator = create_runtime_action_coordinator(
+        _ir(),
+        pack_digest="sha256:" + "a" * 64,
+        provider=_Provider(),
+        dependencies=ActionRuntimeDependencies(
+            deployment_policy=DeploymentPolicy(
+                allowed_effects=frozenset({"read", "update"}),
+                max_risk="medium",
+                capability_allowlist=frozenset({"orders.change"}),
+                require_durable_action_store=False,
+                action_audit_mode="required",
+            ),
+            store=InMemoryActionStore(development_only=True),
+            approval_authority=InMemoryApprovalAuthority(development_only=True),
+            audit_sink=_ActionAudit(),
+            audit_salt=b"test-action-audit-identity-salt",
+        ),
+    )
+
+    manifest = coordinator.public_manifest()
+    capabilities = cast(list[dict[str, JsonValue]], manifest["capabilities"])
+
+    assert [item["capability_id"] for item in capabilities] == ["orders.change"]
+    assert manifest["pack_digest"] == "sha256:" + "a" * 64
 
 
 def test_runtime_executor_exposes_only_ir_verified_action_definition() -> None:

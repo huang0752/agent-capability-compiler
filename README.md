@@ -63,7 +63,7 @@ ACC **不**负责：
 - 在 Runtime 中动态生成代码、HTTP 请求或工作流；
 - 生产级 Action 审批 UI、durable Action Store、集中审计控制面，以及插件市场、Kubernetes、Helm、OCI、SOAP、gRPC、数据库 Adapter、消息队列、RPA 或浏览器录制。
 
-当前唯一格式为 `2`。稳定可执行入口支持证据绑定的 Read Operation、Capability Pack、MCP stdio 和多用户 `streamable_http` Gateway。Action 已具备模型、编译证明、Pack/Loader 合同和直接 Runtime 状态机基础，但尚未接入通用 MCP 工具面，也没有生产 durable Store/审批签发实现。Gateway 是 Generic Runtime 的可选运行时适配层：它负责 HTTP 身份、会话隔离和请求级 `PrincipalContext`，不是用户/租户管理平台、权限源或 SaaS 控制面。
+当前唯一格式为 `2`。稳定可执行入口支持证据绑定的 Read Operation、Capability Pack、MCP stdio 和多用户 `streamable_http` Gateway。经编译证明且被部署策略允许的 Action 会在 Gateway 中暴露为业务专属 `<capability_id>.prepare` 工具，并通过 `approve → commit → status` 完成受信生命周期；普通 `tools()`/`call()` 仍不能绕过该生命周期直接执行写操作。生产部署必须显式提供 durable Action Store、可信 ApprovalAuthority、审计 Sink 与 effect/risk/capability ceiling；ACC 不内置生产审批 UI 或持久化实现。Gateway 是 Generic Runtime 的可选运行时适配层：它负责 HTTP 身份、会话隔离和请求级 `PrincipalContext`，不是用户/租户管理平台、权限源或 SaaS 控制面。
 
 ## 架构
 

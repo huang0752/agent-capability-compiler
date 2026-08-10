@@ -17,11 +17,13 @@ from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.server.stdio import stdio_server
 from pydantic import AnyUrl, JsonValue
 
+from acc_runtime.actions.coordinator import ActionCoordinator, ActionInputInvalidError
 from acc_runtime.context import (
     PrincipalContext,
     normalize_security_name,
     sensitive_auth_name_marker,
 )
+from acc_runtime.credentials import SecretValue
 from acc_runtime.errors import RuntimeError as AccRuntimeError
 from acc_runtime.mcp.schema_projection import project_mcp_output_schema
 
@@ -67,6 +69,12 @@ class _McpCancelled:
 _MCP_CANCELLED = _McpCancelled()
 type _McpCallOutcome = types.CallToolResult | _McpCancelled
 
+
+class _ActionToolUnavailableError(AccRuntimeError):
+    code = "ACC_RUNTIME_ACTION_TOOL_UNAVAILABLE"
+    status = 404
+
+
 _GATEWAY_RESERVED_ARGUMENTS = frozenset(
     {
         "access_token",
@@ -97,6 +105,14 @@ _GATEWAY_RESERVED_COMPACT_ARGUMENTS = {
     name.replace("_", ""): name for name in _GATEWAY_RESERVED_ARGUMENTS
 }
 _INTERACTION_MANIFEST_URI = "acc://interactions/v2/manifest"
+_ACTION_MANIFEST_URI = "acc://actions/v2/manifest"
+_ACTION_TOOL_NAMES = frozenset(
+    {
+        "acc_action_approve",
+        "acc_action_commit",
+        "acc_action_status",
+    }
+)
 
 
 class CapabilityMcpServer:
@@ -204,25 +220,48 @@ class CapabilityMcpServer:
 class PrincipalCapabilityMcpServer:
     """Expose capabilities using the Principal authenticated by the current request."""
 
-    __slots__ = ("resolver", "runtime")
+    __slots__ = ("action_coordinator", "resolver", "runtime")
 
-    def __init__(self, runtime: ContextualMcpRuntime, *, resolver: PrincipalResolver) -> None:
+    def __init__(
+        self,
+        runtime: ContextualMcpRuntime,
+        *,
+        resolver: PrincipalResolver,
+        action_coordinator: ActionCoordinator | None = None,
+    ) -> None:
+        if action_coordinator is not None and not isinstance(action_coordinator, ActionCoordinator):
+            raise TypeError("action_coordinator must be ActionCoordinator")
         self.runtime = runtime
         self.resolver = resolver
+        self.action_coordinator = action_coordinator
 
     def list_tools(self) -> list[types.Tool]:
         """Reuse the stable public tool projection without adding identity inputs."""
 
-        return _translate_tools(self.runtime.tools(), reject_reserved_arguments=True)
+        tools = _translate_tools(self.runtime.tools(), reject_reserved_arguments=True)
+        if self.action_coordinator is not None:
+            action_tools = _action_lifecycle_tools(self.action_coordinator)
+            collisions = sorted(
+                {tool.name for tool in tools} & {tool.name for tool in action_tools}
+            )
+            if collisions:
+                raise TypeError("Action lifecycle tool name collision")
+            tools.extend(action_tools)
+        return tools
 
     def list_resources(self) -> list[types.Resource]:
         """Expose the same deployment manifest without resolving a Principal."""
 
-        return _interaction_resources()
+        resources = _interaction_resources()
+        if self.action_coordinator is not None:
+            resources.extend(_action_resources())
+        return resources
 
     def read_resource(self, uri: str | AnyUrl) -> list[ReadResourceContents]:
         """Read the public deployment manifest without touching session identity."""
 
+        if str(uri) == _ACTION_MANIFEST_URI and self.action_coordinator is not None:
+            return _read_json_resource(self.action_coordinator.public_manifest())
         return _read_interaction_resource(uri, self.runtime.interaction_manifest())
 
     async def call_tool(
@@ -265,11 +304,23 @@ class PrincipalCapabilityMcpServer:
                     is_error=True,
                 )
             principal = await self.resolver.resolve(access_token)
-            result = await self.runtime.call_with_context(
-                name,
-                cast(Mapping[str, JsonValue], dict(arguments or {})),
-                principal,
-            )
+            prepare_capability_id = _prepare_capability_id(self.action_coordinator, name)
+            if name in _ACTION_TOOL_NAMES or prepare_capability_id is not None:
+                if self.action_coordinator is None:
+                    raise _ActionToolUnavailableError("Action lifecycle tool is unavailable")
+                result = await _call_action_lifecycle(
+                    self.action_coordinator,
+                    name,
+                    cast(Mapping[str, JsonValue], dict(arguments or {})),
+                    principal,
+                    prepare_capability_id=prepare_capability_id,
+                )
+            else:
+                result = await self.runtime.call_with_context(
+                    name,
+                    cast(Mapping[str, JsonValue], dict(arguments or {})),
+                    principal,
+                )
             return CapabilityMcpServer._result({"result": result}, is_error=False)
         except asyncio.CancelledError:
             return _MCP_CANCELLED
@@ -326,12 +377,19 @@ def _interaction_resources() -> list[types.Resource]:
     ]
 
 
-def _read_interaction_resource(
-    uri: str | AnyUrl,
-    manifest: Mapping[str, JsonValue],
-) -> list[ReadResourceContents]:
-    if str(uri) != _INTERACTION_MANIFEST_URI:
-        raise ValueError("interaction resource is not available")
+def _action_resources() -> list[types.Resource]:
+    return [
+        types.Resource(
+            name="acc-action-manifest-v2",
+            title="ACC Action Manifest",
+            uri=AnyUrl(_ACTION_MANIFEST_URI),
+            description="Pack-bound compiler-attested Action lifecycle metadata.",
+            mimeType="application/json",
+        )
+    ]
+
+
+def _read_json_resource(manifest: Mapping[str, JsonValue]) -> list[ReadResourceContents]:
     text = json.dumps(
         manifest,
         ensure_ascii=False,
@@ -340,6 +398,234 @@ def _read_interaction_resource(
         allow_nan=False,
     )
     return [ReadResourceContents(content=text, mime_type="application/json")]
+
+
+def _read_interaction_resource(
+    uri: str | AnyUrl,
+    manifest: Mapping[str, JsonValue],
+) -> list[ReadResourceContents]:
+    if str(uri) != _INTERACTION_MANIFEST_URI:
+        raise ValueError("interaction resource is not available")
+    return _read_json_resource(manifest)
+
+
+def _object_schema(properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": properties,
+        "required": required,
+    }
+
+
+def _status_schema() -> dict[str, Any]:
+    return {
+        "type": "string",
+        "enum": [
+            "approved",
+            "committing",
+            "expired",
+            "failed",
+            "outcome_unknown",
+            "prepared",
+            "succeeded",
+        ],
+    }
+
+
+def _closed_result(properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
+    return _object_schema(properties, required)
+
+
+def _action_lifecycle_tools(coordinator: ActionCoordinator) -> list[types.Tool]:
+    handle = {"type": "string", "minLength": 43}
+    prepare_result = _closed_result(
+        {
+            "action_handle": handle,
+            "approval_required": {"type": "boolean"},
+            "capability_id": {"type": "string"},
+            "expires_at": {"type": "number"},
+            "preview": {},
+            "status": _status_schema(),
+        },
+        [
+            "action_handle",
+            "approval_required",
+            "capability_id",
+            "expires_at",
+            "preview",
+            "status",
+        ],
+    )
+    status_result = _closed_result(
+        {
+            "capability_id": {"type": "string"},
+            "status": _status_schema(),
+            "result": {},
+        },
+        ["capability_id", "result", "status"],
+    )
+    commit_result = _closed_result(
+        {
+            "capability_id": {"type": "string"},
+            "replayed": {"type": "boolean"},
+            "result": {},
+            "status": _status_schema(),
+        },
+        ["capability_id", "replayed", "result", "status"],
+    )
+    tools: list[tuple[str, str, dict[str, Any], dict[str, Any], types.ToolAnnotations]] = []
+    manifest = coordinator.public_manifest()
+    capabilities = manifest.get("capabilities")
+    if not isinstance(capabilities, list):
+        raise TypeError("Action manifest is invalid")
+    for item in capabilities:
+        if not isinstance(item, dict):
+            raise TypeError("Action manifest is invalid")
+        capability_id = item.get("capability_id")
+        input_schema = item.get("input_schema")
+        title = item.get("title")
+        if not isinstance(capability_id, str) or not isinstance(input_schema, dict):
+            raise TypeError("Action manifest is invalid")
+        if _reserved_schema_property_names(input_schema):
+            raise TypeError("runtime tool schema exposes a reserved Gateway argument")
+        tools.append(
+            (
+                f"{capability_id}.prepare",
+                f"Prepare {title}" if isinstance(title, str) else "Prepare Action",
+                cast(dict[str, Any], input_schema),
+                prepare_result,
+                types.ToolAnnotations(
+                    readOnlyHint=True,
+                    destructiveHint=False,
+                    idempotentHint=False,
+                    openWorldHint=True,
+                ),
+            )
+        )
+    tools.extend(
+        [
+            (
+                "acc_action_approve",
+                "Approve Action",
+                _object_schema(
+                    {"action_handle": handle, "approval_handle": handle},
+                    ["action_handle", "approval_handle"],
+                ),
+                status_result,
+                types.ToolAnnotations(
+                    readOnlyHint=False,
+                    destructiveHint=False,
+                    idempotentHint=False,
+                    openWorldHint=True,
+                ),
+            ),
+            (
+                "acc_action_commit",
+                "Commit Action",
+                _object_schema({"action_handle": handle}, ["action_handle"]),
+                commit_result,
+                types.ToolAnnotations(
+                    readOnlyHint=False,
+                    destructiveHint=True,
+                    idempotentHint=True,
+                    openWorldHint=True,
+                ),
+            ),
+            (
+                "acc_action_status",
+                "Action Status",
+                _object_schema({"action_handle": handle}, ["action_handle"]),
+                status_result,
+                types.ToolAnnotations(
+                    readOnlyHint=True,
+                    destructiveHint=False,
+                    idempotentHint=True,
+                    openWorldHint=False,
+                ),
+            ),
+        ]
+    )
+    return [
+        types.Tool(
+            name=name,
+            title=title,
+            description="Use the trusted ACC prepare, approve, commit and status lifecycle.",
+            inputSchema=input_schema,
+            outputSchema=project_mcp_output_schema(name, output_schema),
+            annotations=annotations,
+        )
+        for name, title, input_schema, output_schema, annotations in tools
+    ]
+
+
+def _prepare_capability_id(coordinator: ActionCoordinator | None, name: str) -> str | None:
+    if coordinator is None or not name.endswith(".prepare"):
+        return None
+    candidate = name.removesuffix(".prepare")
+    capabilities = coordinator.public_manifest().get("capabilities")
+    if isinstance(capabilities, list) and any(
+        isinstance(item, dict) and item.get("capability_id") == candidate for item in capabilities
+    ):
+        return candidate
+    return None
+
+
+def _required_string(arguments: Mapping[str, JsonValue], name: str) -> str:
+    value = arguments.get(name)
+    if not isinstance(value, str) or not value:
+        raise ActionInputInvalidError("Action lifecycle arguments are invalid")
+    return value
+
+
+async def _call_action_lifecycle(
+    coordinator: ActionCoordinator,
+    name: str,
+    arguments: Mapping[str, JsonValue],
+    principal: PrincipalContext,
+    *,
+    prepare_capability_id: str | None,
+) -> JsonValue:
+    if prepare_capability_id is not None:
+        prepared = await coordinator.prepare(prepare_capability_id, arguments, principal)
+        return {
+            "action_handle": prepared.action_handle.get_secret_value(),
+            "capability_id": prepared.capability_id,
+            "status": prepared.status.value,
+            "preview": prepared.preview,
+            "approval_required": prepared.approval_required,
+            "expires_at": prepared.expires_at,
+        }
+    action_handle = _required_string(arguments, "action_handle")
+    if name == "acc_action_approve":
+        if set(arguments) != {"action_handle", "approval_handle"}:
+            raise ActionInputInvalidError("Action lifecycle arguments are invalid")
+        result = await coordinator.approve(
+            action_handle,
+            SecretValue(_required_string(arguments, "approval_handle")),
+            principal,
+        )
+        return {
+            "capability_id": result.capability_id,
+            "status": result.status.value,
+            "result": result.result,
+        }
+    if set(arguments) != {"action_handle"}:
+        raise ActionInputInvalidError("Action lifecycle arguments are invalid")
+    if name == "acc_action_commit":
+        committed = await coordinator.commit(action_handle, principal)
+        return {
+            "capability_id": committed.capability_id,
+            "status": committed.status.value,
+            "result": committed.result,
+            "replayed": committed.replayed,
+        }
+    status = await coordinator.status(action_handle, principal)
+    return {
+        "capability_id": status.capability_id,
+        "status": status.status.value,
+        "result": status.result,
+    }
 
 
 def _translate_tools(

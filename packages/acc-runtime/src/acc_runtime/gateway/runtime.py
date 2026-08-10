@@ -16,6 +16,11 @@ from pydantic import JsonValue, ValidationError
 from starlette.applications import Starlette
 
 from acc_core.models import PasswordBearerAuthConfig, load_project_document
+from acc_runtime.actions import (
+    ActionRuntimeDependencies,
+    ActionStore,
+    create_runtime_action_coordinator,
+)
 from acc_runtime.auth import AuthUnauthorizedError, PasswordBearerAuthStrategy
 from acc_runtime.auth.strategies import AsyncClientFactory
 from acc_runtime.context import PrincipalContext
@@ -96,11 +101,18 @@ class _ReauthCoordinatingRuntime:
 class _OwnedGatewayService:
     """Give the ASGI lifespan sole, idempotent ownership of runtime resources."""
 
-    __slots__ = ("_close_lock", "_closed", "_runtime", "_service")
+    __slots__ = ("_action_store", "_close_lock", "_closed", "_runtime", "_service")
 
-    def __init__(self, service: GatewaySessionService, runtime: GenericRuntime) -> None:
+    def __init__(
+        self,
+        service: GatewaySessionService,
+        runtime: GenericRuntime,
+        *,
+        action_store: ActionStore | None = None,
+    ) -> None:
         self._service = service
         self._runtime = runtime
+        self._action_store = action_store
         self._close_lock = asyncio.Lock()
         self._closed = False
 
@@ -118,7 +130,11 @@ class _OwnedGatewayService:
         try:
             await self._service.aclose()
         finally:
-            await self._runtime.aclose()
+            try:
+                await self._runtime.aclose()
+            finally:
+                if self._action_store is not None:
+                    await self._action_store.close()
 
 
 class GatewayRuntimeComposition:
@@ -190,6 +206,38 @@ def _tool_schema_sha256(tools: Collection[Mapping[str, object]]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _listed_tool_schema_sha256(tools: Collection[object]) -> str:
+    """Digest the exact final MCP tools/list projection."""
+
+    schemas: list[dict[str, object]] = []
+    for value in tools:
+        name = getattr(value, "name", None)
+        input_schema = getattr(value, "inputSchema", None)
+        output_schema = getattr(value, "outputSchema", None)
+        if (
+            not isinstance(name, str)
+            or not isinstance(input_schema, Mapping)
+            or not isinstance(output_schema, Mapping)
+        ):
+            raise TypeError("MCP tool metadata is invalid")
+        schemas.append(
+            {
+                "name": name,
+                "input_schema": dict(input_schema),
+                "output_schema": dict(output_schema),
+            }
+        )
+    schemas.sort(key=lambda item: str(item["name"]))
+    encoded = json.dumps(
+        schemas,
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def create_gateway_runtime(
     *,
     pack_path: str | Path,
@@ -202,8 +250,9 @@ def create_gateway_runtime(
     audit_deployment_salt: bytes | None = None,
     auth_client_factory: AsyncClientFactory | None = None,
     provider_client: httpx.AsyncClient | None = None,
+    action_dependencies: ActionRuntimeDependencies | None = None,
 ) -> GatewayRuntimeComposition:
-    """Assemble a verified streamable-HTTP Pack without private runtime access."""
+    """Assemble a verified Gateway and own any supplied Action deployment Store."""
 
     from acc_runtime.runtime import GenericRuntime, RuntimeConfigurationError
 
@@ -253,14 +302,25 @@ def create_gateway_runtime(
         loaded_pack=loaded,
         audit_collector=collector,
     )
-    runtime_info = GatewayRuntimeInfo(
-        pack_sha256=loaded.verification.sha256,
-        project_id=loaded.manifest.project_id,
-        project_version=loaded.manifest.project_version,
-        interaction_sha256=runtime.interaction_sha256,
-        tool_schema_sha256=_tool_schema_sha256(runtime.tools()),
-        transport="streamable_http",
-    )
+    has_actions = _compiled_ir_has_actions(loaded.ir)
+    if has_actions and action_dependencies is None:
+        raise RuntimeConfigurationError(
+            "Action Pack requires explicit deployment dependencies.",
+            details={"reason": "action_deployment_missing"},
+        )
+    if not has_actions and action_dependencies is not None:
+        raise RuntimeConfigurationError(
+            "Action deployment dependencies require an Action Pack.",
+            details={"reason": "action_ir_binding_mismatch"},
+        )
+    action_coordinator = None
+    if action_dependencies is not None:
+        action_coordinator = create_runtime_action_coordinator(
+            loaded.ir,
+            pack_digest="sha256:" + loaded.verification.sha256,
+            provider=provider,
+            dependencies=action_dependencies,
+        )
     store = InMemoryGatewaySessionStore(
         max_sessions=settings.max_sessions,
         ttl_seconds=settings.session_ttl_seconds,
@@ -272,11 +332,27 @@ def create_gateway_runtime(
         target_system_id=project.project.id,
         deployment_scope_ceiling=deployment_scope_ceiling,
     )
-    owned_service = _OwnedGatewayService(service, runtime)
+    owned_service = _OwnedGatewayService(
+        service,
+        runtime,
+        action_store=(None if action_dependencies is None else action_dependencies.store),
+    )
     resolver = GatewayPrincipalResolver(store=store, project_id=project.project.id)
     token_verifier = GatewayTokenVerifier(store=store, project_id=project.project.id)
     coordinated_runtime = _ReauthCoordinatingRuntime(runtime, service=service)
-    mcp_server = PrincipalCapabilityMcpServer(coordinated_runtime, resolver=resolver)
+    mcp_server = PrincipalCapabilityMcpServer(
+        coordinated_runtime,
+        resolver=resolver,
+        action_coordinator=action_coordinator,
+    )
+    runtime_info = GatewayRuntimeInfo(
+        pack_sha256=loaded.verification.sha256,
+        project_id=loaded.manifest.project_id,
+        project_version=loaded.manifest.project_version,
+        interaction_sha256=runtime.interaction_sha256,
+        tool_schema_sha256=_listed_tool_schema_sha256(mcp_server.list_tools()),
+        transport="streamable_http",
+    )
     app = create_gateway_app(
         settings=settings,
         service=owned_service,
@@ -291,6 +367,20 @@ def create_gateway_runtime(
         owned_service=owned_service,
         runtime=runtime,
         runtime_info=runtime_info,
+    )
+
+
+def _compiled_ir_has_actions(compiled_ir: object) -> bool:
+    if not isinstance(compiled_ir, Mapping):
+        return False
+    capabilities = compiled_ir.get("capabilities")
+    if not isinstance(capabilities, Mapping):
+        return False
+    return any(
+        isinstance(compiled, Mapping)
+        and isinstance(compiled.get("definition"), Mapping)
+        and compiled["definition"].get("kind") == "action"
+        for compiled in capabilities.values()
     )
 
 

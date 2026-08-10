@@ -229,6 +229,36 @@ class ActionCoordinator:
         self._action_audit_sink = action_audit_sink
         self._action_audit_salt = action_audit_salt
 
+    def public_manifest(self) -> dict[str, JsonValue]:
+        """Return compiler-attested Action metadata safe for MCP discovery."""
+
+        capabilities: list[JsonValue] = []
+        for capability_id in sorted(self._definitions):
+            definition = self._definitions[capability_id]
+            decision = self._deployment_policy.evaluate(
+                capability_id=definition.capability.id,
+                effects=definition.proof.effects,
+                risk=definition.proof.maximum_risk or "critical",
+            )
+            if not decision.allowed:
+                continue
+            capabilities.append(
+                {
+                    "capability_id": definition.capability.id,
+                    "title": definition.capability.title,
+                    "input_schema": copy.deepcopy(definition.capability.input_schema),
+                    "effects": list(definition.proof.effects),
+                    "maximum_risk": definition.proof.maximum_risk,
+                    "approval_required": definition.proof.approval_required,
+                    "proof_digest": definition.proof_digest,
+                }
+            )
+        return {
+            "schema_version": "2",
+            "pack_digest": self._pack_digest,
+            "capabilities": capabilities,
+        }
+
     async def prepare(
         self,
         capability_id: str,

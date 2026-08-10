@@ -43,6 +43,10 @@ from acc_runtime.actions.models import (
     PreparedActionState,
     PreparedActionStatus,
 )
+from acc_runtime.actions.runtime import (
+    ActionRuntimeDependencies,
+    create_runtime_action_coordinator,
+)
 from acc_runtime.actions.runtime_executor import (
     ActionOperationProvider,
     ActionReadResult,
@@ -74,6 +78,7 @@ __all__ = [
     "ActionPreviewInvalidError",
     "ActionReadResult",
     "ActionRuntimeConfigurationError",
+    "ActionRuntimeDependencies",
     "ActionScopeDeniedError",
     "ActionStateConflictError",
     "ActionStatusPublic",
@@ -91,4 +96,5 @@ __all__ = [
     "PreparedActionState",
     "PreparedActionStatus",
     "RuntimeActionWorkflowExecutor",
+    "create_runtime_action_coordinator",
 ]
