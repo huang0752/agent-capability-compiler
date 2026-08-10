@@ -39,6 +39,16 @@ routes:
     reason: null
     exclusion_rule_id: null
     exclusion_decision: null
+# Unknown routes must remain effect=unknown, eligibility=undetermined, and
+# disposition=blocked_on_evidence until their candidate is classified.
+# Add candidate_id to every unknown or action route; the referenced candidate's
+# route_ids must point back to that exact route id.
+# Action routes with unresolved semantics, authorization boundary, identity,
+# context isolation, conflict control, idempotency, lifecycle, or outcome gaps
+# must likewise remain undetermined/blocked_on_evidence. Missing safety evidence
+# or a user's decision not to select an Action is not objective ineligibility.
+# Use ineligible only when the candidate has a proven ineligibility_claim whose
+# evidence_refs resolve to independent artifacts under evidence/.
 summary:
   discovered_routes: 1
   eligible_routes: 1

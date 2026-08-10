@@ -21,6 +21,8 @@ from verify_read_only_workspace import (
     safe_existing_path,
 )
 
+from acc_core.domains import CapabilityCandidate, CapabilityCandidateLedger
+from acc_core.models import Evidence
 from acc_core.scope import ScopeInventory
 
 SCOPE_MODES = {"pilot", "domain_complete", "system_complete"}
@@ -33,7 +35,7 @@ DISPOSITIONS = {
     "out_of_scope",
 }
 TERMINAL_COMPLETE = {"planned", "composed", "excluded"}
-ELIGIBILITIES = {"eligible", "ineligible"}
+ELIGIBILITIES = {"undetermined", "eligible", "ineligible"}
 EXCLUSION_CATEGORIES = {
     "binary_or_download",
     "sensitive_configuration",
@@ -244,6 +246,249 @@ def parse_core_inventory(document: Mapping[str, object]) -> ScopeInventory:
     """Parse a valid inventory through the public Core route contract."""
 
     return ScopeInventory.model_validate(document)
+
+
+def load_candidate_ledger(
+    project: Path,
+) -> tuple[CapabilityCandidateLedger | None, list[dict[str, object]]]:
+    """Load the optional Core candidate ledger through its public typed contract."""
+
+    ledger_path = project / "capability-candidates.yaml"
+    if not ledger_path.exists() and not ledger_path.is_symlink():
+        return None, []
+    safe_path = safe_existing_path(str(ledger_path), kind="file")
+    try:
+        return CapabilityCandidateLedger.model_validate(load_document(safe_path)), []
+    except ValidationError:
+        diagnostics: list[dict[str, object]] = []
+        add_issue(
+            diagnostics,
+            "ACC_SCOPE_CANDIDATE_LEDGER_INVALID",
+            "declared capability candidate ledger does not satisfy the Core contract",
+            path="capability-candidates.yaml",
+            pointer="/",
+        )
+        return None, diagnostics
+
+
+def load_evidence_ids(project: Path) -> tuple[set[str], list[dict[str, object]]]:
+    """Load independently materialized Evidence identifiers without trusting snapshots."""
+
+    evidence_dir = project / "evidence"
+    if not evidence_dir.exists() and not evidence_dir.is_symlink():
+        return set(), []
+    safe_directory = safe_existing_path(str(evidence_dir), kind="directory")
+    core_fields = set(Evidence.model_fields)
+    result: set[str] = set()
+    seen: set[str] = set()
+    diagnostics: list[dict[str, object]] = []
+    for child in sorted(safe_directory.iterdir(), key=lambda item: item.name):
+        if child.suffix not in {".yaml", ".yml", ".json"}:
+            continue
+        safe_child = safe_existing_path(str(child), kind="file")
+        document = load_document(safe_child)
+        core_document = {key: value for key, value in document.items() if key in core_fields}
+        try:
+            evidence = Evidence.model_validate(core_document)
+        except ValidationError:
+            add_issue(
+                diagnostics,
+                "ACC_SCOPE_EVIDENCE_ARTIFACT_INVALID",
+                "declared Evidence artifact does not satisfy the Core contract",
+                path=str(child.relative_to(project)),
+                pointer="/",
+            )
+            continue
+        if evidence.source_id in seen:
+            result.discard(evidence.source_id)
+            add_issue(
+                diagnostics,
+                "ACC_SCOPE_EVIDENCE_SOURCE_ID_DUPLICATE",
+                "Evidence source_id must be unique before it can be trusted",
+                path=str(child.relative_to(project)),
+                pointer="/source_id",
+            )
+            continue
+        seen.add(evidence.source_id)
+        result.add(evidence.source_id)
+    return result, diagnostics
+
+
+def claim_is_evidence_proven(
+    claim: object, *, expected_status: str, evidence_ids: set[str]
+) -> bool:
+    """Require the authoritative status and independently registered Evidence refs."""
+
+    status = getattr(claim, "status", None)
+    evidence_refs = getattr(claim, "evidence_refs", None)
+    return (
+        status == expected_status
+        and isinstance(evidence_refs, list)
+        and bool(evidence_refs)
+        and set(evidence_refs) <= evidence_ids
+    )
+
+
+def action_candidate_has_blocking_gaps(
+    candidate: CapabilityCandidate,
+    *,
+    route_effect: str | None,
+    evidence_ids: set[str],
+) -> bool:
+    """Return whether an Action lacks any independently evidenced safety fact."""
+
+    claims = candidate.claims
+    required_fact_claims = (
+        claims.schema_,
+        claims.effect,
+        claims.risk,
+        claims.reversibility,
+        claims.approval,
+        claims.retry,
+        claims.conflict_control,
+        claims.idempotency,
+        claims.lifecycle,
+        claims.outcome_resolution,
+    )
+    return any(
+        (
+            bool(candidate.gaps),
+            candidate.kind_claim != "action",
+            candidate.effect_claim != route_effect,
+            any(
+                not claim_is_evidence_proven(
+                    claim, expected_status="proven", evidence_ids=evidence_ids
+                )
+                for claim in required_fact_claims
+            ),
+            not claim_is_evidence_proven(
+                claims.authorization_boundary,
+                expected_status="upstream_authoritative",
+                evidence_ids=evidence_ids,
+            ),
+            not claim_is_evidence_proven(
+                claims.identity_binding,
+                expected_status="identity_binding_proven",
+                evidence_ids=evidence_ids,
+            ),
+            not claim_is_evidence_proven(
+                claims.context_isolation,
+                expected_status="context_isolation_proven",
+                evidence_ids=evidence_ids,
+            ),
+        )
+    )
+
+
+def action_ineligibility_is_proven(
+    candidate: CapabilityCandidate, *, evidence_ids: set[str]
+) -> bool:
+    """Accept ineligibility only from an objective, independently evidenced claim."""
+
+    claim = candidate.ineligibility_claim
+    return claim is not None and claim_is_evidence_proven(
+        claim, expected_status="proven", evidence_ids=evidence_ids
+    )
+
+
+def audit_candidate_routes(
+    inventory: Mapping[str, object],
+    *,
+    ledger: CapabilityCandidateLedger | None,
+    evidence_ids: set[str],
+) -> list[dict[str, object]]:
+    """Bind unknown/Action routes to candidates and enforce Action evidence states."""
+
+    diagnostics: list[dict[str, object]] = []
+    routes = index_routes(inventory)
+    candidates = {candidate.id: candidate for candidate in ledger.candidates} if ledger else {}
+    raw_routes = inventory.get("routes")
+    if not isinstance(raw_routes, list):
+        return diagnostics
+
+    for index, raw_route in enumerate(raw_routes):
+        if not isinstance(raw_route, Mapping):
+            continue
+        route = cast(Mapping[str, object], raw_route)
+        kind = string_at(route, "kind")
+        candidate_id = string_at(route, "candidate_id")
+        pointer = f"/routes/{index}/candidate_id"
+        if candidate_id is None or not candidate_id.strip():
+            if kind in {"unknown", "action"}:
+                add_issue(
+                    diagnostics,
+                    "ACC_SCOPE_CANDIDATE_REFERENCE_REQUIRED",
+                    "unknown and action routes require a capability candidate reference",
+                    path="scope-inventory.yaml",
+                    pointer=pointer,
+                )
+            continue
+        candidate = candidates.get(candidate_id)
+        route_id = string_at(route, "id")
+        if candidate is None or route_id is None or route_id not in candidate.route_ids:
+            add_issue(
+                diagnostics,
+                "ACC_SCOPE_CANDIDATE_ROUTE_MISMATCH",
+                "route and capability candidate route identifiers must match bidirectionally",
+                path="scope-inventory.yaml",
+                pointer=pointer,
+            )
+            continue
+        route_effect = string_at(route, "effect")
+        if candidate.kind_claim != kind or candidate.effect_claim != route_effect:
+            add_issue(
+                diagnostics,
+                "ACC_SCOPE_CANDIDATE_ROUTE_MISMATCH",
+                "route kind and effect must exactly match the referenced capability candidate",
+                path="scope-inventory.yaml",
+                pointer=pointer,
+            )
+            continue
+        if kind != "action":
+            continue
+        objective_ineligibility = action_ineligibility_is_proven(
+            candidate, evidence_ids=evidence_ids
+        )
+        if string_at(route, "eligibility") == "ineligible" and not objective_ineligibility:
+            add_issue(
+                diagnostics,
+                "ACC_SCOPE_ACTION_INELIGIBILITY_UNPROVEN",
+                "action ineligibility requires an independent Evidence-backed objective claim",
+                path="scope-inventory.yaml",
+                pointer=f"/routes/{index}/eligibility",
+            )
+        if (
+            action_candidate_has_blocking_gaps(
+                candidate,
+                route_effect=route_effect,
+                evidence_ids=evidence_ids,
+            )
+            and not objective_ineligibility
+            and (
+                string_at(route, "eligibility") != "undetermined"
+                or string_at(route, "disposition") != "blocked_on_evidence"
+            )
+        ):
+            add_issue(
+                diagnostics,
+                "ACC_SCOPE_ACTION_GAP_MISCLASSIFIED",
+                "action safety gaps require eligibility=undetermined and blocked_on_evidence",
+                path="scope-inventory.yaml",
+                pointer=f"/routes/{index}/disposition",
+            )
+
+    for candidate_index, candidate in enumerate(ledger.candidates if ledger else []):
+        for route_index, route_id in enumerate(candidate.route_ids):
+            route_entry = routes.get(route_id)
+            if route_entry is None or string_at(route_entry[1], "candidate_id") != candidate.id:
+                add_issue(
+                    diagnostics,
+                    "ACC_SCOPE_CANDIDATE_ROUTE_MISMATCH",
+                    "candidate and scope route identifiers must match bidirectionally",
+                    path="capability-candidates.yaml",
+                    pointer=f"/candidates/{candidate_index}/route_ids/{route_index}",
+                )
+    return diagnostics
 
 
 def audit_exclusion_rules(
@@ -711,15 +956,23 @@ def audit_inventory(
             )
         route_kind = string_at(route, "kind")
         route_effect = string_at(route, "effect")
-        if route_kind not in {"read", "action"}:
+        if route_kind not in {"unknown", "read", "action"}:
             add_issue(
                 diagnostics,
                 "ACC_SCOPE_KIND_INVALID",
-                "route kind must be read or action",
+                "route kind must be unknown, read, or action",
                 path=path,
                 pointer=f"{pointer}/kind",
             )
-        if route_effect not in {"read", "create", "update", "delete", "transition", "execute"}:
+        if route_effect not in {
+            "unknown",
+            "read",
+            "create",
+            "update",
+            "delete",
+            "transition",
+            "execute",
+        }:
             add_issue(
                 diagnostics,
                 "ACC_SCOPE_EFFECT_INVALID",
@@ -727,11 +980,18 @@ def audit_inventory(
                 path=path,
                 pointer=f"{pointer}/effect",
             )
-        elif (route_kind == "read") != (route_effect == "read"):
+        elif (
+            (route_kind == "unknown" and route_effect != "unknown")
+            or (route_kind == "read" and route_effect != "read")
+            or (
+                route_kind == "action"
+                and route_effect not in {"create", "update", "delete", "transition", "execute"}
+            )
+        ):
             add_issue(
                 diagnostics,
                 "ACC_SCOPE_KIND_EFFECT_MISMATCH",
-                "read routes require effect=read; action routes require a mutation effect",
+                "route kind and effect must consistently describe unknown, read, or action",
                 path=path,
                 pointer=f"{pointer}/effect",
             )
@@ -779,12 +1039,14 @@ def audit_inventory(
             add_issue(
                 diagnostics,
                 "ACC_SCOPE_ELIGIBILITY_INVALID",
-                "route eligibility must be eligible or ineligible",
+                "route eligibility must be undetermined, eligible, or ineligible",
                 path=path,
                 pointer=f"{pointer}/eligibility",
             )
         if eligibility == "eligible":
             counters["eligible_routes"] += 1
+        elif eligibility == "undetermined":
+            counters["unresolved"] += 1
         disposition = string_at(route, "disposition")
         if disposition not in DISPOSITIONS:
             counters["unresolved"] += 1
@@ -1536,7 +1798,18 @@ def main(argv: list[str] | None = None) -> int:
         inventory = load_document(inventory_path)
         system_map = load_document(system_map_path)
         capability_plan = load_document(capability_plan_path)
+        candidate_ledger, candidate_diagnostics = load_candidate_ledger(project)
+        evidence_ids, evidence_diagnostics = load_evidence_ids(project)
         result, diagnostics = audit_inventory(inventory, path="scope-inventory.yaml")
+        diagnostics.extend(candidate_diagnostics)
+        diagnostics.extend(evidence_diagnostics)
+        diagnostics.extend(
+            audit_candidate_routes(
+                inventory,
+                ledger=candidate_ledger,
+                evidence_ids=evidence_ids,
+            )
+        )
         diagnostics.extend(
             audit_cross_artifacts(
                 result,

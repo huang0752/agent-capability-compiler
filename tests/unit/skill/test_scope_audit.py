@@ -30,6 +30,8 @@ def _route(
     interaction_ids: list[str] | None = None,
     exclusion_rule_id: str | None = None,
     exclusion_decision: dict[str, object] | None = None,
+    candidate_id: str | None = None,
+    capability_ids: list[str] | None = None,
 ) -> dict[str, object]:
     return {
         "id": route_id,
@@ -42,7 +44,12 @@ def _route(
         "eligibility": eligibility,
         "disposition": disposition,
         "operation_id": operation_id,
-        "capability_ids": ["search_customers"],
+        "capability_ids": (
+            (["search_customers"] if disposition in {"planned", "composed"} else [])
+            if capability_ids is None
+            else capability_ids
+        ),
+        **({"candidate_id": candidate_id} if candidate_id is not None else {}),
         "reason": reason,
         **(
             {"usage_evidence_sources": usage_evidence_sources}
@@ -52,6 +59,56 @@ def _route(
         **({"interaction_ids": interaction_ids} if interaction_ids is not None else {}),
         **({"exclusion_rule_id": exclusion_rule_id} if exclusion_rule_id is not None else {}),
         **({"exclusion_decision": exclusion_decision} if exclusion_decision is not None else {}),
+    }
+
+
+def _candidate(
+    candidate_id: str,
+    route_ids: list[str],
+    *,
+    proven: bool = False,
+    gaps: list[str] | None = None,
+    ineligibility_claim: dict[str, object] | None = None,
+    kind_claim: str = "action",
+    effect_claim: str = "update",
+) -> dict[str, object]:
+    evidence_refs = ["source-action"] if proven else []
+    fact_status = "proven" if proven else "unknown"
+    return {
+        "id": candidate_id,
+        "domain_id": "customer",
+        "business_intent": "Update a customer record",
+        "route_ids": route_ids,
+        "interaction_ids": [],
+        "kind_claim": kind_claim,
+        "effect_claim": effect_claim,
+        "claims": {
+            "schema": {"status": fact_status, "evidence_refs": evidence_refs},
+            "effect": {"status": fact_status, "evidence_refs": evidence_refs},
+            "risk": {"status": fact_status, "evidence_refs": evidence_refs},
+            "reversibility": {"status": fact_status, "evidence_refs": evidence_refs},
+            "approval": {"status": fact_status, "evidence_refs": evidence_refs},
+            "retry": {"status": fact_status, "evidence_refs": evidence_refs},
+            "conflict_control": {"status": fact_status, "evidence_refs": evidence_refs},
+            "idempotency": {"status": fact_status, "evidence_refs": evidence_refs},
+            "outcome_resolution": {"status": fact_status, "evidence_refs": evidence_refs},
+            "lifecycle": {"status": fact_status, "evidence_refs": evidence_refs},
+            "authorization_boundary": {
+                "status": "upstream_authoritative" if proven else "unknown",
+                "evidence_refs": evidence_refs,
+            },
+            "identity_binding": {
+                "status": "identity_binding_proven" if proven else "unknown",
+                "evidence_refs": evidence_refs,
+            },
+            "context_isolation": {
+                "status": "context_isolation_proven" if proven else "unknown",
+                "evidence_refs": evidence_refs,
+            },
+        },
+        "verification_level": "contract_ready" if proven else "action_discovered",
+        "gaps": [] if gaps is None else gaps,
+        **({"ineligibility_claim": ineligibility_claim} if ineligibility_claim is not None else {}),
     }
 
 
@@ -104,6 +161,8 @@ def _summary(routes: list[object]) -> dict[str, int]:
             continue
         if route.get("eligibility") == "eligible":
             result["eligible_routes"] += 1
+        elif route.get("eligibility") == "undetermined":
+            result["unresolved"] += 1
         disposition = route.get("disposition")
         if isinstance(disposition, str) and disposition in result:
             result[disposition] += 1
@@ -147,6 +206,8 @@ def _write_project(
     system_operation_records: list[dict[str, object]] | None = None,
     plan_capabilities: list[dict[str, object]] | None = None,
     plan_coverage: dict[str, object] | None = None,
+    candidates: list[dict[str, object]] | None = None,
+    evidence: list[dict[str, object]] | None = None,
 ) -> Path:
     project = tmp_path / "acc-project"
     project.mkdir()
@@ -287,6 +348,18 @@ def _write_project(
         ),
         encoding="utf-8",
     )
+    if candidates is not None:
+        (project / "capability-candidates.yaml").write_text(
+            yaml.safe_dump({"schema_version": "2", "candidates": candidates}, sort_keys=False),
+            encoding="utf-8",
+        )
+    if evidence is not None:
+        evidence_dir = project / "evidence"
+        evidence_dir.mkdir()
+        for index, artifact in enumerate(evidence):
+            (evidence_dir / f"evidence-{index}.yaml").write_text(
+                yaml.safe_dump(artifact, sort_keys=False), encoding="utf-8"
+            )
     return project
 
 
@@ -310,6 +383,387 @@ def test_system_complete_accepts_a_fully_disposed_inventory(tmp_path: Path) -> N
     assert completed.returncode == 0
     assert payload["ok"] is True
     assert payload["result"]["scope_mode"] == "system_complete"
+
+
+@pytest.mark.parametrize(
+    ("kind", "effect"),
+    [("unknown", "unknown"), ("action", "update")],
+)
+def test_unknown_and_action_routes_require_candidate_references(
+    tmp_path: Path, kind: str, effect: str
+) -> None:
+    project = _write_project(
+        tmp_path,
+        routes=[
+            _route(
+                "customer.update",
+                method="POST",
+                kind=kind,
+                effect=effect,
+                eligibility="undetermined",
+                disposition="blocked_on_evidence",
+                operation_id=None,
+                capability_ids=[],
+                reason="Safety contract remains unknown.",
+            )
+        ],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert "ACC_SCOPE_CANDIDATE_REFERENCE_REQUIRED" in {
+        item["code"] for item in payload["diagnostics"]
+    }
+
+
+def test_candidate_route_references_must_match_bidirectionally(tmp_path: Path) -> None:
+    project = _write_project(
+        tmp_path,
+        routes=[
+            _route(
+                "customer.update",
+                method="POST",
+                kind="action",
+                effect="update",
+                candidate_id="candidate.customer.update",
+            )
+        ],
+        candidates=[
+            _candidate(
+                "candidate.customer.update",
+                ["customer.other"],
+                proven=True,
+            )
+        ],
+        evidence=[
+            {
+                "source_id": "source-action",
+                "kind": "source_file",
+                "path": "backend/customer.py",
+                "digest": "sha256:" + "1" * 64,
+            }
+        ],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert "ACC_SCOPE_CANDIDATE_ROUTE_MISMATCH" in {item["code"] for item in payload["diagnostics"]}
+
+
+def test_action_safety_gaps_cannot_be_reclassified_as_ineligible(tmp_path: Path) -> None:
+    project = _write_project(
+        tmp_path,
+        routes=[
+            _route(
+                "customer.update",
+                method="POST",
+                kind="action",
+                effect="update",
+                eligibility="ineligible",
+                disposition="excluded",
+                operation_id=None,
+                capability_ids=[],
+                candidate_id="candidate.customer.update",
+                reason="The user did not select this action.",
+            )
+        ],
+        candidates=[
+            _candidate(
+                "candidate.customer.update",
+                ["customer.update"],
+                gaps=["authorization_boundary", "idempotency"],
+            )
+        ],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert {
+        "ACC_SCOPE_ACTION_GAP_MISCLASSIFIED",
+        "ACC_SCOPE_ACTION_INELIGIBILITY_UNPROVEN",
+    } <= {item["code"] for item in payload["diagnostics"]}
+
+
+def test_action_safety_gaps_require_undetermined_blocked_disposition(tmp_path: Path) -> None:
+    project = _write_project(
+        tmp_path,
+        routes=[
+            _route(
+                "customer.update",
+                method="POST",
+                kind="action",
+                effect="update",
+                candidate_id="candidate.customer.update",
+            )
+        ],
+        candidates=[
+            _candidate(
+                "candidate.customer.update",
+                ["customer.update"],
+                gaps=["conflict_control"],
+            )
+        ],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert "ACC_SCOPE_ACTION_GAP_MISCLASSIFIED" in {item["code"] for item in payload["diagnostics"]}
+
+
+def test_action_ineligibility_claim_requires_independent_evidence(tmp_path: Path) -> None:
+    project = _write_project(
+        tmp_path,
+        routes=[
+            _route(
+                "customer.update",
+                method="POST",
+                kind="action",
+                effect="update",
+                eligibility="ineligible",
+                disposition="excluded",
+                operation_id=None,
+                capability_ids=[],
+                candidate_id="candidate.customer.update",
+                reason="Source route is objectively unavailable.",
+            )
+        ],
+        candidates=[
+            _candidate(
+                "candidate.customer.update",
+                ["customer.update"],
+                ineligibility_claim={
+                    "status": "proven",
+                    "evidence_refs": ["missing-source"],
+                },
+            )
+        ],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert "ACC_SCOPE_ACTION_INELIGIBILITY_UNPROVEN" in {
+        item["code"] for item in payload["diagnostics"]
+    }
+
+
+def test_evidence_backed_objective_ineligibility_closes_action_route(tmp_path: Path) -> None:
+    project = _write_project(
+        tmp_path,
+        routes=[
+            _route(
+                "customer.update",
+                method="POST",
+                kind="action",
+                effect="update",
+                eligibility="ineligible",
+                disposition="excluded",
+                operation_id=None,
+                capability_ids=[],
+                candidate_id="candidate.customer.update",
+                reason="Source route is objectively unavailable.",
+            )
+        ],
+        candidates=[
+            _candidate(
+                "candidate.customer.update",
+                ["customer.update"],
+                gaps=["idempotency"],
+                ineligibility_claim={
+                    "status": "proven",
+                    "evidence_refs": ["source-ineligible"],
+                },
+            )
+        ],
+        evidence=[
+            {
+                "source_id": "source-ineligible",
+                "kind": "source_file",
+                "path": "backend/customer.py",
+                "digest": "sha256:" + "2" * 64,
+            }
+        ],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 0
+    assert payload["ok"] is True
+
+
+def test_declared_malformed_candidate_ledger_is_an_explicit_error(tmp_path: Path) -> None:
+    project = _write_project(tmp_path)
+    secret = "malformed-candidate-secret-never-output"
+    (project / "capability-candidates.yaml").write_text(
+        yaml.safe_dump({"schema_version": "2", "candidates": secret}), encoding="utf-8"
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert {item["code"] for item in payload["diagnostics"]} == {
+        "ACC_SCOPE_CANDIDATE_LEDGER_INVALID"
+    }
+    assert secret not in completed.stdout
+
+
+def test_declared_malformed_evidence_artifact_is_an_explicit_error(tmp_path: Path) -> None:
+    project = _write_project(tmp_path, evidence=[{"source_id": "missing-contract-fields"}])
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert {item["code"] for item in payload["diagnostics"]} == {
+        "ACC_SCOPE_EVIDENCE_ARTIFACT_INVALID"
+    }
+    assert payload["diagnostics"][0]["path"] == "evidence/evidence-0.yaml"
+
+
+def test_duplicate_evidence_source_id_is_not_trusted_for_action_ineligibility(
+    tmp_path: Path,
+) -> None:
+    project = _write_project(
+        tmp_path,
+        routes=[
+            _route(
+                "customer.update",
+                method="POST",
+                kind="action",
+                effect="update",
+                eligibility="ineligible",
+                disposition="excluded",
+                operation_id=None,
+                capability_ids=[],
+                candidate_id="candidate.customer.update",
+                reason="Source route is objectively unavailable.",
+            )
+        ],
+        candidates=[
+            _candidate(
+                "candidate.customer.update",
+                ["customer.update"],
+                ineligibility_claim={
+                    "status": "proven",
+                    "evidence_refs": ["duplicate-source"],
+                },
+            )
+        ],
+        evidence=[
+            {
+                "source_id": "duplicate-source",
+                "kind": "source_file",
+                "path": "backend/first.py",
+                "digest": "sha256:" + "3" * 64,
+            },
+            {
+                "source_id": "duplicate-source",
+                "kind": "source_file",
+                "path": "backend/second.py",
+                "digest": "sha256:" + "4" * 64,
+            },
+        ],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert {
+        "ACC_SCOPE_EVIDENCE_SOURCE_ID_DUPLICATE",
+        "ACC_SCOPE_ACTION_INELIGIBILITY_UNPROVEN",
+    } <= {item["code"] for item in payload["diagnostics"]}
+
+
+def test_read_candidate_reference_is_optional_but_validated_when_declared(
+    tmp_path: Path,
+) -> None:
+    project = _write_project(
+        tmp_path,
+        routes=[_route("customer.search", candidate_id="candidate.customer.missing")],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert {item["code"] for item in payload["diagnostics"]} == {
+        "ACC_SCOPE_CANDIDATE_ROUTE_MISMATCH"
+    }
+
+
+def test_action_candidate_cannot_be_disguised_as_an_explicit_read_candidate(
+    tmp_path: Path,
+) -> None:
+    project = _write_project(
+        tmp_path,
+        routes=[_route("customer.search", candidate_id="candidate.customer.update")],
+        candidates=[
+            _candidate(
+                "candidate.customer.update",
+                ["customer.search"],
+                proven=True,
+            )
+        ],
+        evidence=[
+            {
+                "source_id": "source-action",
+                "kind": "source_file",
+                "path": "backend/customer.py",
+                "digest": "sha256:" + "5" * 64,
+            }
+        ],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert {item["code"] for item in payload["diagnostics"]} == {
+        "ACC_SCOPE_CANDIDATE_ROUTE_MISMATCH"
+    }
+
+
+def test_explicit_read_candidate_with_exact_read_semantics_is_accepted(tmp_path: Path) -> None:
+    project = _write_project(
+        tmp_path,
+        routes=[_route("customer.search", candidate_id="candidate.customer.search")],
+        candidates=[
+            _candidate(
+                "candidate.customer.search",
+                ["customer.search"],
+                proven=True,
+                kind_claim="read",
+                effect_claim="read",
+            )
+        ],
+        evidence=[
+            {
+                "source_id": "source-action",
+                "kind": "source_file",
+                "path": "backend/customer.py",
+                "digest": "sha256:" + "6" * 64,
+            }
+        ],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 0
+    assert payload["ok"] is True
+
+
+def test_broken_evidence_symlink_returns_a_stable_path_diagnostic(tmp_path: Path) -> None:
+    project = _write_project(tmp_path)
+    evidence_dir = project / "evidence"
+    evidence_dir.mkdir()
+    (evidence_dir / "broken.yaml").symlink_to(project / "does-not-exist.yaml")
+
+    completed, payload = _run(project)
+
+    assert completed.returncode in {2, 3}
+    assert completed.stderr == ""
+    assert payload["diagnostics"][0]["code"] == "ACC_SKILL_SYMLINK_REJECTED"
 
 
 def test_pilot_requires_explicit_user_confirmation(tmp_path: Path) -> None:
