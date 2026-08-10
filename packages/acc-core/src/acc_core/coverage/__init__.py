@@ -1,14 +1,23 @@
 """Capability coverage analysis."""
 
 from acc_core.coverage.analyze import analyze_coverage
+from acc_core.coverage.domains import analyze_domain_coverage
 from acc_core.coverage.models import (
+    BusinessGoalCoverage,
+    CandidateClassificationCoverage,
+    CandidateEvidenceCoverage,
     ClientAdapterEvidenceCoverage,
     ClientAdapterObservation,
     CompositionCoverage,
     ConstructabilityCoverage,
     CoverageReportV2,
+    CrossDomainDependencyCoverage,
+    CrossDomainDependencyEdge,
     DiscoverabilityEdge,
     DiscoverabilityGraphCoverage,
+    DomainCoverageAxes,
+    DomainDispositionCoverage,
+    IdentityAuthorizationCoverage,
     InteractionFidelityAxisCoverage,
     InteractionTraceCoverage,
     LiveObservation,
@@ -22,16 +31,26 @@ from acc_core.coverage.models import (
     SchemaFidelityCoverage,
     StateScenarioCoverage,
     SurfaceDispositionCoverage,
+    UserDecisionTraceCoverage,
+    VerificationCoverage,
 )
 
 __all__ = [
+    "BusinessGoalCoverage",
+    "CandidateClassificationCoverage",
+    "CandidateEvidenceCoverage",
     "ClientAdapterEvidenceCoverage",
     "ClientAdapterObservation",
     "CompositionCoverage",
     "ConstructabilityCoverage",
     "CoverageReportV2",
+    "CrossDomainDependencyCoverage",
+    "CrossDomainDependencyEdge",
     "DiscoverabilityEdge",
     "DiscoverabilityGraphCoverage",
+    "DomainCoverageAxes",
+    "DomainDispositionCoverage",
+    "IdentityAuthorizationCoverage",
     "InteractionFidelityAxisCoverage",
     "InteractionTraceCoverage",
     "LiveObservation",
@@ -45,5 +64,8 @@ __all__ = [
     "SchemaFidelityCoverage",
     "StateScenarioCoverage",
     "SurfaceDispositionCoverage",
+    "UserDecisionTraceCoverage",
+    "VerificationCoverage",
     "analyze_coverage",
+    "analyze_domain_coverage",
 ]

@@ -7,6 +7,7 @@ from typing import Annotated, Literal
 from pydantic import Field, field_validator, model_validator
 
 from acc_core.diagnostics import Diagnostic
+from acc_core.domains import DomainStatus, VerificationLevel
 from acc_core.models import NonEmptyString, StrictModel
 
 RawSha256Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -216,6 +217,108 @@ class ClientAdapterObservation(StrictModel):
         return value
 
 
+type DomainAxisStatus = Literal["not_declared", "analyzed"]
+
+
+class DomainDispositionCoverage(StrictModel):
+    """User dispositions remain separate from evidence-derived blockers."""
+
+    status: DomainAxisStatus
+    status_by_domain: dict[NonEmptyString, DomainStatus]
+    accepted_candidate_ids: list[NonEmptyString]
+    deferred_candidate_ids: list[NonEmptyString]
+    rejected_candidate_ids: list[NonEmptyString]
+    blocked_candidate_ids: list[NonEmptyString]
+
+
+class BusinessGoalCoverage(StrictModel):
+    """Declared business policy facts without source authorization semantics."""
+
+    status: DomainAxisStatus
+    goals_by_domain: dict[NonEmptyString, list[NonEmptyString]]
+    excluded_intents_by_domain: dict[NonEmptyString, list[NonEmptyString]]
+    approval_required_by_domain: dict[NonEmptyString, list[NonEmptyString]]
+    domains_without_decisions: list[NonEmptyString]
+
+
+class CandidateClassificationCoverage(StrictModel):
+    """Candidate denominator classification independent of route closure."""
+
+    status: DomainAxisStatus
+    read_candidate_ids: list[NonEmptyString]
+    action_candidate_ids: list[NonEmptyString]
+    unknown_candidate_ids: list[NonEmptyString]
+    unclassified_candidate_ids: list[NonEmptyString]
+
+
+class CandidateEvidenceCoverage(StrictModel):
+    """One evidence-derived candidate fact family without an aggregate result."""
+
+    status: DomainAxisStatus
+    proven_candidate_ids: list[NonEmptyString]
+    unproven_candidate_ids: list[NonEmptyString]
+    not_applicable_candidate_ids: list[NonEmptyString]
+
+
+class IdentityAuthorizationCoverage(StrictModel):
+    """Upstream authorization, identity, and context-isolation evidence state."""
+
+    status: DomainAxisStatus
+    source_final_candidate_ids: list[NonEmptyString]
+    unknown_candidate_ids: list[NonEmptyString]
+    contradicted_candidate_ids: list[NonEmptyString]
+    stale_candidate_ids: list[NonEmptyString]
+
+
+class VerificationCoverage(StrictModel):
+    """Raw verification levels; higher labels never upgrade independent safety axes."""
+
+    status: DomainAxisStatus
+    level_by_candidate: dict[NonEmptyString, VerificationLevel]
+
+
+class CrossDomainDependencyEdge(StrictModel):
+    domain_id: NonEmptyString
+    dependency_domain_id: NonEmptyString
+    status: Literal["resolved", "unresolved", "stale"]
+
+
+class CrossDomainDependencyCoverage(StrictModel):
+    """Dependency resolution facts derived from exact DomainDecision references."""
+
+    status: DomainAxisStatus
+    edges: list[CrossDomainDependencyEdge]
+    resolved_domain_ids: list[NonEmptyString]
+    unresolved_domain_ids: list[NonEmptyString]
+    stale_domain_ids: list[NonEmptyString]
+
+
+class UserDecisionTraceCoverage(StrictModel):
+    """Confirmation and disposition facts without treating deferral as a safety failure."""
+
+    status: DomainAxisStatus
+    confirmed_domain_ids: list[NonEmptyString]
+    pending_domain_ids: list[NonEmptyString]
+    deferred_candidate_ids: list[NonEmptyString]
+
+
+class DomainCoverageAxes(StrictModel):
+    """Twelve independent Domain and Action axes with no aggregate status."""
+
+    domain_disposition: DomainDispositionCoverage
+    business_goals: BusinessGoalCoverage
+    candidate_classification: CandidateClassificationCoverage
+    semantics_provenance: CandidateEvidenceCoverage
+    identity_authorization: IdentityAuthorizationCoverage
+    action_lifecycle: CandidateEvidenceCoverage
+    conflict_control: CandidateEvidenceCoverage
+    idempotency: CandidateEvidenceCoverage
+    outcome_resolution: CandidateEvidenceCoverage
+    verification: VerificationCoverage
+    cross_domain_dependency: CrossDomainDependencyCoverage
+    user_decision_trace: UserDecisionTraceCoverage
+
+
 class CoverageReportV2(StrictModel):
     """Multi-axis coverage report with deliberately no aggregate score."""
 
@@ -229,6 +332,18 @@ class CoverageReportV2(StrictModel):
     schema_fidelity: SchemaFidelityCoverage
     output_budget: OutputBudgetCoverage
     live_observations: LiveObservationCoverage
+    domain_disposition: DomainDispositionCoverage
+    business_goals: BusinessGoalCoverage
+    candidate_classification: CandidateClassificationCoverage
+    semantics_provenance: CandidateEvidenceCoverage
+    identity_authorization: IdentityAuthorizationCoverage
+    action_lifecycle: CandidateEvidenceCoverage
+    conflict_control: CandidateEvidenceCoverage
+    idempotency: CandidateEvidenceCoverage
+    outcome_resolution: CandidateEvidenceCoverage
+    verification: VerificationCoverage
+    cross_domain_dependency: CrossDomainDependencyCoverage
+    user_decision_trace: UserDecisionTraceCoverage
     surface_disposition: SurfaceDispositionCoverage
     interaction_trace: InteractionTraceCoverage
     input_binding_fidelity: InteractionFidelityAxisCoverage
@@ -242,13 +357,22 @@ class CoverageReportV2(StrictModel):
 
 
 __all__ = [
+    "BusinessGoalCoverage",
+    "CandidateClassificationCoverage",
+    "CandidateEvidenceCoverage",
     "ClientAdapterEvidenceCoverage",
     "ClientAdapterObservation",
     "CompositionCoverage",
     "ConstructabilityCoverage",
     "CoverageReportV2",
+    "CrossDomainDependencyCoverage",
+    "CrossDomainDependencyEdge",
     "DiscoverabilityEdge",
     "DiscoverabilityGraphCoverage",
+    "DomainAxisStatus",
+    "DomainCoverageAxes",
+    "DomainDispositionCoverage",
+    "IdentityAuthorizationCoverage",
     "InteractionFidelityAxisCoverage",
     "InteractionTraceCoverage",
     "LiveObservation",
@@ -262,4 +386,6 @@ __all__ = [
     "SchemaFidelityCoverage",
     "StateScenarioCoverage",
     "SurfaceDispositionCoverage",
+    "UserDecisionTraceCoverage",
+    "VerificationCoverage",
 ]

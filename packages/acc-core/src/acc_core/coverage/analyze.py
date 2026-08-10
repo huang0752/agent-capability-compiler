@@ -6,6 +6,7 @@ from collections.abc import Iterable, Sequence
 from typing import Literal
 
 from acc_core.contracts.fidelity import analyze_operation_schema_fidelity
+from acc_core.coverage.domains import analyze_domain_coverage
 from acc_core.coverage.interaction import analyze_interaction_coverage
 from acc_core.coverage.models import (
     ClientAdapterObservation,
@@ -313,6 +314,7 @@ def analyze_coverage(
         capabilities,
         operation_budget=operation_budget,
     )
+    domain_coverage = analyze_domain_coverage(report)
     (
         surface_disposition,
         interaction_trace,
@@ -340,6 +342,18 @@ def analyze_coverage(
         schema_fidelity=_schema_fidelity(report),
         output_budget=_output_budget(report, capabilities),
         live_observations=_live_observations(set(capabilities), live_observations),
+        domain_disposition=domain_coverage.domain_disposition,
+        business_goals=domain_coverage.business_goals,
+        candidate_classification=domain_coverage.candidate_classification,
+        semantics_provenance=domain_coverage.semantics_provenance,
+        identity_authorization=domain_coverage.identity_authorization,
+        action_lifecycle=domain_coverage.action_lifecycle,
+        conflict_control=domain_coverage.conflict_control,
+        idempotency=domain_coverage.idempotency,
+        outcome_resolution=domain_coverage.outcome_resolution,
+        verification=domain_coverage.verification,
+        cross_domain_dependency=domain_coverage.cross_domain_dependency,
+        user_decision_trace=domain_coverage.user_decision_trace,
         surface_disposition=surface_disposition,
         interaction_trace=interaction_trace,
         input_binding_fidelity=input_binding_fidelity,

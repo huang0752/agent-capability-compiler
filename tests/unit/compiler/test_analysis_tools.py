@@ -241,6 +241,18 @@ def test_coverage_reports_independent_axes_without_a_total_score() -> None:
         "schema_fidelity",
         "output_budget",
         "live_observations",
+        "domain_disposition",
+        "business_goals",
+        "candidate_classification",
+        "semantics_provenance",
+        "identity_authorization",
+        "action_lifecycle",
+        "conflict_control",
+        "idempotency",
+        "outcome_resolution",
+        "verification",
+        "cross_domain_dependency",
+        "user_decision_trace",
         "surface_disposition",
         "interaction_trace",
         "input_binding_fidelity",
@@ -268,6 +280,8 @@ def test_coverage_reports_independent_axes_without_a_total_score() -> None:
     assert result.output_budget.status_by_capability == {"get_customer": "unknown"}
     assert result.live_observations.status == "not_observed"
     assert result.live_observations.unobserved_capability_ids == ["get_customer"]
+    assert result.domain_disposition.status == "not_declared"
+    assert result.user_decision_trace.status == "not_declared"
     assert result.surface_disposition.status == "not_declared"
     assert result.client_adapter_evidence.status == "not_declared"
 
