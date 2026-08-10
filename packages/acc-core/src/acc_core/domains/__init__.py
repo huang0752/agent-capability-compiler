@@ -1,5 +1,15 @@
 """Public domain-guided capability discovery contracts."""
 
+from acc_core.domains.analyze import (
+    AuthorizationStatus,
+    CandidateReadiness,
+    DependencyReadiness,
+    DependencyReadinessStatus,
+    DomainReadiness,
+    ReadinessStatus,
+    analyze_candidate_readiness,
+    analyze_domain_readiness,
+)
 from acc_core.domains.models import (
     AuthorizationBoundaryClaim,
     CandidateClaims,
@@ -30,28 +40,36 @@ from acc_core.domains.models import (
 
 __all__ = [
     "AuthorizationBoundaryClaim",
+    "AuthorizationStatus",
     "CandidateClaims",
     "CandidateDisposition",
+    "CandidateReadiness",
     "CapabilityCandidate",
     "CapabilityCandidateLedger",
     "ChangedEvidenceRef",
     "ContextIsolationClaim",
     "DependencyDecisionRef",
+    "DependencyReadiness",
+    "DependencyReadinessStatus",
     "DomainChangeRequest",
     "DomainDecision",
     "DomainDecisionRef",
     "DomainEntry",
     "DomainMap",
     "DomainPolicy",
+    "DomainReadiness",
     "DomainStatus",
     "EvidenceSnapshotRef",
     "FactClaim",
     "FactClaimStatus",
     "IdentityBindingClaim",
+    "ReadinessStatus",
     "UserConfirmation",
     "UserDecision",
     "VerificationLevel",
     "aggregate_reference_digest",
+    "analyze_candidate_readiness",
+    "analyze_domain_readiness",
     "capability_candidate_ledger_digest",
     "domain_decision_digest",
 ]

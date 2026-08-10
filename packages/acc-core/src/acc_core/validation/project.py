@@ -17,6 +17,7 @@ from acc_core.domains import (
     DomainChangeRequest,
     DomainDecision,
     DomainMap,
+    analyze_domain_readiness,
     capability_candidate_ledger_digest,
     domain_decision_digest,
 )
@@ -949,6 +950,70 @@ def _validate_domain_sidecar_closure(
                         pointer="/confirmation/source_evidence_ref",
                     )
                 )
+
+    for domain_index, domain in enumerate(domain_map.domains):
+        domain_decisions = sorted(
+            (
+                decision
+                for decision in report.domain_decisions.values()
+                if decision.domain_id == domain.id
+            ),
+            key=lambda item: item.revision,
+        )
+        if domain.active_decision_ref is None:
+            readiness_decision = domain_decisions[-1] if domain_decisions else None
+        else:
+            readiness_active_decision, exact = _decision_for_ref(
+                report,
+                domain.active_decision_ref.domain_id,
+                domain.active_decision_ref.revision,
+                domain.active_decision_ref.decision_digest,
+            )
+            if not exact:
+                readiness_active_decision = None
+            readiness_decision = readiness_active_decision
+        dependency_decisions: dict[str, DomainDecision] = {}
+        for dependency_id in domain.dependency_domain_ids:
+            dependency_domain = domains.get(dependency_id)
+            if dependency_domain is None or dependency_domain.active_decision_ref is None:
+                continue
+            target, exact = _decision_for_ref(
+                report,
+                dependency_domain.active_decision_ref.domain_id,
+                dependency_domain.active_decision_ref.revision,
+                dependency_domain.active_decision_ref.decision_digest,
+            )
+            if exact and target is not None:
+                dependency_decisions[dependency_id] = target
+        readiness = analyze_domain_readiness(
+            domain=domain,
+            candidate_ledger=ledger,
+            decision=readiness_decision,
+            dependency_decisions=dependency_decisions,
+        )
+        decision_path = (
+            report.domain_decision_paths.get(
+                (readiness_decision.domain_id, readiness_decision.revision)
+            )
+            if readiness_decision is not None
+            else report.domain_map_path
+        )
+        for diagnostic in readiness.diagnostics:
+            path = (
+                report.capability_candidate_ledger_path
+                if diagnostic.pointer is not None and diagnostic.pointer.startswith("/candidates/")
+                else decision_path
+            )
+            pointer = diagnostic.pointer
+            if (
+                readiness_decision is None
+                and pointer is not None
+                and pointer.startswith("/dependency_domain_ids/")
+            ):
+                pointer = f"/domains/{domain_index}{pointer}"
+            report.diagnostics.append(
+                diagnostic.model_copy(update={"path": path, "pointer": pointer})
+            )
 
 
 def _validate_v2_sidecar_closure(report: ValidationReport) -> None:

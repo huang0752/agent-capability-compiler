@@ -334,6 +334,83 @@ def test_decision_requires_canonical_ledger_active_ref_and_current_completed_rev
     assert "ACC_DOMAIN_ACTIVE_DECISION_SUPERSEDED" in _codes(project)
 
 
+def test_invalid_active_decision_does_not_fallback_to_latest_for_readiness(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    ledger = _ledger()
+    decision = _decision(ledger)
+    decision["candidate_dispositions"][0] = {  # type: ignore[index]
+        "candidate_id": "orders.search",
+        "disposition": "accepted",
+        "materialized_capability_ids": ["orders.search"],
+        "rationale": "Accepted only in the untrusted latest document.",
+    }
+    DomainDecision.model_validate(decision)
+    domain_map = _domain_map(decision)
+    domain_map["domains"][0]["active_decision_ref"]["decision_digest"] = (  # type: ignore[index]
+        "sha256:" + "1" * 64
+    )
+    _write(project / "domain-map.yaml", domain_map)
+    _write(project / "capability-candidates.yaml", ledger)
+    _write(project / "domain-decisions" / "latest.yaml", decision)
+
+    codes = _codes(project)
+
+    assert "ACC_DOMAIN_ACTIVE_DECISION_MISMATCH" in codes
+    assert "ACC_DOMAIN_CANDIDATE_BLOCKED" not in codes
+
+
+def test_no_decision_dependency_readiness_maps_to_exact_domain_map_entry(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    ledger = _ledger()
+    identity_candidate = copy.deepcopy(ledger["candidates"][0])  # type: ignore[index]
+    identity_candidate["id"] = "identity.search"
+    identity_candidate["domain_id"] = "identity"
+    ledger["candidates"] = [identity_candidate, ledger["candidates"][0]]  # type: ignore[index]
+    domain_map = {
+        "schema_version": "2",
+        "domains": [
+            {
+                "id": "identity",
+                "title": "Identity",
+                "status": "not_started",
+                "candidate_ids": ["identity.search"],
+                "route_ids": [],
+                "interaction_ids": [],
+                "dependency_domain_ids": [],
+                "evidence_refs": [],
+                "active_decision_ref": None,
+            },
+            {
+                "id": "orders",
+                "title": "Orders",
+                "status": "not_started",
+                "candidate_ids": ["orders.search"],
+                "route_ids": [],
+                "interaction_ids": [],
+                "dependency_domain_ids": ["identity"],
+                "evidence_refs": [],
+                "active_decision_ref": None,
+            },
+        ],
+        "unclassified_candidate_ids": [],
+        "preferred_order": ["identity", "orders"],
+    }
+    _write(project / "domain-map.yaml", domain_map)
+    _write(project / "capability-candidates.yaml", ledger)
+
+    report = validate_project(project)
+
+    diagnostic = next(
+        item for item in report.diagnostics if item.code == "ACC_DOMAIN_DEPENDENCY_UNRESOLVED"
+    )
+    assert diagnostic.path == "domain-map.yaml"
+    assert diagnostic.pointer == "/domains/1/dependency_domain_ids/0"
+
+
 def test_decision_closes_dispositions_dependencies_evidence_and_confirmation(
     tmp_path: Path,
 ) -> None:
@@ -464,7 +541,10 @@ def test_dependency_ref_matches_active_ref_by_normalized_fields(tmp_path: Path) 
     _write(project / "domain-decisions" / "identity.yaml", identity)
     _write(project / "domain-decisions" / "orders.yaml", orders)
 
-    assert validate_project(project).ok
+    report = validate_project(project)
+    codes = {item.code for item in report.diagnostics}
+    assert "ACC_DOMAIN_DEPENDENCY_ACTIVE_DECISION_MISMATCH" not in codes
+    assert "ACC_DOMAIN_DEPENDENCY_UNRESOLVED" in codes
 
 
 def test_change_request_references_are_fully_closed(tmp_path: Path) -> None:
@@ -843,3 +923,31 @@ def test_stale_domain_may_reference_completed_active_decision(tmp_path: Path) ->
     _write(project / "domain-decisions" / "completed.yaml", decision)
 
     assert validate_project(project).ok
+
+
+def test_project_merges_domain_readiness_diagnostics_without_exposing_gap_text(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+    ledger = _ledger()
+    ledger["candidates"][0]["gaps"] = ["PRIVATE-CONFLICT-SENTINEL"]  # type: ignore[index]
+    decision = _decision(ledger)
+    decision["candidate_dispositions"][0] = {  # type: ignore[index]
+        "candidate_id": "orders.search",
+        "disposition": "accepted",
+        "materialized_capability_ids": ["orders.search"],
+        "rationale": "Accepted pending final implementation.",
+    }
+    DomainDecision.model_validate(decision)
+    _write(project / "domain-map.yaml", _domain_map(decision))
+    _write(project / "capability-candidates.yaml", ledger)
+    _write(project / "domain-decisions" / "orders-1.yaml", decision)
+
+    report = validate_project(project)
+
+    diagnostic = next(
+        item for item in report.diagnostics if item.code == "ACC_DOMAIN_CANDIDATE_BLOCKED"
+    )
+    assert diagnostic.path == "domain-decisions/orders-1.yaml"
+    assert diagnostic.pointer == "/candidate_dispositions/0"
+    assert "PRIVATE-CONFLICT-SENTINEL" not in str(diagnostic)
