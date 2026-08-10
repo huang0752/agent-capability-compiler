@@ -300,6 +300,22 @@ def test_milestone_two_cli_compiles_analyzes_packs_diffs_and_freezes(tmp_path: P
     assert coverage["result"]["operation_trace"]["traced_route_ids"] == [
         "GET /customers/{customer_id}"
     ]
+    interaction_axes = [
+        "surface_disposition",
+        "interaction_trace",
+        "input_binding_fidelity",
+        "default_provenance",
+        "option_resolution",
+        "condition_coverage",
+        "related_data_graph",
+        "state_scenarios",
+        "presentation_projection",
+        "client_adapter_evidence",
+    ]
+    assert [axis for axis in interaction_axes if axis in coverage["result"]] == interaction_axes
+    assert coverage["result"]["surface_disposition"]["status"] == "not_declared"
+    assert coverage["result"]["client_adapter_evidence"]["status"] == "not_declared"
+    assert "score" not in json.dumps(coverage["result"], sort_keys=True)
 
     diffed = _payload(_run_acc("diff", str(ir_path), str(ir_path), "--json", cwd=project))
     assert diffed["result"]["has_changes"] is False
@@ -392,6 +408,7 @@ def _live_profile(pack_sha256: str) -> dict[str, object]:
             "pack_sha256": pack_sha256,
             "project_id": "example-crm",
             "project_version": "0.1.0",
+            "interaction_sha256": "c" * 64,
             "tool_schema_sha256": "b" * 64,
         },
         "accounts": [

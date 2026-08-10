@@ -9,6 +9,8 @@ from pydantic import Field, field_validator, model_validator
 from acc_core.diagnostics import Diagnostic
 from acc_core.models import NonEmptyString, StrictModel
 
+RawSha256Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+
 
 class RouteDispositionCoverage(StrictModel):
     """Exact route disposition facts; this axis does not claim runtime usability."""
@@ -125,6 +127,95 @@ class LiveObservationCoverage(StrictModel):
         return value
 
 
+type InteractionAxisStatus = Literal["not_declared", "explicit_none", "analyzed"]
+
+
+class SurfaceDispositionCoverage(StrictModel):
+    """Source surfaces and explicit interaction adoption dispositions."""
+
+    status: InteractionAxisStatus
+    surface_ids: list[NonEmptyString]
+    adopted_interaction_ids: list[NonEmptyString]
+    omitted_interaction_ids: list[NonEmptyString]
+    unclassified_interaction_ids: list[NonEmptyString]
+
+
+class InteractionTraceCoverage(StrictModel):
+    """Bidirectional UI interaction to Scope route trace facts only."""
+
+    status: InteractionAxisStatus
+    traced_interaction_ids: list[NonEmptyString]
+    broken_interaction_ids: list[NonEmptyString]
+    client_only_interaction_ids: list[NonEmptyString]
+
+
+class InteractionFidelityAxisCoverage(StrictModel):
+    """One independent declared/proven/unproven interaction fact family."""
+
+    status: InteractionAxisStatus
+    declared_interaction_ids: list[NonEmptyString]
+    proven_interaction_ids: list[NonEmptyString]
+    unproven_interaction_ids: list[NonEmptyString]
+
+
+class RelatedDataEdgeCoverage(StrictModel):
+    producer: NonEmptyString
+    consumer: NonEmptyString
+    interaction_id: NonEmptyString
+
+
+class RelatedDataGraphCoverage(InteractionFidelityAxisCoverage):
+    """Related-data dependency facts without implying runtime availability."""
+
+    nodes: list[NonEmptyString]
+    edges: list[RelatedDataEdgeCoverage]
+
+
+class StateScenarioCoverage(StrictModel):
+    """Required scenarios remain separate from headless execution evidence."""
+
+    status: InteractionAxisStatus
+    required_scenario_ids: list[NonEmptyString]
+    headless_verified_interaction_ids: list[NonEmptyString]
+    not_verified_interaction_ids: list[NonEmptyString]
+
+
+class ClientAdapterEvidenceCoverage(StrictModel):
+    """Client-adapter evidence is never inferred from source connectivity."""
+
+    status: Literal[
+        "not_declared",
+        "explicit_none",
+        "not_verified",
+        "client_adapter_verified",
+    ]
+    verified_interaction_ids: list[NonEmptyString]
+    not_verified_interaction_ids: list[NonEmptyString]
+    verified_adapter_ids: list[NonEmptyString]
+
+
+class ClientAdapterObservation(StrictModel):
+    """Digest-bound, framework-neutral adapter conformance evidence."""
+
+    interaction_digest: RawSha256Digest
+    adapter_id: NonEmptyString
+    verified_interaction_ids: list[NonEmptyString]
+    verified_scenario_ids: list[NonEmptyString]
+    evidence_sources: Annotated[list[NonEmptyString], Field(min_length=1)]
+    required_scenarios_passed: bool
+
+    @field_validator(
+        "verified_interaction_ids",
+        "verified_scenario_ids",
+        "evidence_sources",
+    )
+    @classmethod
+    def validate_sorted_unique_values(cls, value: list[str]) -> list[str]:
+        if value != sorted(set(value)):
+            raise ValueError("client adapter observation lists must be sorted and unique")
+        return value
+
+
 class CoverageReportV2(StrictModel):
     """Multi-axis coverage report with deliberately no aggregate score."""
 
@@ -138,19 +229,37 @@ class CoverageReportV2(StrictModel):
     schema_fidelity: SchemaFidelityCoverage
     output_budget: OutputBudgetCoverage
     live_observations: LiveObservationCoverage
+    surface_disposition: SurfaceDispositionCoverage
+    interaction_trace: InteractionTraceCoverage
+    input_binding_fidelity: InteractionFidelityAxisCoverage
+    default_provenance: InteractionFidelityAxisCoverage
+    option_resolution: InteractionFidelityAxisCoverage
+    condition_coverage: InteractionFidelityAxisCoverage
+    related_data_graph: RelatedDataGraphCoverage
+    state_scenarios: StateScenarioCoverage
+    presentation_projection: InteractionFidelityAxisCoverage
+    client_adapter_evidence: ClientAdapterEvidenceCoverage
 
 
 __all__ = [
+    "ClientAdapterEvidenceCoverage",
+    "ClientAdapterObservation",
     "CompositionCoverage",
     "ConstructabilityCoverage",
     "CoverageReportV2",
     "DiscoverabilityEdge",
     "DiscoverabilityGraphCoverage",
+    "InteractionFidelityAxisCoverage",
+    "InteractionTraceCoverage",
     "LiveObservation",
     "LiveObservationCoverage",
     "OperationTraceCoverage",
     "OutputBudgetCoverage",
+    "RelatedDataEdgeCoverage",
+    "RelatedDataGraphCoverage",
     "RouteDispositionCoverage",
     "ScenarioCoverage",
     "SchemaFidelityCoverage",
+    "StateScenarioCoverage",
+    "SurfaceDispositionCoverage",
 ]

@@ -6,7 +6,9 @@ from collections.abc import Iterable, Sequence
 from typing import Literal
 
 from acc_core.contracts.fidelity import analyze_operation_schema_fidelity
+from acc_core.coverage.interaction import analyze_interaction_coverage
 from acc_core.coverage.models import (
+    ClientAdapterObservation,
     CompositionCoverage,
     ConstructabilityCoverage,
     CoverageReportV2,
@@ -300,6 +302,7 @@ def analyze_coverage(
     scope_inventory: ScopeInventory,
     *,
     live_observations: Sequence[LiveObservation] = (),
+    client_adapter_observations: Sequence[ClientAdapterObservation] = (),
     operation_budget: int = 8,
 ) -> CoverageReportV2:
     """Return independent evidence axes without converting route closure into usability."""
@@ -309,6 +312,22 @@ def analyze_coverage(
         report,
         capabilities,
         operation_budget=operation_budget,
+    )
+    (
+        surface_disposition,
+        interaction_trace,
+        input_binding_fidelity,
+        default_provenance,
+        option_resolution,
+        condition_coverage,
+        related_data_graph,
+        state_scenarios,
+        presentation_projection,
+        client_adapter_evidence,
+    ) = analyze_interaction_coverage(
+        report,
+        scope_inventory,
+        client_adapter_observations=client_adapter_observations,
     )
     return CoverageReportV2(
         coverage_version="2",
@@ -321,6 +340,16 @@ def analyze_coverage(
         schema_fidelity=_schema_fidelity(report),
         output_budget=_output_budget(report, capabilities),
         live_observations=_live_observations(set(capabilities), live_observations),
+        surface_disposition=surface_disposition,
+        interaction_trace=interaction_trace,
+        input_binding_fidelity=input_binding_fidelity,
+        default_provenance=default_provenance,
+        option_resolution=option_resolution,
+        condition_coverage=condition_coverage,
+        related_data_graph=related_data_graph,
+        state_scenarios=state_scenarios,
+        presentation_projection=presentation_projection,
+        client_adapter_evidence=client_adapter_evidence,
     )
 
 
