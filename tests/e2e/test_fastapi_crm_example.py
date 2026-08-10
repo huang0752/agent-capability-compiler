@@ -194,8 +194,7 @@ def test_no_client_claim_is_bound_to_the_actual_controlled_source_tree() -> None
         and path.suffix != ".pyc"
     )
     digest_input = (
-        json.dumps(actual_files, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        + "\n"
+        json.dumps(actual_files, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
     ).encode()
 
     assert evidence["source_id"] == "crm-client-surface-inventory"

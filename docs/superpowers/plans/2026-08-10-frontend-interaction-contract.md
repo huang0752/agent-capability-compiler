@@ -99,12 +99,14 @@ class InteractionScope(StrictModel):
     evidence_sources: list[NonEmptyString] = Field(default_factory=list)
     rationale: NonEmptyString | None = None
 
+
 class UISurface(StrictModel):
     id: NonEmptyString
     kind: Literal["page", "dialog", "panel", "mobile_screen", "command", "embedded_flow"]
     route_or_entry: NonEmptyString
     business_purpose: NonEmptyString
     evidence_sources: list[NonEmptyString]
+
 
 class UIInteraction(StrictModel):
     id: NonEmptyString
@@ -122,6 +124,7 @@ class UIInteraction(StrictModel):
     states: list[InteractionState]
     evidence_claims: list[InteractionEvidenceClaim]
     unknowns: list[NonEmptyString]
+
 
 class UIInteractionInventory(StrictModel):
     schema_version: Literal["2"]
@@ -185,14 +188,17 @@ class ReferenceOperand(StrictModel):
     kind: Literal["reference"]
     pointer: JsonPointer
 
+
 class LiteralOperand(StrictModel):
     kind: Literal["literal"]
     value: JsonValue
+
 
 type ConditionExpression = Annotated[
     AllExpression | AnyExpression | NotExpression | ComparisonExpression,
     Field(discriminator="operator"),
 ]
+
 
 class CapabilityInteractionContract(StrictModel):
     schema_version: Literal["2"]
@@ -237,7 +243,9 @@ git commit -m "feat(core): 定义能力交互合同与安全条件"
 - [ ] **Step 1: Write RED tests for schema names and sidecar closure**
 
 ```python
-def test_frontend_project_requires_inventory_and_one_contract_per_capability(tmp_path: Path) -> None:
+def test_frontend_project_requires_inventory_and_one_contract_per_capability(
+    tmp_path: Path,
+) -> None:
     project = _valid_project(tmp_path)
     _write_ui_inventory(project, mode="complete")
     report = validate_project(project)
@@ -329,6 +337,7 @@ class InteractionValidationReport:
     diagnostics: tuple[Diagnostic, ...]
     interaction_ids: tuple[str, ...]
     dependency_edges: tuple[tuple[str, str], ...]
+
 
 def analyze_interaction_fidelity(
     *,
@@ -436,6 +445,7 @@ class CompiledInteractionAttestation:
     inventory: dict[str, JsonValue]
     contracts: dict[str, dict[str, JsonValue]]
     dependencies: tuple[tuple[str, str], ...]
+
 
 def compile_interactions(report: ValidationReport) -> CompiledInteractionAttestation: ...
 ```
@@ -555,9 +565,11 @@ Public API:
 class InteractionCaller(Protocol):
     async def call(self, capability_id: str, arguments: Mapping[str, JsonValue]) -> JsonValue: ...
 
+
 class HeadlessInteractionEvaluator:
     def __init__(self, contract: RuntimeInteractionManifest, *, caller: InteractionCaller): ...
     async def dispatch(self, event: str, payload: Mapping[str, JsonValue]) -> InteractionTrace: ...
+
 
 class ClientAdapterConformanceReport(BaseModel):
     schema_version: Literal["2"]

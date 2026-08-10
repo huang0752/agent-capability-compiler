@@ -369,9 +369,7 @@ class HeadlessInteractionEvaluator:
             semantics[pointer][target] = matched
         return semantics
 
-    async def load_related_data(
-        self, caller: InteractionCaller
-    ) -> dict[str, str]:
+    async def load_related_data(self, caller: InteractionCaller) -> dict[str, str]:
         """Resolve manifest-declared related data with fixed, data-free outcomes."""
 
         outcomes: dict[str, str] = {}
@@ -436,8 +434,7 @@ class HeadlessInteractionEvaluator:
                 item = cast(JsonValue, copy.deepcopy(source))
             elif isinstance(source, list):
                 item = [
-                    _project_result_fields(source_item, field_pointers)
-                    for source_item in source
+                    _project_result_fields(source_item, field_pointers) for source_item in source
                 ]
             else:
                 item = _project_result_fields(source, field_pointers)
@@ -883,9 +880,7 @@ def _pointer_sequence(value: object) -> tuple[str, ...]:
     return tuple(pointers)
 
 
-def _request_binding_value(
-    binding: Mapping[str, object], state: Mapping[str, JsonValue]
-) -> object:
+def _request_binding_value(binding: Mapping[str, object], state: Mapping[str, JsonValue]) -> object:
     source_kind = binding.get("source_kind")
     if source_kind == "trusted_context":
         raise InteractionEvaluationError("request binding source is not provisioned")
@@ -1034,9 +1029,7 @@ def _project_options(
     return projected
 
 
-def _pagination_response(
-    source: Mapping[str, object], response: JsonValue
-) -> JsonValue | None:
+def _pagination_response(source: Mapping[str, object], response: JsonValue) -> JsonValue | None:
     pagination = source.get("pagination", {"mode": "none"})
     if not isinstance(pagination, Mapping):
         raise InteractionEvaluationError("option pagination must be a mapping")

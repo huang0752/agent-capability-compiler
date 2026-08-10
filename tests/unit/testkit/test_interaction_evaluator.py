@@ -747,9 +747,10 @@ async def test_async_option_flow_maps_search_page_and_value_label_then_calls_con
         identity_salt=TEST_IDENTITY_SALT,
     )
 
-    assert await evaluator.request_options(
-        "/customer_id", caller, search="acme", page="cursor-1"
-    ) is True
+    assert (
+        await evaluator.request_options("/customer_id", caller, search="acme", page="cursor-1")
+        is True
+    )
     assert evaluator.options("/customer_id") == ({"value": "c-1", "label": "Acme"},)
     assert evaluator.interaction_state == "ready"
     evaluator.set_value("/customer_id", "c-1")
@@ -801,9 +802,7 @@ async def test_dynamic_option_projection_includes_declared_disabled_and_group_va
             "next_cursor": "cursor-2",
         }
 
-    assert await evaluator.request_options(
-        "/customer_id", caller, search="", page="cursor-1"
-    )
+    assert await evaluator.request_options("/customer_id", caller, search="", page="cursor-1")
     assert evaluator.options("/customer_id") == (
         {
             "value": "c-1",
@@ -834,9 +833,7 @@ async def test_request_bindings_apply_mapping_and_cardinality_or_fail_not_provis
         tenant_id="tenant-a",
         identity_salt=TEST_IDENTITY_SALT,
     )
-    assert await evaluator.request_options(
-        "/customer_id", caller, search="", page="cursor-1"
-    )
+    assert await evaluator.request_options("/customer_id", caller, search="", page="cursor-1")
     assert observed[0]["filters"] == [{"region": "E"}]
 
     unsupported = copy.deepcopy(_manifest_contract())
@@ -853,9 +850,7 @@ async def test_request_bindings_apply_mapping_and_cardinality_or_fail_not_provis
         identity_salt=TEST_IDENTITY_SALT,
     )
     with pytest.raises(InteractionEvaluationError, match="transform is not provisioned"):
-        await invalid.request_options(
-            "/customer_id", caller, search="", page="cursor-1"
-        )
+        await invalid.request_options("/customer_id", caller, search="", page="cursor-1")
 
 
 @pytest.mark.asyncio
@@ -903,9 +898,7 @@ async def test_many_mapping_transforms_each_item_and_optional_missing_is_omitted
         tenant_id="tenant-a",
         identity_salt=TEST_IDENTITY_SALT,
     )
-    assert await evaluator.request_options(
-        "/customer_id", caller, search="", page="cursor-1"
-    )
+    assert await evaluator.request_options("/customer_id", caller, search="", page="cursor-1")
     assert observed[0]["tags"] == ["a", "b"]
     assert "customer_id" not in observed[0]
 
@@ -1024,9 +1017,7 @@ async def test_option_flow_reports_loading_empty_error_and_forbidden_states(
         identity_salt=TEST_IDENTITY_SALT,
     )
 
-    accepted = await evaluator.request_options(
-        "/customer_id", caller, search="", page="cursor-1"
-    )
+    accepted = await evaluator.request_options("/customer_id", caller, search="", page="cursor-1")
 
     assert accepted is (failure is None)
     assert "loading" in [entry.interaction_state for entry in evaluator.trace]

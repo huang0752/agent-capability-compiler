@@ -140,9 +140,7 @@ class ClientAdapterConformanceReport(_StrictModel):
         not_verified = set(self.not_verified_scenarios)
         outcomes = (passed, failed, skipped, not_provisioned, not_verified)
         overlaps = any(
-            left & right
-            for index, left in enumerate(outcomes)
-            for right in outcomes[index + 1 :]
+            left & right for index, left in enumerate(outcomes) for right in outcomes[index + 1 :]
         )
         if overlaps:
             raise ValueError("conformance scenario outcomes must be disjoint")
