@@ -336,7 +336,7 @@ def _write_action_interaction_sidecars(project: Path, *, lifecycle: bool) -> Non
     inventory_evidence_sources = ["orders-openapi"]
     if lifecycle:
         inventory_evidence_sources.extend(
-            sorted(item["source_id"] for item in phase_evidence.values())
+            sorted(cast(str, item["source_id"]) for item in phase_evidence.values())
         )
         inventory_evidence_sources.sort()
     _write(
