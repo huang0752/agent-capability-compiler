@@ -687,10 +687,16 @@ def _compile_action_capability(
                 path=path,
                 pointer=f"/evals/{index}",
             )
+    semantics_by_operation = {
+        operation_id: contract.action_semantics
+        for operation_id, contract in source_contracts.items()
+        if contract.action_semantics is not None
+    }
     proof = prove_action_capability(
         capability,
         cast(dict[str, Any], operations),
         path=path,
+        action_semantics=semantics_by_operation,
     )
     diagnostics.extend(proof.diagnostics)
     dependencies: set[str] = set()
@@ -708,6 +714,7 @@ def _compile_action_capability(
         pointer="/preview_workflow",
         diagnostics=diagnostics,
     )
+    dependencies.update(proof.strategy_operation_ids)
     _validate_workflow(
         capability.commit_workflow,
         available_steps=set(),
@@ -747,10 +754,15 @@ def _compile_action_capability(
         semantics = contract.action_semantics
         if semantics is None:
             continue
-        operation_semantics[operation_id] = compile_action_semantics_attestation(
-            operation,
-            semantics,
-        )
+        try:
+            operation_semantics[operation_id] = compile_action_semantics_attestation(
+                operation,
+                semantics,
+            )
+        except ValueError:
+            # The pure Action proof already emits a stable diagnostic. Do not let
+            # malformed source provenance escape compilation as an exception.
+            continue
     return dependencies, {
         "approval_required": proof.approval_required,
         "effects": list(proof.effects),

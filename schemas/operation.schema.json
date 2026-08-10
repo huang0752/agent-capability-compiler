@@ -120,45 +120,25 @@
       "type": "object"
     },
     "ConcurrencyContractV2": {
-      "additionalProperties": false,
-      "description": "Describe capture and Runtime-owned injection of a concurrency token.",
-      "properties": {
-        "mode": {
-          "enum": [
-            "required",
-            "not_supported"
-          ],
-          "title": "Mode",
-          "type": "string"
+      "discriminator": {
+        "mapping": {
+          "not_supported": "#/$defs/UnsupportedConcurrencyV2",
+          "required": "#/$defs/OptimisticTokenConcurrencyV2",
+          "server_serialized_state_predicate": "#/$defs/ServerSerializedStatePredicateV2"
         },
-        "precondition": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RuntimeInjectionTargetV2"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "token": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ConcurrencyTokenSourceV2"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        }
+        "propertyName": "mode"
       },
-      "required": [
-        "mode"
-      ],
-      "title": "ConcurrencyContractV2",
-      "type": "object"
+      "oneOf": [
+        {
+          "$ref": "#/$defs/OptimisticTokenConcurrencyV2"
+        },
+        {
+          "$ref": "#/$defs/ServerSerializedStatePredicateV2"
+        },
+        {
+          "$ref": "#/$defs/UnsupportedConcurrencyV2"
+        }
+      ]
     },
     "ConcurrencyTokenSourceV2": {
       "discriminator": {
@@ -482,35 +462,26 @@
       "type": "object"
     },
     "IdempotencyContractV2": {
-      "additionalProperties": false,
-      "description": "Separate source idempotency from Runtime-local duplicate suppression.",
-      "properties": {
-        "mode": {
-          "enum": [
-            "unsupported",
-            "runtime_deduplicate",
-            "source_key"
-          ],
-          "title": "Mode",
-          "type": "string"
+      "discriminator": {
+        "mapping": {
+          "runtime_deduplicate": "#/$defs/UnsupportedIdempotencyV2",
+          "source_key": "#/$defs/SourceKeyIdempotencyV2",
+          "state_idempotent": "#/$defs/StateIdempotencyV2",
+          "unsupported": "#/$defs/UnsupportedIdempotencyV2"
         },
-        "target": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RuntimeInjectionTargetV2"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        }
+        "propertyName": "mode"
       },
-      "required": [
-        "mode"
-      ],
-      "title": "IdempotencyContractV2",
-      "type": "object"
+      "oneOf": [
+        {
+          "$ref": "#/$defs/UnsupportedIdempotencyV2"
+        },
+        {
+          "$ref": "#/$defs/SourceKeyIdempotencyV2"
+        },
+        {
+          "$ref": "#/$defs/StateIdempotencyV2"
+        }
+      ]
     },
     "JsonRequestV2": {
       "additionalProperties": false,
@@ -580,6 +551,30 @@
         "concurrency"
       ],
       "title": "OperationSafetyV2",
+      "type": "object"
+    },
+    "OptimisticTokenConcurrencyV2": {
+      "additionalProperties": false,
+      "description": "Capture and inject an optimistic-lock token using the legacy wire mode.",
+      "properties": {
+        "mode": {
+          "const": "required",
+          "title": "Mode",
+          "type": "string"
+        },
+        "precondition": {
+          "$ref": "#/$defs/RuntimeInjectionTargetV2"
+        },
+        "token": {
+          "$ref": "#/$defs/ConcurrencyTokenSourceV2"
+        }
+      },
+      "required": [
+        "mode",
+        "token",
+        "precondition"
+      ],
+      "title": "OptimisticTokenConcurrencyV2",
       "type": "object"
     },
     "ReadOperationV2": {
@@ -732,6 +727,129 @@
           "$ref": "#/$defs/BodyInjectionTargetV2"
         }
       ]
+    },
+    "ServerSerializedStatePredicateV2": {
+      "additionalProperties": false,
+      "description": "Rely on an evidenced source-serialized transition from allowed state.",
+      "properties": {
+        "allowed_values": {
+          "items": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "minItems": 1,
+          "title": "Allowed Values",
+          "type": "array"
+        },
+        "mode": {
+          "const": "server_serialized_state_predicate",
+          "title": "Mode",
+          "type": "string"
+        },
+        "read_operation_id": {
+          "minLength": 1,
+          "title": "Read Operation Id",
+          "type": "string"
+        },
+        "state_pointer": {
+          "minLength": 1,
+          "title": "State Pointer",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode",
+        "read_operation_id",
+        "state_pointer",
+        "allowed_values"
+      ],
+      "title": "ServerSerializedStatePredicateV2",
+      "type": "object"
+    },
+    "SourceKeyIdempotencyV2": {
+      "additionalProperties": false,
+      "description": "Inject a Runtime-owned source idempotency key.",
+      "properties": {
+        "mode": {
+          "const": "source_key",
+          "title": "Mode",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/RuntimeInjectionTargetV2"
+        }
+      },
+      "required": [
+        "mode",
+        "target"
+      ],
+      "title": "SourceKeyIdempotencyV2",
+      "type": "object"
+    },
+    "StateIdempotencyV2": {
+      "additionalProperties": false,
+      "description": "Treat already-terminal source state as an idempotent outcome.",
+      "properties": {
+        "mode": {
+          "const": "state_idempotent",
+          "title": "Mode",
+          "type": "string"
+        },
+        "state_pointer": {
+          "minLength": 1,
+          "title": "State Pointer",
+          "type": "string"
+        },
+        "terminal_values": {
+          "items": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "minItems": 1,
+          "title": "Terminal Values",
+          "type": "array"
+        }
+      },
+      "required": [
+        "mode",
+        "state_pointer",
+        "terminal_values"
+      ],
+      "title": "StateIdempotencyV2",
+      "type": "object"
+    },
+    "UnsupportedConcurrencyV2": {
+      "additionalProperties": false,
+      "description": "Declare that no accepted conflict-control strategy is available.",
+      "properties": {
+        "mode": {
+          "const": "not_supported",
+          "title": "Mode",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "title": "UnsupportedConcurrencyV2",
+      "type": "object"
+    },
+    "UnsupportedIdempotencyV2": {
+      "additionalProperties": false,
+      "description": "Declare that the source exposes no usable idempotency strategy.",
+      "properties": {
+        "mode": {
+          "enum": [
+            "unsupported",
+            "runtime_deduplicate"
+          ],
+          "title": "Mode",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "title": "UnsupportedIdempotencyV2",
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",

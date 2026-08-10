@@ -7,7 +7,7 @@ from typing import Annotated, Literal, Self
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
-from pydantic import AfterValidator, field_validator, model_validator
+from pydantic import AfterValidator, Field, field_validator, model_validator
 
 from acc_core.models import Evidence, JsonObject, NonEmptyString, StrictModel
 from acc_core.models.actions import (
@@ -15,9 +15,11 @@ from acc_core.models.actions import (
     Effect,
     HttpMethodV2,
     IdempotencyContractV2,
+    OutcomeResolutionContractV2,
     RetryContractV2,
     Reversibility,
     Risk,
+    ServerSerializedStatePredicateV2,
 )
 
 
@@ -78,6 +80,23 @@ class SchemaProvenance(StrictModel):
     authority: Literal["contract", "implementation", "test", "observation"]
 
 
+class ActionSemanticsProvenance(StrictModel):
+    """Bind one Action safety field to trusted source Evidence."""
+
+    field: Literal[
+        "conflict_control",
+        "effect",
+        "idempotency",
+        "outcome_resolution",
+        "reversibility",
+        "retry",
+        "risk",
+    ]
+    evidence: Evidence
+    evidence_pointer: JsonPointer
+    authority: Literal["contract", "implementation", "test"]
+
+
 class ActionSemantics(StrictModel):
     """Evidence-backed source semantics for one mutating Operation."""
 
@@ -88,13 +107,31 @@ class ActionSemantics(StrictModel):
     retry: RetryContractV2
     idempotency: IdempotencyContractV2
     concurrency: ConcurrencyContractV2
+    outcome_resolution: OutcomeResolutionContractV2 | None = None
     evidence: Evidence
     authority: Literal["contract", "implementation", "test"]
+    provenance: list[ActionSemanticsProvenance] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_replay_contract(self) -> Self:
         if self.retry.mode == "idempotent_only" and self.idempotency.mode != "source_key":
             raise ValueError("idempotent_only mutation retry requires source_key idempotency")
+        if isinstance(self.concurrency, ServerSerializedStatePredicateV2):
+            if self.outcome_resolution is None or self.outcome_resolution.mode != "status_query":
+                raise ValueError(
+                    "server-serialized semantics require status_query outcome resolution"
+                )
+            expected = [
+                "conflict_control",
+                "effect",
+                "idempotency",
+                "outcome_resolution",
+                "reversibility",
+                "retry",
+                "risk",
+            ]
+            if [claim.field for claim in self.provenance] != expected:
+                raise ValueError("server-serialized semantics require exact field provenance")
         return self
 
 
@@ -160,4 +197,10 @@ class SourceContract(StrictModel):
         return self
 
 
-__all__ = ["ActionSemantics", "JsonPointer", "SchemaProvenance", "SourceContract"]
+__all__ = [
+    "ActionSemantics",
+    "ActionSemanticsProvenance",
+    "JsonPointer",
+    "SchemaProvenance",
+    "SourceContract",
+]

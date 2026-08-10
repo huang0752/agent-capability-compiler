@@ -3,12 +3,15 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
+from typing import Any, cast
 
 import pytest
 
 from acc_core.compiler import actions as action_compiler
+from acc_core.compiler import ir as compiler_ir
 from acc_core.compiler.actions import ActionProof, prove_action_capability
-from acc_core.contracts import ActionSemantics
+from acc_core.contracts import ActionSemantics, SourceContract
+from acc_core.diagnostics import Diagnostic
 from acc_core.models.v2 import (
     ActionCapabilityV2,
     ActionOperationV2,
@@ -39,14 +42,21 @@ def _operation(
     idempotency: str = "source_key",
     concurrency: str = "required",
     method: str | None = None,
+    retry_mode: str | None = None,
+    idempotency_contract: dict[str, object] | None = None,
+    concurrency_contract: dict[str, object] | None = None,
 ) -> ReadOperationV2 | ActionOperationV2:
     read = effect == "read"
     safety: dict[str, object] = {
         "effect": effect,
         "risk": risk,
         "reversibility": reversibility,
-        "retry": {"mode": "idempotent_only" if read or idempotency == "source_key" else "never"},
-        "idempotency": (
+        "retry": {
+            "mode": retry_mode
+            or ("idempotent_only" if read or idempotency == "source_key" else "never")
+        },
+        "idempotency": idempotency_contract
+        or (
             {"mode": "unsupported"}
             if read or idempotency == "unsupported"
             else {
@@ -54,7 +64,8 @@ def _operation(
                 "target": {"kind": "header", "name": "Idempotency-Key"},
             }
         ),
-        "concurrency": (
+        "concurrency": concurrency_contract
+        or (
             {"mode": "not_supported"}
             if read or concurrency == "not_supported"
             else {
@@ -148,6 +159,67 @@ def _codes(report: ActionProof) -> set[str]:
     return {item.code for item in report.diagnostics}
 
 
+def _server_serialized_semantics(operation: ActionOperationV2) -> ActionSemantics:
+    fields = [
+        "conflict_control",
+        "effect",
+        "idempotency",
+        "outcome_resolution",
+        "reversibility",
+        "retry",
+        "risk",
+    ]
+    evidence = operation.evidence[0].model_dump(mode="json")
+    return ActionSemantics.model_validate(
+        {
+            "method": operation.http.method,
+            **operation.http.safety.model_dump(mode="json"),
+            "outcome_resolution": {
+                "mode": "status_query",
+                "operation_id": "jobs.status",
+            },
+            "evidence": evidence,
+            "authority": "implementation",
+            "provenance": [
+                {
+                    "field": field,
+                    "evidence": evidence,
+                    "evidence_pointer": f"/action/{field}",
+                    "authority": "implementation",
+                }
+                for field in fields
+            ],
+        }
+    )
+
+
+def _server_serialized_operation(*, retry_mode: str = "never") -> ActionOperationV2:
+    operation = _operation(
+        "jobs.cancel",
+        effect="transition",
+        retry_mode="never",
+        idempotency_contract={
+            "mode": "state_idempotent",
+            "state_pointer": "/data/status",
+            "terminal_values": ["cancelled"],
+        },
+        concurrency_contract={
+            "mode": "server_serialized_state_predicate",
+            "read_operation_id": "jobs.status",
+            "state_pointer": "/data/status",
+            "allowed_values": ["queued", "running"],
+        },
+    )
+    assert isinstance(operation, ActionOperationV2)
+    if retry_mode != "never":
+        retry = operation.http.safety.retry.model_copy(update={"mode": retry_mode})
+        safety = operation.http.safety.model_copy(update={"retry": retry})
+        operation = operation.model_copy(
+            update={"http": operation.http.model_copy(update={"safety": safety})}
+        )
+    return operation
+
+
 def _valid_operations() -> Mapping[str, OperationV2]:
     return {
         "orders.get": _operation("orders.get", effect="read"),
@@ -165,6 +237,133 @@ def test_legal_single_action_produces_deterministic_derived_inventory() -> None:
     assert report.maximum_risk == "low"
     assert report.required_scopes == ("orders.read", "orders.write")
     assert report.approval_required is True
+
+
+def test_server_serialized_transition_requires_preview_status_and_trusted_semantics() -> None:
+    mutation = _server_serialized_operation()
+    operations = {
+        "jobs.status": _operation("jobs.status", effect="read"),
+        "jobs.cancel": mutation,
+    }
+    capability = _capability(
+        preview=[_call("jobs.status", "$.input.order_id"), {"emit": {"value": None}}],
+        commit=[_call("jobs.cancel"), {"emit": {"value": None}}],
+    )
+
+    proof = prove_action_capability(
+        capability,
+        operations,
+        action_semantics={"jobs.cancel": _server_serialized_semantics(mutation)},
+    )
+
+    assert proof.ok
+    assert proof.approval_required
+    assert proof.strategy_operation_ids == ("jobs.status",)
+
+
+def test_server_serialized_transition_rejects_retry_or_missing_provenance() -> None:
+    valid = _server_serialized_operation()
+    retrying = _server_serialized_operation(retry_mode="idempotent_only")
+    operations = {
+        "jobs.status": _operation("jobs.status", effect="read"),
+        "jobs.cancel": retrying,
+    }
+    capability = _capability(
+        preview=[_call("jobs.status", "$.input.order_id"), {"emit": {"value": None}}],
+        commit=[_call("jobs.cancel"), {"emit": {"value": None}}],
+    )
+
+    retry_proof = prove_action_capability(
+        capability,
+        operations,
+        action_semantics={"jobs.cancel": _server_serialized_semantics(valid)},
+    )
+    missing_proof = prove_action_capability(capability, operations)
+
+    assert "ACC_COMPILE_ACTION_SERVER_SERIALIZED_RETRY_FORBIDDEN" in _codes(retry_proof)
+    assert "ACC_COMPILE_ACTION_SAFETY_PROVENANCE_REQUIRED" in _codes(missing_proof)
+
+
+def test_server_serialized_strategy_cannot_waive_approval_or_use_contract_only_proof() -> None:
+    mutation = _server_serialized_operation()
+    semantics = _server_serialized_semantics(mutation)
+    claims = list(semantics.provenance)
+    claims[0] = claims[0].model_copy(update={"authority": "contract"})
+    contract_only = semantics.model_copy(update={"provenance": claims})
+    operations = {
+        "jobs.status": _operation("jobs.status", effect="read"),
+        "jobs.cancel": mutation,
+    }
+    capability = _capability(
+        approval="not_required",
+        preview=[_call("jobs.status", "$.input.order_id"), {"emit": {"value": None}}],
+        commit=[_call("jobs.cancel"), {"emit": {"value": None}}],
+    )
+
+    proof = prove_action_capability(
+        capability,
+        operations,
+        action_semantics={"jobs.cancel": contract_only},
+    )
+
+    assert "ACC_COMPILE_ACTION_APPROVAL_REQUIRED" in _codes(proof)
+    assert "ACC_COMPILE_ACTION_SAFETY_PROVENANCE_REQUIRED" in _codes(proof)
+
+
+def test_server_serialized_provenance_must_bind_every_claim_to_operation_evidence() -> None:
+    mutation = _server_serialized_operation()
+    semantics = _server_serialized_semantics(mutation)
+    foreign_evidence = semantics.provenance[0].evidence.model_copy(
+        update={"digest": "sha256:" + "b" * 64}
+    )
+    claims = list(semantics.provenance)
+    claims[0] = claims[0].model_copy(update={"evidence": foreign_evidence})
+    unbound = semantics.model_copy(update={"provenance": claims})
+
+    with pytest.raises(ValueError, match="bound Operation"):
+        action_compiler.compile_action_semantics_attestation(mutation, unbound)
+
+
+def test_ir_includes_server_serialized_preview_and_status_dependencies() -> None:
+    mutation = _server_serialized_operation()
+    status = _operation("jobs.status", effect="read")
+    capability = _capability(
+        preview=[_call("jobs.status", "$.input.order_id"), {"emit": {"value": None}}],
+        commit=[_call("jobs.cancel"), {"emit": {"value": None}}],
+    )
+    semantics = _server_serialized_semantics(mutation)
+    contract = SourceContract.model_validate(
+        {
+            "schema_version": "2",
+            "id": "jobs.cancel.contract",
+            "operation_id": "jobs.cancel",
+            "request_schema": {"type": "object"},
+            "response_schema": {"type": "object"},
+            "request_completeness": "complete",
+            "response_completeness": "complete",
+            "provenance": [],
+            "action_semantics": semantics.model_dump(mode="json"),
+        }
+    )
+    diagnostics: list[Diagnostic] = []
+
+    dependencies, proof = compiler_ir._compile_action_capability(
+        capability,
+        operations={"jobs.status": status, "jobs.cancel": mutation},
+        source_contracts={"jobs.cancel": contract},
+        operation_bindings={"jobs.status": set(), "jobs.cancel": set()},
+        policies={"orders-write"},
+        evals={"orders-change-success": "orders.change"},
+        diagnostics=diagnostics,
+    )
+
+    assert diagnostics == []
+    assert dependencies == {"jobs.cancel", "jobs.status"}
+    proof_value = cast(dict[str, Any], proof)
+    assert proof_value["operation_semantics"]["jobs.cancel"]["summary"]["outcome_resolution"] == {
+        "mode": "status_query",
+        "operation_id": "jobs.status",
+    }
 
 
 def test_action_semantics_attestation_is_canonical_and_evidence_bound() -> None:

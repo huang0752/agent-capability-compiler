@@ -37,6 +37,24 @@
           "title": "Method",
           "type": "string"
         },
+        "outcome_resolution": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OutcomeResolutionContractV2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "provenance": {
+          "items": {
+            "$ref": "#/$defs/ActionSemanticsProvenance"
+          },
+          "title": "Provenance",
+          "type": "array"
+        },
         "retry": {
           "$ref": "#/$defs/RetryContractV2"
         },
@@ -59,6 +77,49 @@
         "authority"
       ],
       "title": "ActionSemantics",
+      "type": "object"
+    },
+    "ActionSemanticsProvenance": {
+      "additionalProperties": false,
+      "description": "Bind one Action safety field to trusted source Evidence.",
+      "properties": {
+        "authority": {
+          "enum": [
+            "contract",
+            "implementation",
+            "test"
+          ],
+          "title": "Authority",
+          "type": "string"
+        },
+        "evidence": {
+          "$ref": "#/$defs/Evidence"
+        },
+        "evidence_pointer": {
+          "title": "Evidence Pointer",
+          "type": "string"
+        },
+        "field": {
+          "enum": [
+            "conflict_control",
+            "effect",
+            "idempotency",
+            "outcome_resolution",
+            "reversibility",
+            "retry",
+            "risk"
+          ],
+          "title": "Field",
+          "type": "string"
+        }
+      },
+      "required": [
+        "field",
+        "evidence",
+        "evidence_pointer",
+        "authority"
+      ],
+      "title": "ActionSemanticsProvenance",
       "type": "object"
     },
     "BodyInjectionTargetV2": {
@@ -106,45 +167,25 @@
       "type": "object"
     },
     "ConcurrencyContractV2": {
-      "additionalProperties": false,
-      "description": "Describe capture and Runtime-owned injection of a concurrency token.",
-      "properties": {
-        "mode": {
-          "enum": [
-            "required",
-            "not_supported"
-          ],
-          "title": "Mode",
-          "type": "string"
+      "discriminator": {
+        "mapping": {
+          "not_supported": "#/$defs/UnsupportedConcurrencyV2",
+          "required": "#/$defs/OptimisticTokenConcurrencyV2",
+          "server_serialized_state_predicate": "#/$defs/ServerSerializedStatePredicateV2"
         },
-        "precondition": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RuntimeInjectionTargetV2"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "token": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ConcurrencyTokenSourceV2"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        }
+        "propertyName": "mode"
       },
-      "required": [
-        "mode"
-      ],
-      "title": "ConcurrencyContractV2",
-      "type": "object"
+      "oneOf": [
+        {
+          "$ref": "#/$defs/OptimisticTokenConcurrencyV2"
+        },
+        {
+          "$ref": "#/$defs/ServerSerializedStatePredicateV2"
+        },
+        {
+          "$ref": "#/$defs/UnsupportedConcurrencyV2"
+        }
+      ]
     },
     "ConcurrencyTokenSourceV2": {
       "discriminator": {
@@ -329,37 +370,73 @@
       "type": "object"
     },
     "IdempotencyContractV2": {
+      "discriminator": {
+        "mapping": {
+          "runtime_deduplicate": "#/$defs/UnsupportedIdempotencyV2",
+          "source_key": "#/$defs/SourceKeyIdempotencyV2",
+          "state_idempotent": "#/$defs/StateIdempotencyV2",
+          "unsupported": "#/$defs/UnsupportedIdempotencyV2"
+        },
+        "propertyName": "mode"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/UnsupportedIdempotencyV2"
+        },
+        {
+          "$ref": "#/$defs/SourceKeyIdempotencyV2"
+        },
+        {
+          "$ref": "#/$defs/StateIdempotencyV2"
+        }
+      ]
+    },
+    "JsonValue": {},
+    "OptimisticTokenConcurrencyV2": {
       "additionalProperties": false,
-      "description": "Separate source idempotency from Runtime-local duplicate suppression.",
+      "description": "Capture and inject an optimistic-lock token using the legacy wire mode.",
       "properties": {
         "mode": {
-          "enum": [
-            "unsupported",
-            "runtime_deduplicate",
-            "source_key"
-          ],
+          "const": "required",
           "title": "Mode",
           "type": "string"
         },
-        "target": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RuntimeInjectionTargetV2"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
+        "precondition": {
+          "$ref": "#/$defs/RuntimeInjectionTargetV2"
+        },
+        "token": {
+          "$ref": "#/$defs/ConcurrencyTokenSourceV2"
         }
       },
       "required": [
-        "mode"
+        "mode",
+        "token",
+        "precondition"
       ],
-      "title": "IdempotencyContractV2",
+      "title": "OptimisticTokenConcurrencyV2",
       "type": "object"
     },
-    "JsonValue": {},
+    "OutcomeResolutionContractV2": {
+      "discriminator": {
+        "mapping": {
+          "outcome_unknown": "#/$defs/UnknownOutcomeResolutionV2",
+          "status_query": "#/$defs/StatusQueryOutcomeResolutionV2",
+          "synchronous_result": "#/$defs/SynchronousOutcomeResolutionV2"
+        },
+        "propertyName": "mode"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/SynchronousOutcomeResolutionV2"
+        },
+        {
+          "$ref": "#/$defs/StatusQueryOutcomeResolutionV2"
+        },
+        {
+          "$ref": "#/$defs/UnknownOutcomeResolutionV2"
+        }
+      ]
+    },
     "ResponseHeaderTokenSourceV2": {
       "additionalProperties": false,
       "description": "Capture an allowlisted response header as an optimistic-lock token.",
@@ -469,6 +546,183 @@
         "authority"
       ],
       "title": "SchemaProvenance",
+      "type": "object"
+    },
+    "ServerSerializedStatePredicateV2": {
+      "additionalProperties": false,
+      "description": "Rely on an evidenced source-serialized transition from allowed state.",
+      "properties": {
+        "allowed_values": {
+          "items": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "minItems": 1,
+          "title": "Allowed Values",
+          "type": "array"
+        },
+        "mode": {
+          "const": "server_serialized_state_predicate",
+          "title": "Mode",
+          "type": "string"
+        },
+        "read_operation_id": {
+          "minLength": 1,
+          "title": "Read Operation Id",
+          "type": "string"
+        },
+        "state_pointer": {
+          "minLength": 1,
+          "title": "State Pointer",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode",
+        "read_operation_id",
+        "state_pointer",
+        "allowed_values"
+      ],
+      "title": "ServerSerializedStatePredicateV2",
+      "type": "object"
+    },
+    "SourceKeyIdempotencyV2": {
+      "additionalProperties": false,
+      "description": "Inject a Runtime-owned source idempotency key.",
+      "properties": {
+        "mode": {
+          "const": "source_key",
+          "title": "Mode",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/RuntimeInjectionTargetV2"
+        }
+      },
+      "required": [
+        "mode",
+        "target"
+      ],
+      "title": "SourceKeyIdempotencyV2",
+      "type": "object"
+    },
+    "StateIdempotencyV2": {
+      "additionalProperties": false,
+      "description": "Treat already-terminal source state as an idempotent outcome.",
+      "properties": {
+        "mode": {
+          "const": "state_idempotent",
+          "title": "Mode",
+          "type": "string"
+        },
+        "state_pointer": {
+          "minLength": 1,
+          "title": "State Pointer",
+          "type": "string"
+        },
+        "terminal_values": {
+          "items": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "minItems": 1,
+          "title": "Terminal Values",
+          "type": "array"
+        }
+      },
+      "required": [
+        "mode",
+        "state_pointer",
+        "terminal_values"
+      ],
+      "title": "StateIdempotencyV2",
+      "type": "object"
+    },
+    "StatusQueryOutcomeResolutionV2": {
+      "additionalProperties": false,
+      "description": "Resolve a mutation outcome through one declared read Operation.",
+      "properties": {
+        "mode": {
+          "const": "status_query",
+          "title": "Mode",
+          "type": "string"
+        },
+        "operation_id": {
+          "minLength": 1,
+          "title": "Operation Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode",
+        "operation_id"
+      ],
+      "title": "StatusQueryOutcomeResolutionV2",
+      "type": "object"
+    },
+    "SynchronousOutcomeResolutionV2": {
+      "additionalProperties": false,
+      "description": "Treat the definitive mutation response as the source outcome.",
+      "properties": {
+        "mode": {
+          "const": "synchronous_result",
+          "title": "Mode",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "title": "SynchronousOutcomeResolutionV2",
+      "type": "object"
+    },
+    "UnknownOutcomeResolutionV2": {
+      "additionalProperties": false,
+      "description": "Declare that ambiguous mutation outcomes cannot be resolved automatically.",
+      "properties": {
+        "mode": {
+          "const": "outcome_unknown",
+          "title": "Mode",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "title": "UnknownOutcomeResolutionV2",
+      "type": "object"
+    },
+    "UnsupportedConcurrencyV2": {
+      "additionalProperties": false,
+      "description": "Declare that no accepted conflict-control strategy is available.",
+      "properties": {
+        "mode": {
+          "const": "not_supported",
+          "title": "Mode",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "title": "UnsupportedConcurrencyV2",
+      "type": "object"
+    },
+    "UnsupportedIdempotencyV2": {
+      "additionalProperties": false,
+      "description": "Declare that the source exposes no usable idempotency strategy.",
+      "properties": {
+        "mode": {
+          "enum": [
+            "unsupported",
+            "runtime_deduplicate"
+          ],
+          "title": "Mode",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "title": "UnsupportedIdempotencyV2",
       "type": "object"
     }
   },

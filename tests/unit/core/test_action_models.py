@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Literal, cast
 
 import pytest
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from acc_core.models.actions import (
     BodyInjectionTargetV2,
@@ -15,9 +15,16 @@ from acc_core.models.actions import (
     IdempotencyContractV2,
     JsonRequestV2,
     OperationSafetyV2,
+    OptimisticTokenConcurrencyV2,
     ResponseHeaderTokenSourceV2,
     RetryContractV2,
+    SourceKeyIdempotencyV2,
+    UnsupportedConcurrencyV2,
+    UnsupportedIdempotencyV2,
 )
+
+_IDEMPOTENCY_ADAPTER: TypeAdapter[IdempotencyContractV2] = TypeAdapter(IdempotencyContractV2)
+_CONCURRENCY_ADAPTER: TypeAdapter[ConcurrencyContractV2] = TypeAdapter(ConcurrencyContractV2)
 
 
 def _read_safety() -> OperationSafetyV2:
@@ -26,8 +33,8 @@ def _read_safety() -> OperationSafetyV2:
         risk="low",
         reversibility="reversible",
         retry=RetryContractV2(mode="idempotent_only"),
-        idempotency=IdempotencyContractV2(mode="unsupported"),
-        concurrency=ConcurrencyContractV2(mode="not_supported"),
+        idempotency=UnsupportedIdempotencyV2(mode="unsupported"),
+        concurrency=UnsupportedConcurrencyV2(mode="not_supported"),
     )
 
 
@@ -86,11 +93,11 @@ def test_operation_safety_requires_every_contract_explicitly() -> None:
 
 
 def test_idempotency_source_key_requires_one_runtime_injection_target() -> None:
-    header = IdempotencyContractV2(
+    header = SourceKeyIdempotencyV2(
         mode="source_key",
         target=HeaderInjectionTargetV2(kind="header", name="Idempotency-Key"),
     )
-    body = IdempotencyContractV2(
+    body = SourceKeyIdempotencyV2(
         mode="source_key",
         target=BodyInjectionTargetV2(kind="body", pointer="/request_id"),
     )
@@ -100,13 +107,15 @@ def test_idempotency_source_key_requires_one_runtime_injection_target() -> None:
     assert header.target.kind == "header"
     assert body.target.kind == "body"
 
-    with pytest.raises(ValidationError, match="target is required"):
-        IdempotencyContractV2(mode="source_key")
+    with pytest.raises(ValidationError):
+        _IDEMPOTENCY_ADAPTER.validate_python({"mode": "source_key"})
     for mode in ("unsupported", "runtime_deduplicate"):
-        with pytest.raises(ValidationError, match="target is not allowed"):
-            IdempotencyContractV2(
-                mode=mode,
-                target=HeaderInjectionTargetV2(kind="header", name="Idempotency-Key"),
+        with pytest.raises(ValidationError):
+            _IDEMPOTENCY_ADAPTER.validate_python(
+                {
+                    "mode": mode,
+                    "target": {"kind": "header", "name": "Idempotency-Key"},
+                }
             )
 
 
@@ -124,13 +133,93 @@ def test_idempotent_retry_requires_source_idempotency() -> None:
     assert safety.retry.mode == "never"
 
 
+def test_server_serialized_state_strategy_is_typed_and_fail_closed() -> None:
+    safety = _action_safety(
+        retry={"mode": "never"},
+        idempotency={
+            "mode": "state_idempotent",
+            "state_pointer": "/data/status",
+            "terminal_values": ["cancelled"],
+        },
+        concurrency={
+            "mode": "server_serialized_state_predicate",
+            "read_operation_id": "jobs.status",
+            "state_pointer": "/data/status",
+            "allowed_values": ["queued", "running"],
+        },
+    )
+
+    assert safety.idempotency.mode == "state_idempotent"
+    assert safety.concurrency.mode == "server_serialized_state_predicate"
+
+    with pytest.raises(ValidationError, match="disjoint"):
+        _action_safety(
+            retry={"mode": "never"},
+            idempotency={
+                "mode": "state_idempotent",
+                "state_pointer": "/data/status",
+                "terminal_values": ["running"],
+            },
+            concurrency={
+                "mode": "server_serialized_state_predicate",
+                "read_operation_id": "jobs.status",
+                "state_pointer": "/data/status",
+                "allowed_values": ["queued", "running"],
+            },
+        )
+
+
+def test_state_strategies_require_canonical_nonempty_values_and_matching_pointers() -> None:
+    with pytest.raises(ValidationError):
+        _action_safety(
+            retry={"mode": "never"},
+            idempotency={
+                "mode": "state_idempotent",
+                "state_pointer": "/data/status",
+                "terminal_values": [],
+            },
+            concurrency={
+                "mode": "server_serialized_state_predicate",
+                "read_operation_id": "jobs.status",
+                "state_pointer": "/data/status",
+                "allowed_values": ["queued"],
+            },
+        )
+
+    with pytest.raises(ValidationError, match="same state pointer"):
+        _action_safety(
+            retry={"mode": "never"},
+            idempotency={
+                "mode": "state_idempotent",
+                "state_pointer": "/data/terminal_status",
+                "terminal_values": ["cancelled"],
+            },
+            concurrency={
+                "mode": "server_serialized_state_predicate",
+                "read_operation_id": "jobs.status",
+                "state_pointer": "/data/status",
+                "allowed_values": ["queued"],
+            },
+        )
+
+    with pytest.raises(ValidationError, match="must be paired"):
+        _action_safety(
+            retry={"mode": "never"},
+            idempotency={
+                "mode": "state_idempotent",
+                "state_pointer": "/data/status",
+                "terminal_values": ["cancelled"],
+            },
+        )
+
+
 def test_required_concurrency_needs_token_and_precondition() -> None:
-    header_token = ConcurrencyContractV2(
+    header_token = OptimisticTokenConcurrencyV2(
         mode="required",
         token=ResponseHeaderTokenSourceV2(kind="response_header", name="ETag"),
         precondition=HeaderInjectionTargetV2(kind="header", name="If-Match"),
     )
-    body_token = ConcurrencyContractV2(
+    body_token = OptimisticTokenConcurrencyV2(
         mode="required",
         token=BodyTokenSourceV2(kind="body", pointer="/version"),
         precondition=BodyInjectionTargetV2(kind="body", pointer="/version"),
@@ -148,12 +237,14 @@ def test_required_concurrency_needs_token_and_precondition() -> None:
         }
         values.pop(missing)
         with pytest.raises(ValidationError, match="required"):
-            ConcurrencyContractV2.model_validate(values)
+            _CONCURRENCY_ADAPTER.validate_python(values)
 
-    with pytest.raises(ValidationError, match="not allowed"):
-        ConcurrencyContractV2(
-            mode="not_supported",
-            token=BodyTokenSourceV2(kind="body", pointer="/version"),
+    with pytest.raises(ValidationError):
+        _CONCURRENCY_ADAPTER.validate_python(
+            {
+                "mode": "not_supported",
+                "token": {"kind": "body", "pointer": "/version"},
+            }
         )
 
 

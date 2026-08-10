@@ -14,11 +14,18 @@ from pydantic import JsonValue, ValidationError
 from acc_core.contracts import ActionSemantics
 from acc_core.diagnostics import Diagnostic
 from acc_core.models import BranchStep, CallStep, ForeachStep, ParallelStep, WorkflowStep
-from acc_core.models.actions import Effect, Risk
+from acc_core.models.actions import (
+    Effect,
+    Risk,
+    ServerSerializedStatePredicateV2,
+    StateIdempotencyV2,
+    StatusQueryOutcomeResolutionV2,
+)
 from acc_core.models.v2 import (
     ActionCapabilityV2,
     ActionOperationV2,
     OperationV2,
+    ReadOperationV2,
 )
 
 _RISK_ORDER: dict[Risk, int] = {
@@ -62,7 +69,12 @@ def compile_action_semantics_attestation(
 
     summary = cast(dict[str, JsonValue], semantics.model_dump(mode="json"))
     claimed = {key: summary[key] for key in _operation_semantics(operation)}
-    if claimed != _operation_semantics(operation) or semantics.evidence not in operation.evidence:
+    bound_evidence = operation.evidence
+    if (
+        claimed != _operation_semantics(operation)
+        or semantics.evidence not in bound_evidence
+        or any(claim.evidence not in bound_evidence for claim in semantics.provenance)
+    ):
         raise ValueError("Action semantics do not match their bound Operation")
     return {"summary": summary, "digest": _semantics_digest(summary)}
 
@@ -97,6 +109,7 @@ class ActionProof:
     maximum_risk: Risk | None
     required_scopes: tuple[str, ...]
     approval_required: bool
+    strategy_operation_ids: tuple[str, ...] = ()
 
     @property
     def ok(self) -> bool:
@@ -259,6 +272,7 @@ def prove_action_capability(
     operations: Mapping[str, OperationV2],
     *,
     path: str | None = None,
+    action_semantics: Mapping[str, ActionSemantics] | None = None,
 ) -> ActionProof:
     """Prove one Action Capability without reading files or mutating compiler state."""
 
@@ -392,6 +406,9 @@ def prove_action_capability(
         for operation_id in sorted(mutation_operations_by_id)
     )
 
+    strategy_operation_ids: set[str] = set()
+    semantics_by_operation = action_semantics or {}
+    preview_operation_ids = {site.operation_id for site in preview_sites}
     for operation in mutation_operations:
         safety = operation.http.safety
         if safety.effect in {"create", "execute"} and safety.idempotency.mode != "source_key":
@@ -402,9 +419,10 @@ def prove_action_capability(
                 path=diagnostic_path,
                 pointer="/commit_workflow",
             )
-        if safety.effect in {"update", "delete", "transition"} and (
-            safety.concurrency.mode != "required"
-        ):
+        if safety.effect in {"update", "delete", "transition"} and safety.concurrency.mode not in {
+            "required",
+            "server_serialized_state_predicate",
+        }:
             _diagnostic(
                 diagnostics,
                 code="ACC_COMPILE_ACTION_CONCURRENCY_REQUIRED",
@@ -412,6 +430,87 @@ def prove_action_capability(
                 path=diagnostic_path,
                 pointer="/commit_workflow",
             )
+        if isinstance(safety.concurrency, ServerSerializedStatePredicateV2):
+            semantics = semantics_by_operation.get(operation.id)
+            if safety.effect not in {"delete", "transition"}:
+                _diagnostic(
+                    diagnostics,
+                    code="ACC_COMPILE_ACTION_SERVER_SERIALIZED_EFFECT_UNSUPPORTED",
+                    message="Server-serialized state predicates support only delete or transition.",
+                    path=diagnostic_path,
+                    pointer="/commit_workflow",
+                )
+            if safety.retry.mode != "never":
+                _diagnostic(
+                    diagnostics,
+                    code="ACC_COMPILE_ACTION_SERVER_SERIALIZED_RETRY_FORBIDDEN",
+                    message="Server-serialized mutations must never be retried automatically.",
+                    path=diagnostic_path,
+                    pointer="/commit_workflow",
+                )
+            if not isinstance(safety.idempotency, StateIdempotencyV2):
+                _diagnostic(
+                    diagnostics,
+                    code="ACC_COMPILE_ACTION_STATE_IDEMPOTENCY_REQUIRED",
+                    message="Server-serialized mutations require state-idempotent semantics.",
+                    path=diagnostic_path,
+                    pointer="/commit_workflow",
+                )
+            if safety.concurrency.read_operation_id not in preview_operation_ids or not isinstance(
+                operations.get(safety.concurrency.read_operation_id), ReadOperationV2
+            ):
+                _diagnostic(
+                    diagnostics,
+                    code="ACC_COMPILE_ACTION_STATE_PREVIEW_READ_REQUIRED",
+                    message="Server-serialized strategy requires its declared read in preview.",
+                    path=diagnostic_path,
+                    pointer="/preview_workflow",
+                )
+            else:
+                strategy_operation_ids.add(safety.concurrency.read_operation_id)
+            semantics_valid = False
+            if semantics is not None:
+                try:
+                    compile_action_semantics_attestation(operation, semantics)
+                except (TypeError, ValueError, ValidationError):
+                    pass
+                else:
+                    semantics_valid = True
+            required_implementation_fields = {
+                "conflict_control",
+                "idempotency",
+                "outcome_resolution",
+            }
+            provenance_authorities: dict[str, str] = (
+                {claim.field: claim.authority for claim in semantics.provenance}
+                if semantics is not None
+                else {}
+            )
+            if not semantics_valid or any(
+                provenance_authorities.get(field) not in {"implementation", "test"}
+                for field in required_implementation_fields
+            ):
+                _diagnostic(
+                    diagnostics,
+                    code="ACC_COMPILE_ACTION_SAFETY_PROVENANCE_REQUIRED",
+                    message="Server-serialized safety requires trusted field-level provenance.",
+                    path=diagnostic_path,
+                    pointer="/commit_workflow",
+                )
+            outcome = semantics.outcome_resolution if semantics is not None else None
+            if not isinstance(outcome, StatusQueryOutcomeResolutionV2) or not isinstance(
+                operations.get(outcome.operation_id if outcome is not None else ""),
+                ReadOperationV2,
+            ):
+                _diagnostic(
+                    diagnostics,
+                    code="ACC_COMPILE_ACTION_STATUS_QUERY_REQUIRED",
+                    message="Server-serialized safety requires a declared read status query.",
+                    path=diagnostic_path,
+                    pointer="/commit_workflow",
+                )
+            else:
+                strategy_operation_ids.add(outcome.operation_id)
 
     safety_requires_approval = _derived_approval_required(mutation_operations)
     approval_required = capability.action.approval.mode == "required" or safety_requires_approval
@@ -429,6 +528,13 @@ def prove_action_capability(
         for site in all_sites
         if site.operation_id in operations
     }
+    used_operations.update(
+        {
+            operation_id: operations[operation_id]
+            for operation_id in strategy_operation_ids
+            if operation_id in operations
+        }
+    )
     effects = tuple(sorted({operation.http.safety.effect for operation in mutation_operations}))
     risks: set[Risk] = {operation.http.safety.risk for operation in mutation_operations}
     maximum_risk: Risk | None = None
@@ -445,6 +551,7 @@ def prove_action_capability(
         maximum_risk=maximum_risk,
         required_scopes=required_scopes,
         approval_required=approval_required,
+        strategy_operation_ids=tuple(sorted(strategy_operation_ids)),
     )
 
 

@@ -1245,11 +1245,34 @@ def test_schema_exports_all_models_as_draft_2020_12(tmp_path: Path) -> None:
     ]
     assert "principal_id" in binding_schema["pattern"]
     assert "tenant_context" in binding_schema["pattern"]
+    concurrency_schema = operation_schema["$defs"]["ConcurrencyContractV2"]
+    assert concurrency_schema["discriminator"]["propertyName"] == "mode"
+    assert set(concurrency_schema["discriminator"]["mapping"]) == {
+        "not_supported",
+        "required",
+        "server_serialized_state_predicate",
+    }
+    idempotency_schema = operation_schema["$defs"]["IdempotencyContractV2"]
+    assert idempotency_schema["discriminator"]["propertyName"] == "mode"
+    assert "state_idempotent" in idempotency_schema["discriminator"]["mapping"]
 
     source_contract_schema = json.loads(
         (output / "source-contract.schema.json").read_text(encoding="utf-8")
     )
     assert source_contract_schema["properties"]["schema_version"]["const"] == "2"
+    outcome_schema = source_contract_schema["$defs"]["OutcomeResolutionContractV2"]
+    assert outcome_schema["discriminator"]["propertyName"] == "mode"
+    assert "status_query" in outcome_schema["discriminator"]["mapping"]
+    provenance_schema = source_contract_schema["$defs"]["ActionSemanticsProvenance"]
+    assert set(provenance_schema["properties"]["field"]["enum"]) == {
+        "conflict_control",
+        "effect",
+        "idempotency",
+        "outcome_resolution",
+        "reversibility",
+        "retry",
+        "risk",
+    }
     scope_inventory_schema = json.loads(
         (output / "scope-inventory.schema.json").read_text(encoding="utf-8")
     )
@@ -1270,6 +1293,10 @@ def test_schema_exports_all_models_as_draft_2020_12(tmp_path: Path) -> None:
         (output / "interaction-contract.schema.json").read_text(encoding="utf-8")
     )
     assert interaction_contract_schema["properties"]["schema_version"]["const"] == "2"
+    for filename in EXPORTED_SCHEMAS:
+        assert (output / filename).read_bytes() == (
+            REPOSITORY_ROOT / "schemas" / filename
+        ).read_bytes()
 
 
 def test_validate_accepts_an_evidence_bound_project(tmp_path: Path) -> None:

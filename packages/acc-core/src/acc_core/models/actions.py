@@ -6,11 +6,12 @@ current ACC format.
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Annotated, Literal, Self
 from urllib.parse import unquote, urlsplit
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, JsonValue, field_validator, model_validator
 
 from acc_core.models import NonEmptyString, StrictModel
 
@@ -156,41 +157,115 @@ class RetryContractV2(StrictModel):
     mode: Literal["never", "idempotent_only"]
 
 
-class IdempotencyContractV2(StrictModel):
-    """Separate source idempotency from Runtime-local duplicate suppression."""
-
-    mode: Literal["unsupported", "runtime_deduplicate", "source_key"]
-    target: RuntimeInjectionTargetV2 | None = None
-
-    @model_validator(mode="after")
-    def validate_target(self) -> Self:
-        if self.mode == "source_key" and self.target is None:
-            raise ValueError("target is required when idempotency mode is source_key")
-        if self.mode != "source_key" and self.target is not None:
-            raise ValueError("target is not allowed without source_key idempotency")
-        return self
+def _validate_state_values(value: list[JsonValue]) -> list[JsonValue]:
+    encoded = [
+        json.dumps(item, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        for item in value
+    ]
+    if encoded != sorted(set(encoded)):
+        raise ValueError("state values must be canonical, sorted, and unique")
+    return value
 
 
-class ConcurrencyContractV2(StrictModel):
-    """Describe capture and Runtime-owned injection of a concurrency token."""
+class UnsupportedIdempotencyV2(StrictModel):
+    """Declare that the source exposes no usable idempotency strategy."""
 
-    mode: Literal["required", "not_supported"]
-    token: ConcurrencyTokenSourceV2 | None = None
-    precondition: RuntimeInjectionTargetV2 | None = None
+    mode: Literal["unsupported", "runtime_deduplicate"]
 
-    @model_validator(mode="after")
-    def validate_required_parts(self) -> Self:
-        if self.mode == "required" and (self.token is None or self.precondition is None):
-            raise ValueError(
-                "token and precondition are required when concurrency mode is required"
-            )
-        if self.mode == "not_supported" and (
-            self.token is not None or self.precondition is not None
-        ):
-            raise ValueError(
-                "token and precondition are not allowed when concurrency is not supported"
-            )
-        return self
+
+class SourceKeyIdempotencyV2(StrictModel):
+    """Inject a Runtime-owned source idempotency key."""
+
+    mode: Literal["source_key"]
+    target: RuntimeInjectionTargetV2
+
+
+class StateIdempotencyV2(StrictModel):
+    """Treat already-terminal source state as an idempotent outcome."""
+
+    mode: Literal["state_idempotent"]
+    state_pointer: NonEmptyString
+    terminal_values: Annotated[list[JsonValue], Field(min_length=1)]
+
+    @field_validator("state_pointer")
+    @classmethod
+    def validate_state_pointer(cls, value: str) -> str:
+        return _validate_json_pointer(value)
+
+    @field_validator("terminal_values")
+    @classmethod
+    def validate_terminal_values(cls, value: list[JsonValue]) -> list[JsonValue]:
+        return _validate_state_values(value)
+
+
+type IdempotencyContractV2 = Annotated[
+    UnsupportedIdempotencyV2 | SourceKeyIdempotencyV2 | StateIdempotencyV2,
+    Field(discriminator="mode"),
+]
+
+
+class OptimisticTokenConcurrencyV2(StrictModel):
+    """Capture and inject an optimistic-lock token using the legacy wire mode."""
+
+    mode: Literal["required"]
+    token: ConcurrencyTokenSourceV2
+    precondition: RuntimeInjectionTargetV2
+
+
+class UnsupportedConcurrencyV2(StrictModel):
+    """Declare that no accepted conflict-control strategy is available."""
+
+    mode: Literal["not_supported"]
+
+
+class ServerSerializedStatePredicateV2(StrictModel):
+    """Rely on an evidenced source-serialized transition from allowed state."""
+
+    mode: Literal["server_serialized_state_predicate"]
+    read_operation_id: NonEmptyString
+    state_pointer: NonEmptyString
+    allowed_values: Annotated[list[JsonValue], Field(min_length=1)]
+
+    @field_validator("state_pointer")
+    @classmethod
+    def validate_state_pointer(cls, value: str) -> str:
+        return _validate_json_pointer(value)
+
+    @field_validator("allowed_values")
+    @classmethod
+    def validate_allowed_values(cls, value: list[JsonValue]) -> list[JsonValue]:
+        return _validate_state_values(value)
+
+
+type ConcurrencyContractV2 = Annotated[
+    OptimisticTokenConcurrencyV2 | ServerSerializedStatePredicateV2 | UnsupportedConcurrencyV2,
+    Field(discriminator="mode"),
+]
+
+
+class SynchronousOutcomeResolutionV2(StrictModel):
+    """Treat the definitive mutation response as the source outcome."""
+
+    mode: Literal["synchronous_result"]
+
+
+class StatusQueryOutcomeResolutionV2(StrictModel):
+    """Resolve a mutation outcome through one declared read Operation."""
+
+    mode: Literal["status_query"]
+    operation_id: NonEmptyString
+
+
+class UnknownOutcomeResolutionV2(StrictModel):
+    """Declare that ambiguous mutation outcomes cannot be resolved automatically."""
+
+    mode: Literal["outcome_unknown"]
+
+
+type OutcomeResolutionContractV2 = Annotated[
+    SynchronousOutcomeResolutionV2 | StatusQueryOutcomeResolutionV2 | UnknownOutcomeResolutionV2,
+    Field(discriminator="mode"),
+]
 
 
 class OperationSafetyV2(StrictModel):
@@ -211,6 +286,37 @@ class OperationSafetyV2(StrictModel):
             and self.idempotency.mode != "source_key"
         ):
             raise ValueError("idempotent_only mutation retry requires source_key idempotency")
+        server_serialized = isinstance(self.concurrency, ServerSerializedStatePredicateV2)
+        state_idempotent = isinstance(self.idempotency, StateIdempotencyV2)
+        if server_serialized != state_idempotent:
+            raise ValueError("server-serialized concurrency and state idempotency must be paired")
+        if isinstance(self.concurrency, ServerSerializedStatePredicateV2) and isinstance(
+            self.idempotency, StateIdempotencyV2
+        ):
+            if self.concurrency.state_pointer != self.idempotency.state_pointer:
+                raise ValueError("state strategies must use the same state pointer")
+            allowed = {
+                json.dumps(
+                    item,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                )
+                for item in self.concurrency.allowed_values
+            }
+            terminal = {
+                json.dumps(
+                    item,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                )
+                for item in self.idempotency.terminal_values
+            }
+            if allowed & terminal:
+                raise ValueError("allowed and terminal state values must be disjoint")
         return self
 
 
@@ -306,9 +412,19 @@ __all__ = [
     "IdempotencyContractV2",
     "JsonRequestV2",
     "OperationSafetyV2",
+    "OptimisticTokenConcurrencyV2",
+    "OutcomeResolutionContractV2",
     "ResponseHeaderTokenSourceV2",
     "RetryContractV2",
     "Reversibility",
     "Risk",
     "RuntimeInjectionTargetV2",
+    "ServerSerializedStatePredicateV2",
+    "SourceKeyIdempotencyV2",
+    "StateIdempotencyV2",
+    "StatusQueryOutcomeResolutionV2",
+    "SynchronousOutcomeResolutionV2",
+    "UnknownOutcomeResolutionV2",
+    "UnsupportedConcurrencyV2",
+    "UnsupportedIdempotencyV2",
 ]

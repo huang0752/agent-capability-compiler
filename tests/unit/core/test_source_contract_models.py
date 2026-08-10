@@ -82,6 +82,51 @@ def _action_semantics() -> dict[str, object]:
     }
 
 
+def _server_serialized_semantics() -> dict[str, object]:
+    fields = [
+        "conflict_control",
+        "effect",
+        "idempotency",
+        "outcome_resolution",
+        "reversibility",
+        "retry",
+        "risk",
+    ]
+    return {
+        "method": "POST",
+        "effect": "transition",
+        "risk": "high",
+        "reversibility": "irreversible",
+        "retry": {"mode": "never"},
+        "idempotency": {
+            "mode": "state_idempotent",
+            "state_pointer": "/data/status",
+            "terminal_values": ["cancelled"],
+        },
+        "concurrency": {
+            "mode": "server_serialized_state_predicate",
+            "read_operation_id": "jobs.status",
+            "state_pointer": "/data/status",
+            "allowed_values": ["queued", "running"],
+        },
+        "outcome_resolution": {
+            "mode": "status_query",
+            "operation_id": "jobs.status",
+        },
+        "evidence": _evidence(),
+        "authority": "implementation",
+        "provenance": [
+            {
+                "field": field,
+                "evidence": _evidence(),
+                "evidence_pointer": f"/action/{field}",
+                "authority": "implementation",
+            }
+            for field in fields
+        ],
+    }
+
+
 @pytest.mark.parametrize("authority", ["contract", "implementation", "test"])
 def test_action_semantics_accepts_only_trusted_authorities(authority: str) -> None:
     document = _contract_document()
@@ -115,6 +160,36 @@ def test_source_contract_accepts_complete_optional_action_semantics() -> None:
     assert contract.action_semantics.method == "POST"
     assert contract.action_semantics.idempotency.mode == "source_key"
     assert contract.action_semantics.concurrency.mode == "required"
+
+
+def test_server_serialized_action_semantics_requires_exact_field_provenance() -> None:
+    document = _contract_document()
+    document["action_semantics"] = _server_serialized_semantics()
+
+    contract = SourceContract.model_validate(document)
+
+    assert contract.action_semantics is not None
+    outcome = contract.action_semantics.outcome_resolution
+    assert outcome is not None
+    assert outcome.mode == "status_query"
+    assert [claim.field for claim in contract.action_semantics.provenance] == [
+        "conflict_control",
+        "effect",
+        "idempotency",
+        "outcome_resolution",
+        "reversibility",
+        "retry",
+        "risk",
+    ]
+
+    missing = deepcopy(document)
+    missing_semantics = missing["action_semantics"]
+    assert isinstance(missing_semantics, dict)
+    missing_provenance = missing_semantics["provenance"]
+    assert isinstance(missing_provenance, list)
+    missing_provenance.pop()
+    with pytest.raises(ValidationError, match="exact field provenance"):
+        SourceContract.model_validate(missing)
 
 
 @pytest.mark.parametrize("authority", ["contract", "implementation", "test", "observation"])
