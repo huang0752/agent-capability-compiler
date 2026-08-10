@@ -1,0 +1,20 @@
+schema_version: '2'
+id: finance.transition.success
+capability: finance.transition
+input:
+  entity_id: finance-1
+  target_state: approved
+fixtures:
+  source: deterministic
+expected_calls:
+- operation: finance.status
+  arguments:
+    entity_id: finance-1
+- operation: finance.transition
+  arguments:
+    entity_id: finance-1
+    target_state: approved
+expected_output_schema:
+  type: object
+expected_error: null
+forbidden_fields: []

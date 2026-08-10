@@ -1,0 +1,46 @@
+schema_version: '2'
+domain_id: access_governance
+revision: 1
+status: completed
+policy:
+  goals:
+  - read_permissions_context
+  allowed_effects:
+  - read
+  maximum_risk: low
+  approval_required_for: []
+  excluded_intents: []
+candidate_dispositions:
+- candidate_id: permissions.read
+  disposition: accepted
+  materialized_capability_ids:
+  - permissions.read
+  rationale: Accepted against evidence-backed current contracts.
+candidate_snapshot_ids:
+- permissions.read
+candidate_snapshot_digest: sha256:9f52d3bc953ac2049bda62cbfec48e63b5e4e577ae9c4789a35c79d46d03dd72
+candidate_ledger_digest: sha256:68f5215945019700134ae529ac9d57c11e8fad62bf7ca56e1285c9cfe19bf052
+unresolved_questions: []
+dependency_decisions: []
+evidence_snapshot:
+- evidence_ref: permissions-authorization-boundary
+  digest: sha256:ef71750d85816c7aebc7fa7745b8a17194a8194c682d2a1d31741c36659297ea
+- evidence_ref: permissions-domain-confirmation
+  digest: sha256:eab59bd0288c15e7a6ffbc6d970651eb3ba20f38a4f34823dc4297c162846997
+- evidence_ref: permissions-source-contract
+  digest: sha256:9ef60864ff58f65aab80c5228ad1d9db62827f2bdab77d948dfad49057e614c3
+dependency_snapshot_digest: sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+evidence_digest: sha256:7629446ec8cdcc621e43c6fe1a8aa4888c88c3dd8c01ab30bb46fa5e3da7ba3e
+user_confirmation:
+  confirmer_ref: authenticated-reviewer
+  authority: authenticated_user
+  confirmation_summary: Domain completion confirmed from independent Evidence.
+  source_evidence_ref: permissions-domain-confirmation
+  source_text_digest: sha256:eab59bd0288c15e7a6ffbc6d970651eb3ba20f38a4f34823dc4297c162846997
+  confirmed_at: '2026-08-10T00:00:00Z'
+  confirmed_decision_digest: sha256:ca88360df363f90e0684531f8daf7551b833e5fc44c6ca3b1bb6833eb617bb79
+  decisions:
+  - kind: domain_completion
+    subject_ref: access_governance
+    decision: confirmed
+    rationale: The business-domain denominator and policy are closed.

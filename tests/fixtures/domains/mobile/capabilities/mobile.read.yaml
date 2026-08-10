@@ -1,0 +1,39 @@
+schema_version: '2'
+kind: read
+id: mobile.read
+title: Mobile experience
+description: Read source-authorized business data without creating an ACC permission
+  grant.
+input_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    entity_id:
+      type: string
+      maxLength: 128
+  required:
+  - entity_id
+output_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    entity_id:
+      type: string
+      maxLength: 128
+    status:
+      type: string
+      maxLength: 128
+  required:
+  - entity_id
+  - status
+workflow:
+- id: result
+  call:
+    operation: mobile.read
+    arguments:
+      entity_id: $.input.entity_id
+- emit:
+    value: $.steps.result
+policy: mobile.read.policy
+evals:
+- mobile.read.success

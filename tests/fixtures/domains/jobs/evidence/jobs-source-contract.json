@@ -1,0 +1,14 @@
+{
+  "artifact": {
+    "action": "evidence-backed",
+    "domain_id": "job_operations",
+    "request_schema": "complete",
+    "response_schema": "complete",
+    "summary": "Source routes, request schemas, response schemas, and action semantics were inspected."
+  },
+  "digest": "sha256:0d6d1d8bbf5b81a40740acb704dbbfa2fd8b551495f20edc32dd2b7f41b31a80",
+  "kind": "content",
+  "locator": "embedded-artifact:jobs-source-contract",
+  "source_id": "jobs-source-contract",
+  "summary": "Source routes, request schemas, response schemas, and action semantics were inspected."
+}

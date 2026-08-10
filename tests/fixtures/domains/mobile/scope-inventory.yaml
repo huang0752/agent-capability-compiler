@@ -1,0 +1,55 @@
+schema_version: '2'
+scope:
+  mode: domain_complete
+  user_confirmation: null
+  selected_domains:
+  - mobile_experience
+  exclusion_approval:
+    approved_route_ids: []
+    approval_text: null
+discovery:
+  source_commit: git:0123456789abcdef0123456789abcdef01234567
+  methods:
+  - GET
+  - HEAD
+  - POST
+  - PUT
+  - PATCH
+  - DELETE
+  include_paths:
+  - src
+  evidence_sources:
+  - mobile-source-contract
+domains:
+- id: mobile_experience
+  status: selected
+exclusion_rules: []
+routes:
+- id: GET /mobile/{entity_id}
+  domain: mobile_experience
+  method: GET
+  kind: read
+  effect: read
+  path: /mobile/{entity_id}
+  evidence_sources:
+  - mobile-source-contract
+  usage_evidence_sources: []
+  interaction_ids: []
+  eligibility: eligible
+  disposition: composed
+  operation_id: mobile.read
+  capability_ids:
+  - mobile.read
+  candidate_id: mobile.read
+  reason: null
+  exclusion_rule_id: null
+  exclusion_decision: null
+summary:
+  discovered_routes: 1
+  eligible_routes: 1
+  planned: 0
+  composed: 1
+  excluded: 0
+  blocked_on_evidence: 0
+  out_of_scope: 0
+  unresolved: 0

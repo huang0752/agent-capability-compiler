@@ -1,0 +1,22 @@
+schema_version: '2'
+domains:
+- id: mobile_experience
+  title: Mobile experience
+  status: completed
+  candidate_ids:
+  - mobile.client.refresh
+  - mobile.read
+  route_ids:
+  - GET /mobile/{entity_id}
+  interaction_ids:
+  - mobile.dashboard.pull_to_refresh
+  dependency_domain_ids: []
+  evidence_refs:
+  - mobile-source-contract
+  active_decision_ref:
+    domain_id: mobile_experience
+    revision: 1
+    decision_digest: sha256:7de71be88fb0917562b9175619bf44df187eee1a41030349f23cd3a830115123
+unclassified_candidate_ids: []
+preferred_order:
+- mobile_experience

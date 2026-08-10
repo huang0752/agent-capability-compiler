@@ -1,0 +1,67 @@
+schema_version: '2'
+candidates:
+- id: crm.context
+  domain_id: customer_management
+  business_intent: search_customer_context
+  route_ids:
+  - GET /customers
+  - GET /customers/{entity_id}
+  interaction_ids: []
+  kind_claim: read
+  effect_claim: read
+  claims:
+    schema:
+      status: proven
+      evidence_refs:
+      - crm-source-contract
+    effect:
+      status: proven
+      evidence_refs:
+      - crm-source-contract
+    risk:
+      status: proven
+      evidence_refs:
+      - crm-source-contract
+    reversibility:
+      status: proven
+      evidence_refs:
+      - crm-source-contract
+    approval:
+      status: proven
+      evidence_refs:
+      - crm-source-contract
+    retry:
+      status: proven
+      evidence_refs:
+      - crm-source-contract
+    conflict_control:
+      status: proven
+      evidence_refs:
+      - crm-source-contract
+    idempotency:
+      status: proven
+      evidence_refs:
+      - crm-source-contract
+    outcome_resolution:
+      status: proven
+      evidence_refs:
+      - crm-source-contract
+    lifecycle:
+      status: proven
+      evidence_refs:
+      - crm-source-contract
+    authorization_boundary:
+      status: upstream_authoritative
+      evidence_refs:
+      - crm-authorization-boundary
+    identity_binding:
+      status: identity_binding_proven
+      evidence_refs:
+      - crm-authorization-boundary
+    context_isolation:
+      status: context_isolation_proven
+      evidence_refs:
+      - crm-authorization-boundary
+  verification_level: contract_ready
+  gaps: []
+  ineligibility_claim: null

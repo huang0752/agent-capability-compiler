@@ -1,0 +1,58 @@
+schema_version: '2'
+id: permissions.read
+title: Access governance
+kind: read
+input_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    entity_id:
+      type: string
+      maxLength: 128
+  required:
+  - entity_id
+output_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    entity_id:
+      type: string
+      maxLength: 128
+    status:
+      type: string
+      maxLength: 128
+  required:
+  - entity_id
+  - status
+http:
+  method: GET
+  path: /permissions/{entity_id}
+  path_parameters:
+    entity_id: entity_id
+  query_parameters: {}
+  request: null
+  success:
+    statuses:
+    - 200
+    body: json
+  scopes: []
+  timeout_seconds: 10
+  max_response_bytes: 16384
+  safety:
+    effect: read
+    risk: low
+    reversibility: reversible
+    retry:
+      mode: idempotent_only
+    idempotency:
+      mode: unsupported
+    concurrency:
+      mode: not_supported
+context_bindings: {}
+evidence:
+- source_id: permissions-source-contract
+  kind: content
+  locator: embedded-artifact:permissions-source-contract
+  summary: Source routes, request schemas, response schemas, and action semantics
+    were inspected.
+  digest: sha256:9ef60864ff58f65aab80c5228ad1d9db62827f2bdab77d948dfad49057e614c3

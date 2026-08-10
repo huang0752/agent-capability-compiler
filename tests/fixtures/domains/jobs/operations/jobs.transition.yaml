@@ -1,0 +1,76 @@
+schema_version: '2'
+id: jobs.transition
+title: Transition jobs
+kind: action
+input_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    entity_id:
+      type: string
+      maxLength: 128
+    target_state:
+      type: string
+      maxLength: 128
+  required:
+  - entity_id
+  - target_state
+output_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    entity_id:
+      type: string
+      maxLength: 128
+    status:
+      type: string
+      maxLength: 128
+  required:
+  - entity_id
+  - status
+http:
+  method: PATCH
+  path: /jobs/{entity_id}/transition
+  path_parameters:
+    entity_id: entity_id
+  query_parameters: {}
+  request:
+    kind: json
+    body_parameters:
+      /target_state: target_state
+    max_request_bytes: 4096
+  success:
+    statuses:
+    - 200
+    body: json
+  scopes:
+  - jobs.write
+  timeout_seconds: 10
+  max_response_bytes: 16384
+  safety:
+    effect: transition
+    risk: medium
+    reversibility: reversible
+    retry:
+      mode: idempotent_only
+    idempotency:
+      mode: source_key
+      target:
+        kind: header
+        name: Idempotency-Key
+    concurrency:
+      mode: required
+      token:
+        kind: response_header
+        name: ETag
+      precondition:
+        kind: header
+        name: If-Match
+context_bindings: {}
+evidence:
+- source_id: jobs-source-contract
+  kind: content
+  locator: embedded-artifact:jobs-source-contract
+  summary: Source routes, request schemas, response schemas, and action semantics
+    were inspected.
+  digest: sha256:0d6d1d8bbf5b81a40740acb704dbbfa2fd8b551495f20edc32dd2b7f41b31a80

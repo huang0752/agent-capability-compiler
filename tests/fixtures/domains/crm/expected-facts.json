@@ -1,0 +1,14 @@
+{
+  "fact_details": {
+    "consumer": "customer.detail",
+    "join_field": "id",
+    "producer": "customer.search"
+  },
+  "independent_coverage_axes": 12,
+  "operation_ids": [
+    "customer.detail",
+    "customer.search"
+  ],
+  "search_to_detail": true,
+  "source_authorization_final": true
+}

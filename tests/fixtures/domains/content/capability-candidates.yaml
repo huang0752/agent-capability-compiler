@@ -1,0 +1,67 @@
+schema_version: '2'
+candidates:
+- id: content.transition
+  domain_id: content_publication
+  business_intent: transition_content_state
+  route_ids:
+  - GET /content/{entity_id}
+  - PATCH /content/{entity_id}/transition
+  interaction_ids: []
+  kind_claim: action
+  effect_claim: transition
+  claims:
+    schema:
+      status: proven
+      evidence_refs:
+      - content-source-contract
+    effect:
+      status: proven
+      evidence_refs:
+      - content-source-contract
+    risk:
+      status: proven
+      evidence_refs:
+      - content-source-contract
+    reversibility:
+      status: proven
+      evidence_refs:
+      - content-source-contract
+    approval:
+      status: proven
+      evidence_refs:
+      - content-source-contract
+    retry:
+      status: proven
+      evidence_refs:
+      - content-source-contract
+    conflict_control:
+      status: proven
+      evidence_refs:
+      - content-source-contract
+    idempotency:
+      status: proven
+      evidence_refs:
+      - content-source-contract
+    outcome_resolution:
+      status: proven
+      evidence_refs:
+      - content-source-contract
+    lifecycle:
+      status: proven
+      evidence_refs:
+      - content-source-contract
+    authorization_boundary:
+      status: upstream_authoritative
+      evidence_refs:
+      - content-authorization-boundary
+    identity_binding:
+      status: identity_binding_proven
+      evidence_refs:
+      - content-authorization-boundary
+    context_isolation:
+      status: context_isolation_proven
+      evidence_refs:
+      - content-authorization-boundary
+  verification_level: semantics_evidenced
+  gaps: []
+  ineligibility_claim: null

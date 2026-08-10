@@ -1,0 +1,12 @@
+{
+  "artifact": {
+    "decision": "domain_completion_confirmed",
+    "domain_id": "content_publication",
+    "summary": "Authenticated user confirmed this one domain decision and no raw credential was retained."
+  },
+  "digest": "sha256:ad032be516e06e0c86b0ea400386bb99337d316c569c6ca4713a9a03fbdaf6ae",
+  "kind": "content",
+  "locator": "embedded-artifact:content-domain-confirmation",
+  "source_id": "content-domain-confirmation",
+  "summary": "Authenticated user confirmed this one domain decision and no raw credential was retained."
+}

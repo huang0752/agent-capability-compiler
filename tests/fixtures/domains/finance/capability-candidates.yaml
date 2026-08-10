@@ -1,0 +1,67 @@
+schema_version: '2'
+candidates:
+- id: finance.transition
+  domain_id: financial_controls
+  business_intent: transition_finance_state
+  route_ids:
+  - GET /finance/{entity_id}
+  - PATCH /finance/{entity_id}/transition
+  interaction_ids: []
+  kind_claim: action
+  effect_claim: transition
+  claims:
+    schema:
+      status: proven
+      evidence_refs:
+      - finance-source-contract
+    effect:
+      status: proven
+      evidence_refs:
+      - finance-source-contract
+    risk:
+      status: proven
+      evidence_refs:
+      - finance-source-contract
+    reversibility:
+      status: proven
+      evidence_refs:
+      - finance-source-contract
+    approval:
+      status: proven
+      evidence_refs:
+      - finance-source-contract
+    retry:
+      status: proven
+      evidence_refs:
+      - finance-source-contract
+    conflict_control:
+      status: proven
+      evidence_refs:
+      - finance-source-contract
+    idempotency:
+      status: proven
+      evidence_refs:
+      - finance-source-contract
+    outcome_resolution:
+      status: proven
+      evidence_refs:
+      - finance-source-contract
+    lifecycle:
+      status: proven
+      evidence_refs:
+      - finance-source-contract
+    authorization_boundary:
+      status: upstream_authoritative
+      evidence_refs:
+      - finance-authorization-boundary
+    identity_binding:
+      status: identity_binding_proven
+      evidence_refs:
+      - finance-authorization-boundary
+    context_isolation:
+      status: context_isolation_proven
+      evidence_refs:
+      - finance-authorization-boundary
+  verification_level: semantics_evidenced
+  gaps: []
+  ineligibility_claim: null

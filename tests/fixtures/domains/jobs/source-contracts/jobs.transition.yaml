@@ -1,0 +1,153 @@
+schema_version: '2'
+id: jobs.transition.contract
+operation_id: jobs.transition
+request_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    entity_id:
+      type: string
+      maxLength: 128
+    target_state:
+      type: string
+      maxLength: 128
+  required:
+  - entity_id
+  - target_state
+response_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    entity_id:
+      type: string
+      maxLength: 128
+    status:
+      type: string
+      maxLength: 128
+  required:
+  - entity_id
+  - status
+request_completeness: complete
+response_completeness: complete
+provenance:
+- target_pointer: /request_schema
+  evidence:
+    source_id: jobs-source-contract
+    kind: content
+    locator: embedded-artifact:jobs-source-contract
+    summary: Source routes, request schemas, response schemas, and action semantics
+      were inspected.
+    digest: sha256:0d6d1d8bbf5b81a40740acb704dbbfa2fd8b551495f20edc32dd2b7f41b31a80
+  evidence_schema_pointer: /artifact/request_schema
+  authority: implementation
+- target_pointer: /response_schema
+  evidence:
+    source_id: jobs-source-contract
+    kind: content
+    locator: embedded-artifact:jobs-source-contract
+    summary: Source routes, request schemas, response schemas, and action semantics
+      were inspected.
+    digest: sha256:0d6d1d8bbf5b81a40740acb704dbbfa2fd8b551495f20edc32dd2b7f41b31a80
+  evidence_schema_pointer: /artifact/response_schema
+  authority: implementation
+action_semantics:
+  method: PATCH
+  effect: transition
+  risk: medium
+  reversibility: reversible
+  retry:
+    mode: idempotent_only
+  idempotency:
+    mode: source_key
+    target:
+      kind: header
+      name: Idempotency-Key
+  concurrency:
+    mode: required
+    token:
+      kind: response_header
+      name: ETag
+    precondition:
+      kind: header
+      name: If-Match
+  outcome_resolution:
+    mode: outcome_unknown
+  evidence:
+    source_id: jobs-source-contract
+    kind: content
+    locator: embedded-artifact:jobs-source-contract
+    summary: Source routes, request schemas, response schemas, and action semantics
+      were inspected.
+    digest: sha256:0d6d1d8bbf5b81a40740acb704dbbfa2fd8b551495f20edc32dd2b7f41b31a80
+  authority: implementation
+  provenance:
+  - field: conflict_control
+    evidence:
+      source_id: jobs-source-contract
+      kind: content
+      locator: embedded-artifact:jobs-source-contract
+      summary: Source routes, request schemas, response schemas, and action semantics
+        were inspected.
+      digest: sha256:0d6d1d8bbf5b81a40740acb704dbbfa2fd8b551495f20edc32dd2b7f41b31a80
+    evidence_pointer: /artifact/action/conflict_control
+    authority: implementation
+  - field: effect
+    evidence:
+      source_id: jobs-source-contract
+      kind: content
+      locator: embedded-artifact:jobs-source-contract
+      summary: Source routes, request schemas, response schemas, and action semantics
+        were inspected.
+      digest: sha256:0d6d1d8bbf5b81a40740acb704dbbfa2fd8b551495f20edc32dd2b7f41b31a80
+    evidence_pointer: /artifact/action/effect
+    authority: implementation
+  - field: idempotency
+    evidence:
+      source_id: jobs-source-contract
+      kind: content
+      locator: embedded-artifact:jobs-source-contract
+      summary: Source routes, request schemas, response schemas, and action semantics
+        were inspected.
+      digest: sha256:0d6d1d8bbf5b81a40740acb704dbbfa2fd8b551495f20edc32dd2b7f41b31a80
+    evidence_pointer: /artifact/action/idempotency
+    authority: implementation
+  - field: outcome_resolution
+    evidence:
+      source_id: jobs-source-contract
+      kind: content
+      locator: embedded-artifact:jobs-source-contract
+      summary: Source routes, request schemas, response schemas, and action semantics
+        were inspected.
+      digest: sha256:0d6d1d8bbf5b81a40740acb704dbbfa2fd8b551495f20edc32dd2b7f41b31a80
+    evidence_pointer: /artifact/action/outcome_resolution
+    authority: implementation
+  - field: reversibility
+    evidence:
+      source_id: jobs-source-contract
+      kind: content
+      locator: embedded-artifact:jobs-source-contract
+      summary: Source routes, request schemas, response schemas, and action semantics
+        were inspected.
+      digest: sha256:0d6d1d8bbf5b81a40740acb704dbbfa2fd8b551495f20edc32dd2b7f41b31a80
+    evidence_pointer: /artifact/action/reversibility
+    authority: implementation
+  - field: retry
+    evidence:
+      source_id: jobs-source-contract
+      kind: content
+      locator: embedded-artifact:jobs-source-contract
+      summary: Source routes, request schemas, response schemas, and action semantics
+        were inspected.
+      digest: sha256:0d6d1d8bbf5b81a40740acb704dbbfa2fd8b551495f20edc32dd2b7f41b31a80
+    evidence_pointer: /artifact/action/retry
+    authority: implementation
+  - field: risk
+    evidence:
+      source_id: jobs-source-contract
+      kind: content
+      locator: embedded-artifact:jobs-source-contract
+      summary: Source routes, request schemas, response schemas, and action semantics
+        were inspected.
+      digest: sha256:0d6d1d8bbf5b81a40740acb704dbbfa2fd8b551495f20edc32dd2b7f41b31a80
+    evidence_pointer: /artifact/action/risk
+    authority: implementation

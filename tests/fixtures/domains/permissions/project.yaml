@@ -1,0 +1,35 @@
+schema_version: '2'
+project:
+  id: domain-fixture-permissions
+  version: 2.0.0
+source_workspace:
+  path: ../source-system
+  mode: read_only
+runtime:
+  transport:
+  - stdio
+provider:
+  kind: http
+  base_url_ref: PERMISSIONS_BASE_URL
+  context_binding_allowlist: []
+  auth:
+    kind: password_bearer
+    credentials:
+      kind: environment_secret
+      identity_ref: SOURCE_IDENTITY
+      password_ref: SOURCE_PASSWORD
+    login_path: /auth/login
+    identity_field: username
+    password_field: password
+    token_pointer: /access_token
+    token_type_pointer: /token_type
+    expires_in_pointer: /expires_in
+    principal_pointer: /principal_id
+    scopes_pointer: null
+    tenant_pointer: /tenant_id
+    scope_mapping: {}
+    timeout_seconds: 10
+    max_response_bytes: 65536
+    retry_on_unauthorized: false
+quality:
+  profile: release

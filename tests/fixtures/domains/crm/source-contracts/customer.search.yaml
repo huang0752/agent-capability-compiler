@@ -1,0 +1,49 @@
+schema_version: '2'
+id: customer.search.contract
+operation_id: customer.search
+request_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    query:
+      type: string
+      maxLength: 128
+  required:
+  - query
+response_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    id:
+      type: string
+      maxLength: 128
+    related_id:
+      type: string
+      maxLength: 128
+  required:
+  - id
+  - related_id
+request_completeness: complete
+response_completeness: complete
+provenance:
+- target_pointer: /request_schema
+  evidence:
+    source_id: crm-source-contract
+    kind: content
+    locator: embedded-artifact:crm-source-contract
+    summary: Source routes, request schemas, response schemas, and action semantics
+      were inspected.
+    digest: sha256:1f2a97d5a735142d0f5d328f827a5624723bda92316a9e66f1a52515f260cba3
+  evidence_schema_pointer: /artifact/request_schema
+  authority: implementation
+- target_pointer: /response_schema
+  evidence:
+    source_id: crm-source-contract
+    kind: content
+    locator: embedded-artifact:crm-source-contract
+    summary: Source routes, request schemas, response schemas, and action semantics
+      were inspected.
+    digest: sha256:1f2a97d5a735142d0f5d328f827a5624723bda92316a9e66f1a52515f260cba3
+  evidence_schema_pointer: /artifact/response_schema
+  authority: implementation
+action_semantics: null

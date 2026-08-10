@@ -1,0 +1,18 @@
+schema_version: '2'
+id: crm.context.success
+capability: crm.context
+input:
+  query: sample
+fixtures:
+  source: deterministic
+expected_calls:
+- operation: customer.search
+  arguments:
+    query: sample
+- operation: customer.detail
+  arguments:
+    entity_id: customer-1
+expected_output_schema:
+  type: object
+expected_error: null
+forbidden_fields: []

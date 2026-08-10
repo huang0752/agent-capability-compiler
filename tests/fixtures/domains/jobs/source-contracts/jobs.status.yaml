@@ -1,0 +1,53 @@
+schema_version: '2'
+id: jobs.status.contract
+operation_id: jobs.status
+request_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    entity_id:
+      type: string
+      maxLength: 128
+  required:
+  - entity_id
+response_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    entity_id:
+      type: string
+      maxLength: 128
+    status:
+      type: string
+      maxLength: 128
+    version:
+      type: string
+      maxLength: 128
+  required:
+  - entity_id
+  - status
+  - version
+request_completeness: complete
+response_completeness: complete
+provenance:
+- target_pointer: /request_schema
+  evidence:
+    source_id: jobs-source-contract
+    kind: content
+    locator: embedded-artifact:jobs-source-contract
+    summary: Source routes, request schemas, response schemas, and action semantics
+      were inspected.
+    digest: sha256:0d6d1d8bbf5b81a40740acb704dbbfa2fd8b551495f20edc32dd2b7f41b31a80
+  evidence_schema_pointer: /artifact/request_schema
+  authority: implementation
+- target_pointer: /response_schema
+  evidence:
+    source_id: jobs-source-contract
+    kind: content
+    locator: embedded-artifact:jobs-source-contract
+    summary: Source routes, request schemas, response schemas, and action semantics
+      were inspected.
+    digest: sha256:0d6d1d8bbf5b81a40740acb704dbbfa2fd8b551495f20edc32dd2b7f41b31a80
+  evidence_schema_pointer: /artifact/response_schema
+  authority: implementation
+action_semantics: null

@@ -1,0 +1,12 @@
+{
+  "artifact": {
+    "decision": "domain_completion_confirmed",
+    "domain_id": "order_fulfillment",
+    "summary": "Authenticated user confirmed this one domain decision and no raw credential was retained."
+  },
+  "digest": "sha256:19b40963c6cca2ec13bb2e7379915d79b0681e2f56c6d6d80b4cdf3b3a896bc8",
+  "kind": "content",
+  "locator": "embedded-artifact:erp-domain-confirmation",
+  "source_id": "erp-domain-confirmation",
+  "summary": "Authenticated user confirmed this one domain decision and no raw credential was retained."
+}

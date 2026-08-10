@@ -1,0 +1,13 @@
+{
+  "artifact": {
+    "acc_role": "scope_narrowing_only",
+    "domain_id": "job_operations",
+    "source_role": "final_authorization",
+    "summary": "The source JWT identity and source API remain the final authorization authority."
+  },
+  "digest": "sha256:e53a4b0095e438a760ff97a55f5bd43764da59f6063f324a1ab8a4c39b885b74",
+  "kind": "content",
+  "locator": "embedded-artifact:jobs-authorization-boundary",
+  "source_id": "jobs-authorization-boundary",
+  "summary": "The source JWT identity and source API remain the final authorization authority."
+}

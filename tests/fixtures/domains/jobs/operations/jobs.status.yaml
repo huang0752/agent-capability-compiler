@@ -1,0 +1,63 @@
+schema_version: '2'
+id: jobs.status
+title: Read jobs state
+kind: read
+input_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    entity_id:
+      type: string
+      maxLength: 128
+  required:
+  - entity_id
+output_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    entity_id:
+      type: string
+      maxLength: 128
+    status:
+      type: string
+      maxLength: 128
+    version:
+      type: string
+      maxLength: 128
+  required:
+  - entity_id
+  - status
+  - version
+http:
+  method: GET
+  path: /jobs/{entity_id}
+  path_parameters:
+    entity_id: entity_id
+  query_parameters: {}
+  request: null
+  success:
+    statuses:
+    - 200
+    body: json
+  scopes:
+  - jobs.read
+  timeout_seconds: 10
+  max_response_bytes: 16384
+  safety:
+    effect: read
+    risk: low
+    reversibility: reversible
+    retry:
+      mode: idempotent_only
+    idempotency:
+      mode: unsupported
+    concurrency:
+      mode: not_supported
+context_bindings: {}
+evidence:
+- source_id: jobs-source-contract
+  kind: content
+  locator: embedded-artifact:jobs-source-contract
+  summary: Source routes, request schemas, response schemas, and action semantics
+    were inspected.
+  digest: sha256:0d6d1d8bbf5b81a40740acb704dbbfa2fd8b551495f20edc32dd2b7f41b31a80

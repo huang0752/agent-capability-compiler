@@ -1,0 +1,12 @@
+{
+  "artifact": {
+    "decision": "domain_completion_confirmed",
+    "domain_id": "mobile_experience",
+    "summary": "Authenticated user confirmed this one domain decision and no raw credential was retained."
+  },
+  "digest": "sha256:c32c6fc03c7991bdbe76ddecf822ebd500dd47be3e7100438fe0e8b249221d91",
+  "kind": "content",
+  "locator": "embedded-artifact:mobile-domain-confirmation",
+  "source_id": "mobile-domain-confirmation",
+  "summary": "Authenticated user confirmed this one domain decision and no raw credential was retained."
+}

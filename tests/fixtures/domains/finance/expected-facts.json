@@ -1,0 +1,14 @@
+{
+  "fact_details": {
+    "conflict_strategy": "required",
+    "outcome_resolution": "synchronous_result",
+    "risk": "high"
+  },
+  "independent_coverage_axes": 12,
+  "operation_ids": [
+    "finance.status",
+    "finance.transition"
+  ],
+  "optimistic_high_risk_action": true,
+  "source_authorization_final": true
+}

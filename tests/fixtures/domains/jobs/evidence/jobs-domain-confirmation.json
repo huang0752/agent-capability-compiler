@@ -1,0 +1,12 @@
+{
+  "artifact": {
+    "decision": "domain_completion_confirmed",
+    "domain_id": "job_operations",
+    "summary": "Authenticated user confirmed this one domain decision and no raw credential was retained."
+  },
+  "digest": "sha256:5f2971c1c35dd83989d0c1be5b9bd25c78666def28b1b8a2e3266846c2820b19",
+  "kind": "content",
+  "locator": "embedded-artifact:jobs-domain-confirmation",
+  "source_id": "jobs-domain-confirmation",
+  "summary": "Authenticated user confirmed this one domain decision and no raw credential was retained."
+}

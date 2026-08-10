@@ -1,0 +1,14 @@
+{
+  "cross_module_workflow": true,
+  "fact_details": {
+    "consumer": "inventory.detail",
+    "join_field": "related_id",
+    "producer": "order.detail"
+  },
+  "independent_coverage_axes": 12,
+  "operation_ids": [
+    "inventory.detail",
+    "order.detail"
+  ],
+  "source_authorization_final": true
+}

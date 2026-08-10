@@ -1,0 +1,14 @@
+{
+  "artifact": {
+    "action": "evidence-backed",
+    "domain_id": "mobile_experience",
+    "request_schema": "complete",
+    "response_schema": "complete",
+    "summary": "Source routes, request schemas, response schemas, and action semantics were inspected."
+  },
+  "digest": "sha256:412f57428b7b6316ab47bd3ea5661170c75ea3f20ee61b2339e89d526802354f",
+  "kind": "content",
+  "locator": "embedded-artifact:mobile-source-contract",
+  "source_id": "mobile-source-contract",
+  "summary": "Source routes, request schemas, response schemas, and action semantics were inspected."
+}

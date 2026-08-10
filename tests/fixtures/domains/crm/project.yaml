@@ -1,0 +1,19 @@
+schema_version: '2'
+project:
+  id: domain-fixture-crm
+  version: 2.0.0
+source_workspace:
+  path: ../source-system
+  mode: read_only
+runtime:
+  transport:
+  - stdio
+provider:
+  kind: http
+  base_url_ref: CRM_BASE_URL
+  context_binding_allowlist: []
+  auth:
+    kind: bearer_secret
+    token_ref: SOURCE_JWT
+quality:
+  profile: release

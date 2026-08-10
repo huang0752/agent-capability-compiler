@@ -1,0 +1,14 @@
+{
+  "fact_details": {
+    "conflict_strategy": "required",
+    "outcome_resolution": "outcome_unknown",
+    "risk": "medium"
+  },
+  "independent_coverage_axes": 12,
+  "operation_ids": [
+    "jobs.status",
+    "jobs.transition"
+  ],
+  "outcome_resolution": true,
+  "source_authorization_final": true
+}

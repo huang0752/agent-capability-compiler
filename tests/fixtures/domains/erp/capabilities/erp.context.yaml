@@ -1,0 +1,47 @@
+schema_version: '2'
+kind: read
+id: erp.context
+title: Order fulfillment
+description: Resolve related business data through an explicit source-derived dependency.
+input_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    order_id:
+      type: string
+      maxLength: 128
+  required:
+  - order_id
+output_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    id:
+      type: string
+      maxLength: 128
+    related_id:
+      type: string
+      maxLength: 128
+    status:
+      type: string
+      maxLength: 128
+  required:
+  - id
+  - related_id
+  - status
+workflow:
+- id: order
+  call:
+    operation: order.detail
+    arguments:
+      order_id: $.input.order_id
+- id: inventory
+  call:
+    operation: inventory.detail
+    arguments:
+      inventory_id: $.steps.order.related_id
+- emit:
+    value: $.steps.inventory
+policy: erp.read
+evals:
+- erp.context.success

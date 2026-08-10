@@ -1,0 +1,63 @@
+schema_version: '2'
+id: order.detail
+title: Get order detail
+kind: read
+input_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    order_id:
+      type: string
+      maxLength: 128
+  required:
+  - order_id
+output_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    id:
+      type: string
+      maxLength: 128
+    related_id:
+      type: string
+      maxLength: 128
+    status:
+      type: string
+      maxLength: 128
+  required:
+  - id
+  - related_id
+  - status
+http:
+  method: GET
+  path: /orders/{order_id}
+  path_parameters:
+    order_id: order_id
+  query_parameters: {}
+  request: null
+  success:
+    statuses:
+    - 200
+    body: json
+  scopes:
+  - order.read
+  timeout_seconds: 10
+  max_response_bytes: 16384
+  safety:
+    effect: read
+    risk: low
+    reversibility: reversible
+    retry:
+      mode: idempotent_only
+    idempotency:
+      mode: unsupported
+    concurrency:
+      mode: not_supported
+context_bindings: {}
+evidence:
+- source_id: erp-source-contract
+  kind: content
+  locator: embedded-artifact:erp-source-contract
+  summary: Source routes, request schemas, response schemas, and action semantics
+    were inspected.
+  digest: sha256:57a77c51e7b0cecfe0d78e309b14f2ade0402fe1c66c4ed6eceeb3b56f06d353

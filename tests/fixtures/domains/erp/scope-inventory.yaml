@@ -1,0 +1,74 @@
+schema_version: '2'
+scope:
+  mode: domain_complete
+  user_confirmation: null
+  selected_domains:
+  - order_fulfillment
+  exclusion_approval:
+    approved_route_ids: []
+    approval_text: null
+discovery:
+  source_commit: git:0123456789abcdef0123456789abcdef01234567
+  methods:
+  - GET
+  - HEAD
+  - POST
+  - PUT
+  - PATCH
+  - DELETE
+  include_paths:
+  - src
+  evidence_sources:
+  - erp-source-contract
+domains:
+- id: order_fulfillment
+  status: selected
+exclusion_rules: []
+routes:
+- id: GET /orders/{order_id}
+  domain: order_fulfillment
+  method: GET
+  kind: read
+  effect: read
+  path: /orders/{order_id}
+  evidence_sources:
+  - erp-source-contract
+  usage_evidence_sources: []
+  interaction_ids: []
+  eligibility: eligible
+  disposition: composed
+  operation_id: order.detail
+  capability_ids:
+  - erp.context
+  candidate_id: erp.context
+  reason: null
+  exclusion_rule_id: null
+  exclusion_decision: null
+- id: GET /inventory/{inventory_id}
+  domain: order_fulfillment
+  method: GET
+  kind: read
+  effect: read
+  path: /inventory/{inventory_id}
+  evidence_sources:
+  - erp-source-contract
+  usage_evidence_sources: []
+  interaction_ids: []
+  eligibility: eligible
+  disposition: composed
+  operation_id: inventory.detail
+  capability_ids:
+  - erp.context
+  candidate_id: erp.context
+  reason: null
+  exclusion_rule_id: null
+  exclusion_decision: null
+summary:
+  discovered_routes: 2
+  eligible_routes: 2
+  planned: 0
+  composed: 2
+  excluded: 0
+  blocked_on_evidence: 0
+  out_of_scope: 0
+  unresolved: 0

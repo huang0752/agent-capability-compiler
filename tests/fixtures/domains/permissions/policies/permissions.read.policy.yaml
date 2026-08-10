@@ -1,0 +1,10 @@
+schema_version: '2'
+id: permissions.read.policy
+required_scopes: []
+tenant_mode: none
+tenant_field: null
+readable_fields:
+- entity_id
+- status
+denied_fields: []
+redaction_rules: []

@@ -1,0 +1,59 @@
+schema_version: '2'
+id: mobile.read
+title: Mobile experience
+kind: read
+input_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    entity_id:
+      type: string
+      maxLength: 128
+  required:
+  - entity_id
+output_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    entity_id:
+      type: string
+      maxLength: 128
+    status:
+      type: string
+      maxLength: 128
+  required:
+  - entity_id
+  - status
+http:
+  method: GET
+  path: /mobile/{entity_id}
+  path_parameters:
+    entity_id: entity_id
+  query_parameters: {}
+  request: null
+  success:
+    statuses:
+    - 200
+    body: json
+  scopes:
+  - mobile.read
+  timeout_seconds: 10
+  max_response_bytes: 16384
+  safety:
+    effect: read
+    risk: low
+    reversibility: reversible
+    retry:
+      mode: idempotent_only
+    idempotency:
+      mode: unsupported
+    concurrency:
+      mode: not_supported
+context_bindings: {}
+evidence:
+- source_id: mobile-source-contract
+  kind: content
+  locator: embedded-artifact:mobile-source-contract
+  summary: Source routes, request schemas, response schemas, and action semantics
+    were inspected.
+  digest: sha256:412f57428b7b6316ab47bd3ea5661170c75ea3f20ee61b2339e89d526802354f

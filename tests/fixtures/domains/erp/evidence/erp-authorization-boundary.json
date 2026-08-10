@@ -1,0 +1,13 @@
+{
+  "artifact": {
+    "acc_role": "scope_narrowing_only",
+    "domain_id": "order_fulfillment",
+    "source_role": "final_authorization",
+    "summary": "The source JWT identity and source API remain the final authorization authority."
+  },
+  "digest": "sha256:d6a82ee75b3300d3c0c14be9e2f5243b528527ba1c13595719e4571e106e953a",
+  "kind": "content",
+  "locator": "embedded-artifact:erp-authorization-boundary",
+  "source_id": "erp-authorization-boundary",
+  "summary": "The source JWT identity and source API remain the final authorization authority."
+}

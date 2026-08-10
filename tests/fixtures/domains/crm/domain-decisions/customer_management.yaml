@@ -1,0 +1,46 @@
+schema_version: '2'
+domain_id: customer_management
+revision: 1
+status: completed
+policy:
+  goals:
+  - search_customer_context
+  allowed_effects:
+  - read
+  maximum_risk: low
+  approval_required_for: []
+  excluded_intents: []
+candidate_dispositions:
+- candidate_id: crm.context
+  disposition: accepted
+  materialized_capability_ids:
+  - crm.context
+  rationale: Accepted against evidence-backed current contracts.
+candidate_snapshot_ids:
+- crm.context
+candidate_snapshot_digest: sha256:e311c54dfccf344a33bddbc22928b129078dfb3c597efbf8d1c87e44c3c85fbb
+candidate_ledger_digest: sha256:039c702b8e6645ab519680dcf8115ed4a32ccb851977b183587e3a3408cca634
+unresolved_questions: []
+dependency_decisions: []
+evidence_snapshot:
+- evidence_ref: crm-authorization-boundary
+  digest: sha256:4b1115e8bb3899f8a7491862b3eec11303ca744948d76d866089aa7a7d2c9604
+- evidence_ref: crm-domain-confirmation
+  digest: sha256:f75f12b830d25fce3cbf0a2675561ef8aad19d521febd4c16cd8dc51854644e0
+- evidence_ref: crm-source-contract
+  digest: sha256:1f2a97d5a735142d0f5d328f827a5624723bda92316a9e66f1a52515f260cba3
+dependency_snapshot_digest: sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+evidence_digest: sha256:4abb1ed414e75b4b7bb8516dae0297e4b103126b7612ac19d8cc5d00c47bbb70
+user_confirmation:
+  confirmer_ref: authenticated-reviewer
+  authority: authenticated_user
+  confirmation_summary: Domain completion confirmed from independent Evidence.
+  source_evidence_ref: crm-domain-confirmation
+  source_text_digest: sha256:f75f12b830d25fce3cbf0a2675561ef8aad19d521febd4c16cd8dc51854644e0
+  confirmed_at: '2026-08-10T00:00:00Z'
+  confirmed_decision_digest: sha256:7d4d6b39e8ab69f202acd38567fdcdd80f6f2f2d6290135dbeb5759fe67ec776
+  decisions:
+  - kind: domain_completion
+    subject_ref: customer_management
+    decision: confirmed
+    rationale: The business-domain denominator and policy are closed.

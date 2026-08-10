@@ -1,0 +1,14 @@
+{
+  "fact_details": {
+    "conflict_strategy": "server_serialized_state_predicate",
+    "outcome_resolution": "status_query",
+    "risk": "medium"
+  },
+  "independent_coverage_axes": 12,
+  "operation_ids": [
+    "content.status",
+    "content.transition"
+  ],
+  "server_serialized_transition": true,
+  "source_authorization_final": true
+}

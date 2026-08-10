@@ -1,0 +1,21 @@
+schema_version: '2'
+domains:
+- id: content_publication
+  title: Content publication
+  status: completed
+  candidate_ids:
+  - content.transition
+  route_ids:
+  - GET /content/{entity_id}
+  - PATCH /content/{entity_id}/transition
+  interaction_ids: []
+  dependency_domain_ids: []
+  evidence_refs:
+  - content-source-contract
+  active_decision_ref:
+    domain_id: content_publication
+    revision: 1
+    decision_digest: sha256:908ec102c04a9a1d407083c0a183db304df4bcdefbcd0743d4b1ebfb905d9122
+unclassified_candidate_ids: []
+preferred_order:
+- content_publication

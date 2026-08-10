@@ -1,0 +1,13 @@
+schema_version: '2'
+id: erp.read
+required_scopes:
+- inventory.read
+- order.read
+tenant_mode: none
+tenant_field: null
+readable_fields:
+- id
+- related_id
+- status
+denied_fields: []
+redaction_rules: []

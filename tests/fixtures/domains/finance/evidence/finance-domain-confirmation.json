@@ -1,0 +1,12 @@
+{
+  "artifact": {
+    "decision": "domain_completion_confirmed",
+    "domain_id": "financial_controls",
+    "summary": "Authenticated user confirmed this one domain decision and no raw credential was retained."
+  },
+  "digest": "sha256:95cf7e19e110556c02742a7ac1daf90f3ddc480e83d1a59aae570253f4693c16",
+  "kind": "content",
+  "locator": "embedded-artifact:finance-domain-confirmation",
+  "source_id": "finance-domain-confirmation",
+  "summary": "Authenticated user confirmed this one domain decision and no raw credential was retained."
+}

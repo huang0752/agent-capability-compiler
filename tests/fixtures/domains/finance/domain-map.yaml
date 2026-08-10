@@ -1,0 +1,21 @@
+schema_version: '2'
+domains:
+- id: financial_controls
+  title: Financial controls
+  status: completed
+  candidate_ids:
+  - finance.transition
+  route_ids:
+  - GET /finance/{entity_id}
+  - PATCH /finance/{entity_id}/transition
+  interaction_ids: []
+  dependency_domain_ids: []
+  evidence_refs:
+  - finance-source-contract
+  active_decision_ref:
+    domain_id: financial_controls
+    revision: 1
+    decision_digest: sha256:a6d3d3c61ce5c108ae5f6943bce1518ddc7f878de16ade96a19f8e9b17f15eac
+unclassified_candidate_ids: []
+preferred_order:
+- financial_controls

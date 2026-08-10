@@ -1,0 +1,153 @@
+schema_version: '2'
+id: content.transition.contract
+operation_id: content.transition
+request_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    entity_id:
+      type: string
+      maxLength: 128
+    target_state:
+      type: string
+      maxLength: 128
+  required:
+  - entity_id
+  - target_state
+response_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    entity_id:
+      type: string
+      maxLength: 128
+    status:
+      type: string
+      maxLength: 128
+  required:
+  - entity_id
+  - status
+request_completeness: complete
+response_completeness: complete
+provenance:
+- target_pointer: /request_schema
+  evidence:
+    source_id: content-source-contract
+    kind: content
+    locator: embedded-artifact:content-source-contract
+    summary: Source routes, request schemas, response schemas, and action semantics
+      were inspected.
+    digest: sha256:a7a1c4ffa545e3c21166240c4e8e381267ee24fcd9d8bd416bfa2e870c603e14
+  evidence_schema_pointer: /artifact/request_schema
+  authority: implementation
+- target_pointer: /response_schema
+  evidence:
+    source_id: content-source-contract
+    kind: content
+    locator: embedded-artifact:content-source-contract
+    summary: Source routes, request schemas, response schemas, and action semantics
+      were inspected.
+    digest: sha256:a7a1c4ffa545e3c21166240c4e8e381267ee24fcd9d8bd416bfa2e870c603e14
+  evidence_schema_pointer: /artifact/response_schema
+  authority: implementation
+action_semantics:
+  method: PATCH
+  effect: transition
+  risk: medium
+  reversibility: reversible
+  retry:
+    mode: never
+  idempotency:
+    mode: state_idempotent
+    state_pointer: /status
+    terminal_values:
+    - published
+  concurrency:
+    mode: server_serialized_state_predicate
+    read_operation_id: content.status
+    state_pointer: /status
+    allowed_values:
+    - draft
+    - reviewed
+  outcome_resolution:
+    mode: status_query
+    operation_id: content.status
+  evidence:
+    source_id: content-source-contract
+    kind: content
+    locator: embedded-artifact:content-source-contract
+    summary: Source routes, request schemas, response schemas, and action semantics
+      were inspected.
+    digest: sha256:a7a1c4ffa545e3c21166240c4e8e381267ee24fcd9d8bd416bfa2e870c603e14
+  authority: implementation
+  provenance:
+  - field: conflict_control
+    evidence:
+      source_id: content-source-contract
+      kind: content
+      locator: embedded-artifact:content-source-contract
+      summary: Source routes, request schemas, response schemas, and action semantics
+        were inspected.
+      digest: sha256:a7a1c4ffa545e3c21166240c4e8e381267ee24fcd9d8bd416bfa2e870c603e14
+    evidence_pointer: /artifact/action/conflict_control
+    authority: implementation
+  - field: effect
+    evidence:
+      source_id: content-source-contract
+      kind: content
+      locator: embedded-artifact:content-source-contract
+      summary: Source routes, request schemas, response schemas, and action semantics
+        were inspected.
+      digest: sha256:a7a1c4ffa545e3c21166240c4e8e381267ee24fcd9d8bd416bfa2e870c603e14
+    evidence_pointer: /artifact/action/effect
+    authority: implementation
+  - field: idempotency
+    evidence:
+      source_id: content-source-contract
+      kind: content
+      locator: embedded-artifact:content-source-contract
+      summary: Source routes, request schemas, response schemas, and action semantics
+        were inspected.
+      digest: sha256:a7a1c4ffa545e3c21166240c4e8e381267ee24fcd9d8bd416bfa2e870c603e14
+    evidence_pointer: /artifact/action/idempotency
+    authority: implementation
+  - field: outcome_resolution
+    evidence:
+      source_id: content-source-contract
+      kind: content
+      locator: embedded-artifact:content-source-contract
+      summary: Source routes, request schemas, response schemas, and action semantics
+        were inspected.
+      digest: sha256:a7a1c4ffa545e3c21166240c4e8e381267ee24fcd9d8bd416bfa2e870c603e14
+    evidence_pointer: /artifact/action/outcome_resolution
+    authority: implementation
+  - field: reversibility
+    evidence:
+      source_id: content-source-contract
+      kind: content
+      locator: embedded-artifact:content-source-contract
+      summary: Source routes, request schemas, response schemas, and action semantics
+        were inspected.
+      digest: sha256:a7a1c4ffa545e3c21166240c4e8e381267ee24fcd9d8bd416bfa2e870c603e14
+    evidence_pointer: /artifact/action/reversibility
+    authority: implementation
+  - field: retry
+    evidence:
+      source_id: content-source-contract
+      kind: content
+      locator: embedded-artifact:content-source-contract
+      summary: Source routes, request schemas, response schemas, and action semantics
+        were inspected.
+      digest: sha256:a7a1c4ffa545e3c21166240c4e8e381267ee24fcd9d8bd416bfa2e870c603e14
+    evidence_pointer: /artifact/action/retry
+    authority: implementation
+  - field: risk
+    evidence:
+      source_id: content-source-contract
+      kind: content
+      locator: embedded-artifact:content-source-contract
+      summary: Source routes, request schemas, response schemas, and action semantics
+        were inspected.
+      digest: sha256:a7a1c4ffa545e3c21166240c4e8e381267ee24fcd9d8bd416bfa2e870c603e14
+    evidence_pointer: /artifact/action/risk
+    authority: implementation

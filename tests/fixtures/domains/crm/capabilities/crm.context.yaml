@@ -1,0 +1,47 @@
+schema_version: '2'
+kind: read
+id: crm.context
+title: Customer management
+description: Resolve related business data through an explicit source-derived dependency.
+input_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    query:
+      type: string
+      maxLength: 128
+  required:
+  - query
+output_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    id:
+      type: string
+      maxLength: 128
+    related_id:
+      type: string
+      maxLength: 128
+    status:
+      type: string
+      maxLength: 128
+  required:
+  - id
+  - related_id
+  - status
+workflow:
+- id: search
+  call:
+    operation: customer.search
+    arguments:
+      query: $.input.query
+- id: detail
+  call:
+    operation: customer.detail
+    arguments:
+      entity_id: $.steps.search.id
+- emit:
+    value: $.steps.detail
+policy: crm.read
+evals:
+- crm.context.success

@@ -1,0 +1,18 @@
+schema_version: '2'
+capability_id: crm.context
+intent:
+  action: get
+  resource_types:
+  - customer
+inputs:
+  query:
+    kind: query
+    resource_type: null
+    acquisition: caller
+    producers: []
+composition:
+  failure_mode: fail_fast
+  justification: null
+output_budget:
+  max_bytes: 32768
+  long_text_disclosures: []

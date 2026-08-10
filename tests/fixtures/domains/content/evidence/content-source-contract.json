@@ -1,0 +1,14 @@
+{
+  "artifact": {
+    "action": "evidence-backed",
+    "domain_id": "content_publication",
+    "request_schema": "complete",
+    "response_schema": "complete",
+    "summary": "Source routes, request schemas, response schemas, and action semantics were inspected."
+  },
+  "digest": "sha256:a7a1c4ffa545e3c21166240c4e8e381267ee24fcd9d8bd416bfa2e870c603e14",
+  "kind": "content",
+  "locator": "embedded-artifact:content-source-contract",
+  "source_id": "content-source-contract",
+  "summary": "Source routes, request schemas, response schemas, and action semantics were inspected."
+}

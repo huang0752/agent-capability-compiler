@@ -1,0 +1,21 @@
+schema_version: '2'
+domains:
+- id: order_fulfillment
+  title: Order fulfillment
+  status: completed
+  candidate_ids:
+  - erp.context
+  route_ids:
+  - GET /inventory/{inventory_id}
+  - GET /orders/{order_id}
+  interaction_ids: []
+  dependency_domain_ids: []
+  evidence_refs:
+  - erp-source-contract
+  active_decision_ref:
+    domain_id: order_fulfillment
+    revision: 1
+    decision_digest: sha256:946838b07a6933601b9783e4c27c5d1658050a517ab80cd066836902aa462b96
+unclassified_candidate_ids: []
+preferred_order:
+- order_fulfillment

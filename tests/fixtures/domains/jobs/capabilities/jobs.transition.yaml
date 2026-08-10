@@ -1,0 +1,56 @@
+schema_version: '2'
+kind: action
+id: jobs.transition
+title: Job operations
+description: Preview and commit one evidence-backed business transition.
+input_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    entity_id:
+      type: string
+      maxLength: 128
+    target_state:
+      type: string
+      maxLength: 128
+  required:
+  - entity_id
+  - target_state
+output_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    entity_id:
+      type: string
+      maxLength: 128
+    status:
+      type: string
+      maxLength: 128
+  required:
+  - entity_id
+  - status
+action:
+  execution_mode: single
+  approval:
+    mode: required
+  expires_in_seconds: 300
+preview_workflow:
+- id: preview
+  call:
+    operation: jobs.status
+    arguments:
+      entity_id: $.input.entity_id
+- emit:
+    value: $.steps.preview
+commit_workflow:
+- id: mutation
+  call:
+    operation: jobs.transition
+    arguments:
+      entity_id: $.prepared.input.entity_id
+      target_state: $.prepared.input.target_state
+- emit:
+    value: $.steps.mutation
+policy: jobs.transition.policy
+evals:
+- jobs.transition.success

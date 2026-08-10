@@ -1,0 +1,59 @@
+schema_version: '2'
+id: customer.search
+title: Search customers
+kind: read
+input_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    query:
+      type: string
+      maxLength: 128
+  required:
+  - query
+output_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    id:
+      type: string
+      maxLength: 128
+    related_id:
+      type: string
+      maxLength: 128
+  required:
+  - id
+  - related_id
+http:
+  method: GET
+  path: /customers
+  path_parameters: {}
+  query_parameters:
+    q: query
+  request: null
+  success:
+    statuses:
+    - 200
+    body: json
+  scopes:
+  - customer.read
+  timeout_seconds: 10
+  max_response_bytes: 16384
+  safety:
+    effect: read
+    risk: low
+    reversibility: reversible
+    retry:
+      mode: idempotent_only
+    idempotency:
+      mode: unsupported
+    concurrency:
+      mode: not_supported
+context_bindings: {}
+evidence:
+- source_id: crm-source-contract
+  kind: content
+  locator: embedded-artifact:crm-source-contract
+  summary: Source routes, request schemas, response schemas, and action semantics
+    were inspected.
+  digest: sha256:1f2a97d5a735142d0f5d328f827a5624723bda92316a9e66f1a52515f260cba3

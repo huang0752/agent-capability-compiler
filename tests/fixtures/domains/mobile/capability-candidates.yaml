@@ -1,0 +1,122 @@
+schema_version: '2'
+candidates:
+- id: mobile.client.refresh
+  domain_id: mobile_experience
+  business_intent: refresh_mobile_dashboard
+  route_ids: []
+  interaction_ids:
+  - mobile.dashboard.pull_to_refresh
+  kind_claim: read
+  effect_claim: read
+  claims:
+    schema:
+      status: unknown
+      evidence_refs: &id001 []
+    effect:
+      status: unknown
+      evidence_refs: *id001
+    risk:
+      status: unknown
+      evidence_refs: *id001
+    reversibility:
+      status: unknown
+      evidence_refs: *id001
+    approval:
+      status: unknown
+      evidence_refs: *id001
+    retry:
+      status: unknown
+      evidence_refs: *id001
+    conflict_control:
+      status: unknown
+      evidence_refs: *id001
+    idempotency:
+      status: unknown
+      evidence_refs: *id001
+    outcome_resolution:
+      status: unknown
+      evidence_refs: *id001
+    lifecycle:
+      status: unknown
+      evidence_refs: *id001
+    authorization_boundary:
+      status: unknown
+      evidence_refs: *id001
+    identity_binding:
+      status: unknown
+      evidence_refs: *id001
+    context_isolation:
+      status: unknown
+      evidence_refs: *id001
+  verification_level: discovered
+  gaps:
+  - authorization_boundary
+  - context_isolation
+  - identity_binding
+  - schema
+  - source_route
+  ineligibility_claim: null
+- id: mobile.read
+  domain_id: mobile_experience
+  business_intent: read_mobile_context
+  route_ids:
+  - GET /mobile/{entity_id}
+  interaction_ids: []
+  kind_claim: read
+  effect_claim: read
+  claims:
+    schema:
+      status: proven
+      evidence_refs:
+      - mobile-source-contract
+    effect:
+      status: proven
+      evidence_refs:
+      - mobile-source-contract
+    risk:
+      status: proven
+      evidence_refs:
+      - mobile-source-contract
+    reversibility:
+      status: proven
+      evidence_refs:
+      - mobile-source-contract
+    approval:
+      status: proven
+      evidence_refs:
+      - mobile-source-contract
+    retry:
+      status: proven
+      evidence_refs:
+      - mobile-source-contract
+    conflict_control:
+      status: proven
+      evidence_refs:
+      - mobile-source-contract
+    idempotency:
+      status: proven
+      evidence_refs:
+      - mobile-source-contract
+    outcome_resolution:
+      status: proven
+      evidence_refs:
+      - mobile-source-contract
+    lifecycle:
+      status: proven
+      evidence_refs:
+      - mobile-source-contract
+    authorization_boundary:
+      status: upstream_authoritative
+      evidence_refs:
+      - mobile-authorization-boundary
+    identity_binding:
+      status: identity_binding_proven
+      evidence_refs:
+      - mobile-authorization-boundary
+    context_isolation:
+      status: context_isolation_proven
+      evidence_refs:
+      - mobile-authorization-boundary
+  verification_level: contract_ready
+  gaps: []
+  ineligibility_claim: null

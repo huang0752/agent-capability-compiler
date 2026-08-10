@@ -1,0 +1,12 @@
+{
+  "fact_details": {
+    "acc_role": "scope_narrowing_only",
+    "authorization_authority": "source_jwt_and_api"
+  },
+  "independent_coverage_axes": 12,
+  "operation_ids": [
+    "permissions.read"
+  ],
+  "source_authorization_final": true,
+  "upstream_authoritative": true
+}

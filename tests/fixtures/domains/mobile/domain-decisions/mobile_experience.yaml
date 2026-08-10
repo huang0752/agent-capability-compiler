@@ -1,0 +1,51 @@
+schema_version: '2'
+domain_id: mobile_experience
+revision: 1
+status: completed
+policy:
+  goals:
+  - read_mobile_context
+  allowed_effects:
+  - read
+  maximum_risk: low
+  approval_required_for: []
+  excluded_intents: []
+candidate_dispositions:
+- candidate_id: mobile.client.refresh
+  disposition: deferred
+  materialized_capability_ids: []
+  rationale: Deferred because this client-only intent has no source route.
+- candidate_id: mobile.read
+  disposition: accepted
+  materialized_capability_ids:
+  - mobile.read
+  rationale: Accepted against evidence-backed current contracts.
+candidate_snapshot_ids:
+- mobile.client.refresh
+- mobile.read
+candidate_snapshot_digest: sha256:805d3237f34612b88df581a3887a505800115d0cba94d6e75263e0977260dafa
+candidate_ledger_digest: sha256:03881b37aef42daa0d03d6b4da6afc87de77f4a194ab68afab7395b3471a628c
+unresolved_questions: []
+dependency_decisions: []
+evidence_snapshot:
+- evidence_ref: mobile-authorization-boundary
+  digest: sha256:64aa8c76848060bff4eaaa2c3cc1f09acee2357d34030d8678ebbcb22d5053d4
+- evidence_ref: mobile-domain-confirmation
+  digest: sha256:c32c6fc03c7991bdbe76ddecf822ebd500dd47be3e7100438fe0e8b249221d91
+- evidence_ref: mobile-source-contract
+  digest: sha256:412f57428b7b6316ab47bd3ea5661170c75ea3f20ee61b2339e89d526802354f
+dependency_snapshot_digest: sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+evidence_digest: sha256:585b46b6ac171d0456311d86625078315737627dff0b9b54ee06a3e07b641436
+user_confirmation:
+  confirmer_ref: authenticated-reviewer
+  authority: authenticated_user
+  confirmation_summary: Domain completion confirmed from independent Evidence.
+  source_evidence_ref: mobile-domain-confirmation
+  source_text_digest: sha256:c32c6fc03c7991bdbe76ddecf822ebd500dd47be3e7100438fe0e8b249221d91
+  confirmed_at: '2026-08-10T00:00:00Z'
+  confirmed_decision_digest: sha256:7de71be88fb0917562b9175619bf44df187eee1a41030349f23cd3a830115123
+  decisions:
+  - kind: domain_completion
+    subject_ref: mobile_experience
+    decision: confirmed
+    rationale: The business-domain denominator and policy are closed.

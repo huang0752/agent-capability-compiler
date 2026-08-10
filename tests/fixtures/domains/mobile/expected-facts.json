@@ -1,0 +1,16 @@
+{
+  "client_only_candidate": true,
+  "fact_details": {
+    "candidate_id": "mobile.client.refresh",
+    "disposition": "deferred",
+    "interaction_ids": [
+      "mobile.dashboard.pull_to_refresh"
+    ],
+    "route_ids": []
+  },
+  "independent_coverage_axes": 12,
+  "operation_ids": [
+    "mobile.read"
+  ],
+  "source_authorization_final": true
+}

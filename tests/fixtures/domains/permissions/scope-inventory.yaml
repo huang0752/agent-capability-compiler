@@ -1,0 +1,55 @@
+schema_version: '2'
+scope:
+  mode: domain_complete
+  user_confirmation: null
+  selected_domains:
+  - access_governance
+  exclusion_approval:
+    approved_route_ids: []
+    approval_text: null
+discovery:
+  source_commit: git:0123456789abcdef0123456789abcdef01234567
+  methods:
+  - GET
+  - HEAD
+  - POST
+  - PUT
+  - PATCH
+  - DELETE
+  include_paths:
+  - src
+  evidence_sources:
+  - permissions-source-contract
+domains:
+- id: access_governance
+  status: selected
+exclusion_rules: []
+routes:
+- id: GET /permissions/{entity_id}
+  domain: access_governance
+  method: GET
+  kind: read
+  effect: read
+  path: /permissions/{entity_id}
+  evidence_sources:
+  - permissions-source-contract
+  usage_evidence_sources: []
+  interaction_ids: []
+  eligibility: eligible
+  disposition: composed
+  operation_id: permissions.read
+  capability_ids:
+  - permissions.read
+  candidate_id: permissions.read
+  reason: null
+  exclusion_rule_id: null
+  exclusion_decision: null
+summary:
+  discovered_routes: 1
+  eligible_routes: 1
+  planned: 0
+  composed: 1
+  excluded: 0
+  blocked_on_evidence: 0
+  out_of_scope: 0
+  unresolved: 0

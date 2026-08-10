@@ -1,0 +1,67 @@
+schema_version: '2'
+candidates:
+- id: erp.context
+  domain_id: order_fulfillment
+  business_intent: inspect_order_fulfillment
+  route_ids:
+  - GET /inventory/{inventory_id}
+  - GET /orders/{order_id}
+  interaction_ids: []
+  kind_claim: read
+  effect_claim: read
+  claims:
+    schema:
+      status: proven
+      evidence_refs:
+      - erp-source-contract
+    effect:
+      status: proven
+      evidence_refs:
+      - erp-source-contract
+    risk:
+      status: proven
+      evidence_refs:
+      - erp-source-contract
+    reversibility:
+      status: proven
+      evidence_refs:
+      - erp-source-contract
+    approval:
+      status: proven
+      evidence_refs:
+      - erp-source-contract
+    retry:
+      status: proven
+      evidence_refs:
+      - erp-source-contract
+    conflict_control:
+      status: proven
+      evidence_refs:
+      - erp-source-contract
+    idempotency:
+      status: proven
+      evidence_refs:
+      - erp-source-contract
+    outcome_resolution:
+      status: proven
+      evidence_refs:
+      - erp-source-contract
+    lifecycle:
+      status: proven
+      evidence_refs:
+      - erp-source-contract
+    authorization_boundary:
+      status: upstream_authoritative
+      evidence_refs:
+      - erp-authorization-boundary
+    identity_binding:
+      status: identity_binding_proven
+      evidence_refs:
+      - erp-authorization-boundary
+    context_isolation:
+      status: context_isolation_proven
+      evidence_refs:
+      - erp-authorization-boundary
+  verification_level: contract_ready
+  gaps: []
+  ineligibility_claim: null

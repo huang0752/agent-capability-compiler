@@ -1,0 +1,13 @@
+{
+  "artifact": {
+    "acc_role": "scope_narrowing_only",
+    "domain_id": "customer_management",
+    "source_role": "final_authorization",
+    "summary": "The source JWT identity and source API remain the final authorization authority."
+  },
+  "digest": "sha256:4b1115e8bb3899f8a7491862b3eec11303ca744948d76d866089aa7a7d2c9604",
+  "kind": "content",
+  "locator": "embedded-artifact:crm-authorization-boundary",
+  "source_id": "crm-authorization-boundary",
+  "summary": "The source JWT identity and source API remain the final authorization authority."
+}

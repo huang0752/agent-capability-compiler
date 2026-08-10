@@ -1,0 +1,63 @@
+schema_version: '2'
+id: content.status
+title: Read content state
+kind: read
+input_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    entity_id:
+      type: string
+      maxLength: 128
+  required:
+  - entity_id
+output_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    entity_id:
+      type: string
+      maxLength: 128
+    status:
+      type: string
+      maxLength: 128
+    version:
+      type: string
+      maxLength: 128
+  required:
+  - entity_id
+  - status
+  - version
+http:
+  method: GET
+  path: /content/{entity_id}
+  path_parameters:
+    entity_id: entity_id
+  query_parameters: {}
+  request: null
+  success:
+    statuses:
+    - 200
+    body: json
+  scopes:
+  - content.read
+  timeout_seconds: 10
+  max_response_bytes: 16384
+  safety:
+    effect: read
+    risk: low
+    reversibility: reversible
+    retry:
+      mode: idempotent_only
+    idempotency:
+      mode: unsupported
+    concurrency:
+      mode: not_supported
+context_bindings: {}
+evidence:
+- source_id: content-source-contract
+  kind: content
+  locator: embedded-artifact:content-source-contract
+  summary: Source routes, request schemas, response schemas, and action semantics
+    were inspected.
+  digest: sha256:a7a1c4ffa545e3c21166240c4e8e381267ee24fcd9d8bd416bfa2e870c603e14

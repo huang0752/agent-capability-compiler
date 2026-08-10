@@ -1,0 +1,14 @@
+{
+  "artifact": {
+    "action": "evidence-backed",
+    "domain_id": "access_governance",
+    "request_schema": "complete",
+    "response_schema": "complete",
+    "summary": "Source routes, request schemas, response schemas, and action semantics were inspected."
+  },
+  "digest": "sha256:9ef60864ff58f65aab80c5228ad1d9db62827f2bdab77d948dfad49057e614c3",
+  "kind": "content",
+  "locator": "embedded-artifact:permissions-source-contract",
+  "source_id": "permissions-source-contract",
+  "summary": "Source routes, request schemas, response schemas, and action semantics were inspected."
+}

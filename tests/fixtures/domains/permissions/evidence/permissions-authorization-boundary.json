@@ -1,0 +1,13 @@
+{
+  "artifact": {
+    "acc_role": "scope_narrowing_only",
+    "domain_id": "access_governance",
+    "source_role": "final_authorization",
+    "summary": "The source JWT identity and source API remain the final authorization authority."
+  },
+  "digest": "sha256:ef71750d85816c7aebc7fa7745b8a17194a8194c682d2a1d31741c36659297ea",
+  "kind": "content",
+  "locator": "embedded-artifact:permissions-authorization-boundary",
+  "source_id": "permissions-authorization-boundary",
+  "summary": "The source JWT identity and source API remain the final authorization authority."
+}

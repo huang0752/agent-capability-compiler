@@ -1,0 +1,13 @@
+{
+  "artifact": {
+    "acc_role": "scope_narrowing_only",
+    "domain_id": "mobile_experience",
+    "source_role": "final_authorization",
+    "summary": "The source JWT identity and source API remain the final authorization authority."
+  },
+  "digest": "sha256:64aa8c76848060bff4eaaa2c3cc1f09acee2357d34030d8678ebbcb22d5053d4",
+  "kind": "content",
+  "locator": "embedded-artifact:mobile-authorization-boundary",
+  "source_id": "mobile-authorization-boundary",
+  "summary": "The source JWT identity and source API remain the final authorization authority."
+}

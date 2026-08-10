@@ -1,0 +1,46 @@
+schema_version: '2'
+domain_id: order_fulfillment
+revision: 1
+status: completed
+policy:
+  goals:
+  - inspect_order_fulfillment
+  allowed_effects:
+  - read
+  maximum_risk: low
+  approval_required_for: []
+  excluded_intents: []
+candidate_dispositions:
+- candidate_id: erp.context
+  disposition: accepted
+  materialized_capability_ids:
+  - erp.context
+  rationale: Accepted against evidence-backed current contracts.
+candidate_snapshot_ids:
+- erp.context
+candidate_snapshot_digest: sha256:8542ac30117fb9969c552dcdc53529e478f7df5464063d0402c4cd3b49b6656e
+candidate_ledger_digest: sha256:0fec8725f3775d1aa22bcf22b76834b0731906fbc60c4eacfef40cde16654a32
+unresolved_questions: []
+dependency_decisions: []
+evidence_snapshot:
+- evidence_ref: erp-authorization-boundary
+  digest: sha256:d6a82ee75b3300d3c0c14be9e2f5243b528527ba1c13595719e4571e106e953a
+- evidence_ref: erp-domain-confirmation
+  digest: sha256:19b40963c6cca2ec13bb2e7379915d79b0681e2f56c6d6d80b4cdf3b3a896bc8
+- evidence_ref: erp-source-contract
+  digest: sha256:57a77c51e7b0cecfe0d78e309b14f2ade0402fe1c66c4ed6eceeb3b56f06d353
+dependency_snapshot_digest: sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+evidence_digest: sha256:c5070c799b09820928edb890d3ec56b68f93b88b44ec973eb2b209063d965185
+user_confirmation:
+  confirmer_ref: authenticated-reviewer
+  authority: authenticated_user
+  confirmation_summary: Domain completion confirmed from independent Evidence.
+  source_evidence_ref: erp-domain-confirmation
+  source_text_digest: sha256:19b40963c6cca2ec13bb2e7379915d79b0681e2f56c6d6d80b4cdf3b3a896bc8
+  confirmed_at: '2026-08-10T00:00:00Z'
+  confirmed_decision_digest: sha256:946838b07a6933601b9783e4c27c5d1658050a517ab80cd066836902aa462b96
+  decisions:
+  - kind: domain_completion
+    subject_ref: order_fulfillment
+    decision: confirmed
+    rationale: The business-domain denominator and policy are closed.

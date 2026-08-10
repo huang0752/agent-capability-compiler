@@ -1,0 +1,20 @@
+schema_version: '2'
+domains:
+- id: access_governance
+  title: Access governance
+  status: completed
+  candidate_ids:
+  - permissions.read
+  route_ids:
+  - GET /permissions/{entity_id}
+  interaction_ids: []
+  dependency_domain_ids: []
+  evidence_refs:
+  - permissions-source-contract
+  active_decision_ref:
+    domain_id: access_governance
+    revision: 1
+    decision_digest: sha256:ca88360df363f90e0684531f8daf7551b833e5fc44c6ca3b1bb6833eb617bb79
+unclassified_candidate_ids: []
+preferred_order:
+- access_governance

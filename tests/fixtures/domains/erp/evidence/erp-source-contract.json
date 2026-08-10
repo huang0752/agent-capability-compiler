@@ -1,0 +1,14 @@
+{
+  "artifact": {
+    "action": "evidence-backed",
+    "domain_id": "order_fulfillment",
+    "request_schema": "complete",
+    "response_schema": "complete",
+    "summary": "Source routes, request schemas, response schemas, and action semantics were inspected."
+  },
+  "digest": "sha256:57a77c51e7b0cecfe0d78e309b14f2ade0402fe1c66c4ed6eceeb3b56f06d353",
+  "kind": "content",
+  "locator": "embedded-artifact:erp-source-contract",
+  "source_id": "erp-source-contract",
+  "summary": "Source routes, request schemas, response schemas, and action semantics were inspected."
+}

@@ -1,0 +1,49 @@
+schema_version: '2'
+id: permissions.read.contract
+operation_id: permissions.read
+request_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    entity_id:
+      type: string
+      maxLength: 128
+  required:
+  - entity_id
+response_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    entity_id:
+      type: string
+      maxLength: 128
+    status:
+      type: string
+      maxLength: 128
+  required:
+  - entity_id
+  - status
+request_completeness: complete
+response_completeness: complete
+provenance:
+- target_pointer: /request_schema
+  evidence:
+    source_id: permissions-source-contract
+    kind: content
+    locator: embedded-artifact:permissions-source-contract
+    summary: Source routes, request schemas, response schemas, and action semantics
+      were inspected.
+    digest: sha256:9ef60864ff58f65aab80c5228ad1d9db62827f2bdab77d948dfad49057e614c3
+  evidence_schema_pointer: /artifact/request_schema
+  authority: implementation
+- target_pointer: /response_schema
+  evidence:
+    source_id: permissions-source-contract
+    kind: content
+    locator: embedded-artifact:permissions-source-contract
+    summary: Source routes, request schemas, response schemas, and action semantics
+      were inspected.
+    digest: sha256:9ef60864ff58f65aab80c5228ad1d9db62827f2bdab77d948dfad49057e614c3
+  evidence_schema_pointer: /artifact/response_schema
+  authority: implementation
+action_semantics: null

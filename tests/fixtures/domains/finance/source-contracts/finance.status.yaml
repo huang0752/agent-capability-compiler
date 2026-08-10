@@ -1,0 +1,53 @@
+schema_version: '2'
+id: finance.status.contract
+operation_id: finance.status
+request_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    entity_id:
+      type: string
+      maxLength: 128
+  required:
+  - entity_id
+response_schema:
+  type: object
+  additionalProperties: false
+  properties:
+    entity_id:
+      type: string
+      maxLength: 128
+    status:
+      type: string
+      maxLength: 128
+    version:
+      type: string
+      maxLength: 128
+  required:
+  - entity_id
+  - status
+  - version
+request_completeness: complete
+response_completeness: complete
+provenance:
+- target_pointer: /request_schema
+  evidence:
+    source_id: finance-source-contract
+    kind: content
+    locator: embedded-artifact:finance-source-contract
+    summary: Source routes, request schemas, response schemas, and action semantics
+      were inspected.
+    digest: sha256:842b541d3802e4a5cc53e47aa31143cb90ed65e084bded762392821a0f0cf745
+  evidence_schema_pointer: /artifact/request_schema
+  authority: implementation
+- target_pointer: /response_schema
+  evidence:
+    source_id: finance-source-contract
+    kind: content
+    locator: embedded-artifact:finance-source-contract
+    summary: Source routes, request schemas, response schemas, and action semantics
+      were inspected.
+    digest: sha256:842b541d3802e4a5cc53e47aa31143cb90ed65e084bded762392821a0f0cf745
+  evidence_schema_pointer: /artifact/response_schema
+  authority: implementation
+action_semantics: null

@@ -1,0 +1,74 @@
+schema_version: '2'
+scope:
+  mode: domain_complete
+  user_confirmation: null
+  selected_domains:
+  - customer_management
+  exclusion_approval:
+    approved_route_ids: []
+    approval_text: null
+discovery:
+  source_commit: git:0123456789abcdef0123456789abcdef01234567
+  methods:
+  - GET
+  - HEAD
+  - POST
+  - PUT
+  - PATCH
+  - DELETE
+  include_paths:
+  - src
+  evidence_sources:
+  - crm-source-contract
+domains:
+- id: customer_management
+  status: selected
+exclusion_rules: []
+routes:
+- id: GET /customers
+  domain: customer_management
+  method: GET
+  kind: read
+  effect: read
+  path: /customers
+  evidence_sources:
+  - crm-source-contract
+  usage_evidence_sources: []
+  interaction_ids: []
+  eligibility: eligible
+  disposition: composed
+  operation_id: customer.search
+  capability_ids:
+  - crm.context
+  candidate_id: crm.context
+  reason: null
+  exclusion_rule_id: null
+  exclusion_decision: null
+- id: GET /customers/{entity_id}
+  domain: customer_management
+  method: GET
+  kind: read
+  effect: read
+  path: /customers/{entity_id}
+  evidence_sources:
+  - crm-source-contract
+  usage_evidence_sources: []
+  interaction_ids: []
+  eligibility: eligible
+  disposition: composed
+  operation_id: customer.detail
+  capability_ids:
+  - crm.context
+  candidate_id: crm.context
+  reason: null
+  exclusion_rule_id: null
+  exclusion_decision: null
+summary:
+  discovered_routes: 2
+  eligible_routes: 2
+  planned: 0
+  composed: 2
+  excluded: 0
+  blocked_on_evidence: 0
+  out_of_scope: 0
+  unresolved: 0

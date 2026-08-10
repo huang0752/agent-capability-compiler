@@ -1,0 +1,74 @@
+schema_version: '2'
+scope:
+  mode: domain_complete
+  user_confirmation: null
+  selected_domains:
+  - content_publication
+  exclusion_approval:
+    approved_route_ids: []
+    approval_text: null
+discovery:
+  source_commit: git:0123456789abcdef0123456789abcdef01234567
+  methods:
+  - GET
+  - HEAD
+  - POST
+  - PUT
+  - PATCH
+  - DELETE
+  include_paths:
+  - src
+  evidence_sources:
+  - content-source-contract
+domains:
+- id: content_publication
+  status: selected
+exclusion_rules: []
+routes:
+- id: GET /content/{entity_id}
+  domain: content_publication
+  method: GET
+  kind: read
+  effect: read
+  path: /content/{entity_id}
+  evidence_sources:
+  - content-source-contract
+  usage_evidence_sources: []
+  interaction_ids: []
+  eligibility: eligible
+  disposition: composed
+  operation_id: content.status
+  capability_ids:
+  - content.transition
+  candidate_id: content.transition
+  reason: null
+  exclusion_rule_id: null
+  exclusion_decision: null
+- id: PATCH /content/{entity_id}/transition
+  domain: content_publication
+  method: PATCH
+  kind: action
+  effect: transition
+  path: /content/{entity_id}/transition
+  evidence_sources:
+  - content-source-contract
+  usage_evidence_sources: []
+  interaction_ids: []
+  eligibility: eligible
+  disposition: composed
+  operation_id: content.transition
+  capability_ids:
+  - content.transition
+  candidate_id: content.transition
+  reason: null
+  exclusion_rule_id: null
+  exclusion_decision: null
+summary:
+  discovered_routes: 2
+  eligible_routes: 2
+  planned: 0
+  composed: 2
+  excluded: 0
+  blocked_on_evidence: 0
+  out_of_scope: 0
+  unresolved: 0

@@ -1,0 +1,14 @@
+{
+  "artifact": {
+    "action": "evidence-backed",
+    "domain_id": "customer_management",
+    "request_schema": "complete",
+    "response_schema": "complete",
+    "summary": "Source routes, request schemas, response schemas, and action semantics were inspected."
+  },
+  "digest": "sha256:1f2a97d5a735142d0f5d328f827a5624723bda92316a9e66f1a52515f260cba3",
+  "kind": "content",
+  "locator": "embedded-artifact:crm-source-contract",
+  "source_id": "crm-source-contract",
+  "summary": "Source routes, request schemas, response schemas, and action semantics were inspected."
+}

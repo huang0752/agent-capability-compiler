@@ -1,0 +1,15 @@
+schema_version: '2'
+id: permissions.read.success
+capability: permissions.read
+input:
+  entity_id: permissions-1
+fixtures:
+  source: deterministic
+expected_calls:
+- operation: permissions.read
+  arguments:
+    entity_id: permissions-1
+expected_output_schema:
+  type: object
+expected_error: null
+forbidden_fields: []

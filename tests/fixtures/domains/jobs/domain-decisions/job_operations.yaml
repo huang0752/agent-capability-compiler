@@ -1,0 +1,47 @@
+schema_version: '2'
+domain_id: job_operations
+revision: 1
+status: completed
+policy:
+  goals:
+  - transition_jobs_state
+  allowed_effects:
+  - transition
+  maximum_risk: medium
+  approval_required_for:
+  - transition_jobs_state
+  excluded_intents: []
+candidate_dispositions:
+- candidate_id: jobs.transition
+  disposition: accepted
+  materialized_capability_ids:
+  - jobs.transition
+  rationale: Accepted against evidence-backed current contracts.
+candidate_snapshot_ids:
+- jobs.transition
+candidate_snapshot_digest: sha256:b10e0facd1b2d240fe1ee9679784de126c0d6c75dbd56b6b9e69f9d309cf87a5
+candidate_ledger_digest: sha256:ea2e720b77159d84fbd26ac955d9695dc2f72797dece6fe1cfb9e5c1ee7aab3b
+unresolved_questions: []
+dependency_decisions: []
+evidence_snapshot:
+- evidence_ref: jobs-authorization-boundary
+  digest: sha256:e53a4b0095e438a760ff97a55f5bd43764da59f6063f324a1ab8a4c39b885b74
+- evidence_ref: jobs-domain-confirmation
+  digest: sha256:5f2971c1c35dd83989d0c1be5b9bd25c78666def28b1b8a2e3266846c2820b19
+- evidence_ref: jobs-source-contract
+  digest: sha256:0d6d1d8bbf5b81a40740acb704dbbfa2fd8b551495f20edc32dd2b7f41b31a80
+dependency_snapshot_digest: sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+evidence_digest: sha256:9692c0c27afba074e26b7577f2198de59af94015f05635cc92805020db727023
+user_confirmation:
+  confirmer_ref: authenticated-reviewer
+  authority: authenticated_user
+  confirmation_summary: Domain completion confirmed from independent Evidence.
+  source_evidence_ref: jobs-domain-confirmation
+  source_text_digest: sha256:5f2971c1c35dd83989d0c1be5b9bd25c78666def28b1b8a2e3266846c2820b19
+  confirmed_at: '2026-08-10T00:00:00Z'
+  confirmed_decision_digest: sha256:ad9bb87d4e7cfd703cd03cc67b7275d588a825c65d78934ebff7ad693cc69daf
+  decisions:
+  - kind: domain_completion
+    subject_ref: job_operations
+    decision: confirmed
+    rationale: The business-domain denominator and policy are closed.

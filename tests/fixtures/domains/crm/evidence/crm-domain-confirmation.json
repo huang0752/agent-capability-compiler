@@ -1,0 +1,12 @@
+{
+  "artifact": {
+    "decision": "domain_completion_confirmed",
+    "domain_id": "customer_management",
+    "summary": "Authenticated user confirmed this one domain decision and no raw credential was retained."
+  },
+  "digest": "sha256:f75f12b830d25fce3cbf0a2675561ef8aad19d521febd4c16cd8dc51854644e0",
+  "kind": "content",
+  "locator": "embedded-artifact:crm-domain-confirmation",
+  "source_id": "crm-domain-confirmation",
+  "summary": "Authenticated user confirmed this one domain decision and no raw credential was retained."
+}

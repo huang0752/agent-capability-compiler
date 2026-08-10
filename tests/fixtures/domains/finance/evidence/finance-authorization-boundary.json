@@ -1,0 +1,13 @@
+{
+  "artifact": {
+    "acc_role": "scope_narrowing_only",
+    "domain_id": "financial_controls",
+    "source_role": "final_authorization",
+    "summary": "The source JWT identity and source API remain the final authorization authority."
+  },
+  "digest": "sha256:ee74a4945ea7c515aa89e4da84f3cde8d70142ab15252b1fa7b8ff3fbfcfe409",
+  "kind": "content",
+  "locator": "embedded-artifact:finance-authorization-boundary",
+  "source_id": "finance-authorization-boundary",
+  "summary": "The source JWT identity and source API remain the final authorization authority."
+}

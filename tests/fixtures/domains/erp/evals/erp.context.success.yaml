@@ -1,0 +1,18 @@
+schema_version: '2'
+id: erp.context.success
+capability: erp.context
+input:
+  order_id: order-1
+fixtures:
+  source: deterministic
+expected_calls:
+- operation: order.detail
+  arguments:
+    order_id: order-1
+- operation: inventory.detail
+  arguments:
+    inventory_id: inventory-1
+expected_output_schema:
+  type: object
+expected_error: null
+forbidden_fields: []

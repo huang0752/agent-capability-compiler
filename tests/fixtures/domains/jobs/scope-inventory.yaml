@@ -1,0 +1,74 @@
+schema_version: '2'
+scope:
+  mode: domain_complete
+  user_confirmation: null
+  selected_domains:
+  - job_operations
+  exclusion_approval:
+    approved_route_ids: []
+    approval_text: null
+discovery:
+  source_commit: git:0123456789abcdef0123456789abcdef01234567
+  methods:
+  - GET
+  - HEAD
+  - POST
+  - PUT
+  - PATCH
+  - DELETE
+  include_paths:
+  - src
+  evidence_sources:
+  - jobs-source-contract
+domains:
+- id: job_operations
+  status: selected
+exclusion_rules: []
+routes:
+- id: GET /jobs/{entity_id}
+  domain: job_operations
+  method: GET
+  kind: read
+  effect: read
+  path: /jobs/{entity_id}
+  evidence_sources:
+  - jobs-source-contract
+  usage_evidence_sources: []
+  interaction_ids: []
+  eligibility: eligible
+  disposition: composed
+  operation_id: jobs.status
+  capability_ids:
+  - jobs.transition
+  candidate_id: jobs.transition
+  reason: null
+  exclusion_rule_id: null
+  exclusion_decision: null
+- id: PATCH /jobs/{entity_id}/transition
+  domain: job_operations
+  method: PATCH
+  kind: action
+  effect: transition
+  path: /jobs/{entity_id}/transition
+  evidence_sources:
+  - jobs-source-contract
+  usage_evidence_sources: []
+  interaction_ids: []
+  eligibility: eligible
+  disposition: composed
+  operation_id: jobs.transition
+  capability_ids:
+  - jobs.transition
+  candidate_id: jobs.transition
+  reason: null
+  exclusion_rule_id: null
+  exclusion_decision: null
+summary:
+  discovered_routes: 2
+  eligible_routes: 2
+  planned: 0
+  composed: 2
+  excluded: 0
+  blocked_on_evidence: 0
+  out_of_scope: 0
+  unresolved: 0
