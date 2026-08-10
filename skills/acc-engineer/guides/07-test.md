@@ -19,6 +19,8 @@
 8. 对显式 Action 只在隔离沙箱验证 `prepare → approve → commit → status`，并覆盖过期/跨会话 approval、重复提交、并发冲突、上游拒绝和结果未知。严禁把生产写操作当成自动测试。
 9. 用平台中立 headless evaluator 覆盖 missing/null/explicit defaults、options 成功/空/错误/分页、cascade stale response、conditions、related data、states、presentation projection，以及 Action lifecycle events。
 10. 只有全部 required interaction scenarios 未跳过且通过时才记录 `headless_verified`。实际连接本地/测试源只支持 `source_connected_verified`；只有真实客户端 adapter 重放同一合同通过时才记录 `client_adapter_verified`，三者互不推导。
+11. 当前领域的证据清晰候选自动运行适用测试；只把失败、冲突、高风险策略或必须由用户控制的测试边界逐个提交用户决定。
+12. Action 同时覆盖 optimistic token 与 server-serialized state predicate：前者验证 CAS 冲突，后者验证源端串行状态谓词、禁止业务重试和显式 outcome/status 查询。
 
 ## 门禁
 
@@ -30,6 +32,7 @@
 - environment Secret、Gateway session、JWT、Authorization、Cookie 和认证状态不得进入 Pack、MCP tools、错误、日志或测试报告。
 - UI `hidden/disabled` 不是授权测试；必须保留服务端 permission/cross-tenant 负例。
 - `source_connected_verified` 不是 `client_adapter_verified`，headless 通过也不能声称真实客户端已验证。
+- 源 JWT 仍是权限最终裁决；测试中的 Scope 和 approval 只能增加拒绝路径，不能授予源权限。
 
 ## 输出
 

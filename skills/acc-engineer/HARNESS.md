@@ -34,13 +34,19 @@ Outputs are confined to `acc_project`. The source checkout is evidence, never an
 17. Coverage keeps route disposition, Operation trace, scenarios, constructability, discoverability, composition, schema fidelity, output budget, and live observations independent; it does not generate an aggregate score or equate route closure with usability.
 18. An Action uses `prepare → approve → commit → status`, complete safety contracts, trusted approval handles, and isolated sandbox validation; 不得简单放开 POST.
 19. Client discovery records surfaces, events, bindings, defaults, options, conditions, related data, states, and unknowns. A hidden/disabled control 不是授权；前端默认值和前端条件不得冒充 `SourceContract`。
+20. 全局浅扫先建立 Candidate Ledger、`DomainMap` 和依赖顺序；领域深扫不能反向缩小全局分母。
+21. 一次只激活一个依赖已就绪的领域。先确认业务目标和 `DomainPolicy`，再深扫并自动处理证据清晰候选；绝不把全部 route 交给用户选择。
+22. 一次只问一个异常、冲突、高风险策略或用户控制的测试边界；普通证据清晰候选不占用用户决策。
+23. 每个领域结束时逐项复核独立轴并确认版本化 `DomainDecision`，然后才进入下一个领域。
+24. 源 JWT/接口最终裁决源权限；Scope 只能收窄；Action approval 不是授权，只确认本次 prepared execution。
 
 ## State machine
 
 Advance only when the current gate passes:
 
 ```text
-PREFLIGHT -> ANALYZE -> MODEL -> PLAN -> IMPLEMENT
+PREFLIGHT -> GLOBAL_ANALYZE -> DOMAIN_POLICY -> DOMAIN_DEEP_SCAN -> DOMAIN_REVIEW
+          -> (NEXT_READY_DOMAIN | MODEL -> PLAN -> IMPLEMENT)
           -> VALIDATE -> TEST -> REFINE -> HANDOFF -> STOP
 ```
 
@@ -54,15 +60,15 @@ Canonicalize both paths with `pwd -P` or `realpath`. Declare `system_complete` b
 
 ### 1. Analyze
 
-Perform shallow global discovery across route registrations, OpenAPI, and client surfaces to establish `scope-inventory.yaml` and `ui-interaction-inventory.yaml`. Normalize calls into route usage, then independently normalize surfaces/events/bindings/defaults/options/conditions/related data/states/unknowns with immutable Evidence. The auditors do not parse or execute framework source. Only then use repeatable workspace-relative `--include` paths for deep Evidence inspection. Bind every interface and permission claim to a locator plus digest and normalize source contracts separately; UI evidence cannot upgrade authorization or `SourceContract` authority. Produce a system map and analysis report; list gaps.
+Perform shallow global discovery across route registrations, OpenAPI, and client surfaces to establish the complete route/interaction denominator, Candidate Ledger, `DomainMap`, and dependency order. Do not offer the route list as user choices. Activate exactly one dependency-ready domain, confirm its business goals and `DomainPolicy`, and only then use repeatable workspace-relative `--include` paths for that domain's deep Evidence inspection. Normalize calls into route usage and client semantics independently; UI evidence cannot upgrade authorization or `SourceContract` authority. Automatically model evidence-clear candidates and ask one question at a time only for exceptions.
 
 ### 2. Model
 
-Normalize only the observed domain: entities, relations, Read and Action operations, permission scopes, tenant derivation, interaction dependency graph, existing tests, and uncertainty. Add `scope_route_ids` to every candidate Operation and retain route `interaction_ids`. Separate upstream authorization from UI visibility and ACC output disclosure. Do not add speculative abstractions.
+Normalize only the active, policy-confirmed domain: entities, relations, Read and Action operations, source authorization boundary, tenant derivation, interaction dependency graph, existing tests, and uncertainty. Add `scope_route_ids` to every candidate Operation and retain route `interaction_ids`. Source JWT remains final; Scope and approval add restrictions rather than authority. Do not add speculative abstractions.
 
 ### 3. Plan
 
-Assign every eligible route and high-value interaction a traceable disposition, adoption, or evidence-backed omission. System-complete exclusions keep their structured approval rules. Capability Plan closes over both denominators, records interaction dependencies, and never counts unresolved items as complete. Design business capabilities with explicit selector acquisition, defaults/options provenance, conditional input construction, empty success path, failure isolation, and output budget. Keep credentials, tenant identity, and server-derived values out of agent inputs. Require positive and permission-negative Evals where applicable. Do not advance with unresolved scope.
+Present the active domain's independent axes and versioned candidate dispositions. Confirm its `DomainDecision`; user deferral remains distinct from an evidence blocker. Only accepted, evidenced candidates enter Capability Plan. After a domain is confirmed, continue with the next dependency-ready domain; never batch all route decisions into one prompt. The final Plan closes both route and interaction denominators and keeps credentials, tenant identity, and server-derived values out of agent inputs.
 
 ### 4. Implement
 

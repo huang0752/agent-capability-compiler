@@ -8,8 +8,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from acc_core.models import Capability, Eval, Operation, Policy
 
@@ -416,6 +417,99 @@ def test_skill_requires_explicit_read_effects_and_action_lifecycle() -> None:
     assert "prepare → approve → commit → status" in workflow
     assert "不得简单放开 POST" in workflow
     assert "隔离沙箱" in workflow
+
+
+def test_skill_runs_a_single_domain_wizard_instead_of_asking_users_to_classify_routes() -> None:
+    skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+    harness = (SKILL / "HARNESS.md").read_text(encoding="utf-8")
+    guides = {
+        path.name: path.read_text(encoding="utf-8")
+        for path in sorted((SKILL / "guides").glob("*.md"))
+    }
+    workflow = "\n".join((skill, harness, *guides.values()))
+
+    for contract in (
+        "全局浅扫",
+        "DomainMap",
+        "一次只激活一个",
+        "DomainPolicy",
+        "证据清晰",
+        "一次只问一个",
+        "独立轴",
+        "DomainDecision",
+        "依赖已就绪",
+    ):
+        assert contract in workflow
+    assert "绝不把全部 route 交给用户选择" in workflow
+    assert "源 JWT" in workflow and "最终裁决" in workflow
+    assert "Scope 只能收窄" in workflow
+    assert "approval 不是授权" in workflow
+    for guide, text in guides.items():
+        assert "领域" in text, guide
+
+
+def test_skill_ships_platform_neutral_domain_and_action_templates() -> None:
+    required = {
+        "domain-map.yaml",
+        "capability-candidates.yaml",
+        "domain-decision.yaml",
+        "action-operation.yaml",
+        "action-capability.yaml",
+    }
+    assert required <= {path.name for path in (SKILL / "templates").glob("*.yaml")}
+    example_path = SKILL / "references" / "examples" / "server-serialized-transition.yaml"
+    assert example_path.is_file()
+
+    action = _yaml(SKILL / "templates" / "action-operation.yaml")
+    assert action["kind"] == "action"
+    assert set(action["http"]["safety"]) == {
+        "effect",
+        "risk",
+        "reversibility",
+        "retry",
+        "idempotency",
+        "concurrency",
+    }
+    assert action["http"]["safety"]["concurrency"]["mode"] == "required"
+    with pytest.raises(ValidationError):
+        TypeAdapter(Operation).validate_python(action)
+    action["evidence"][0]["digest"] = "sha256:" + "a" * 64
+    TypeAdapter(Operation).validate_python(action)
+
+    capability = _yaml(SKILL / "templates" / "action-capability.yaml")
+    assert capability["kind"] == "action"
+    assert set(capability) >= {"action", "preview_workflow", "commit_workflow"}
+    TypeAdapter(Capability).validate_python(capability)
+
+    server_serialized = _yaml(example_path)
+    safety = server_serialized["operation"]["http"]["safety"]
+    assert safety["concurrency"]["mode"] == "server_serialized_state_predicate"
+    assert safety["retry"] == {"mode": "never"}
+    assert server_serialized["action_semantics"]["outcome_resolution"]["mode"] == ("status_query")
+
+    combined = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in [*(SKILL / "templates").glob("*.yaml"), example_path]
+    ).casefold()
+    for forbidden in ("baogao", "jin", "src/api/", "app/api/", "orders.write"):
+        assert forbidden not in combined
+    assert "replace_with_captured_evidence_digest" in combined
+
+
+def test_domain_and_server_serialized_templates_preserve_cross_document_closure() -> None:
+    candidates = _yaml(SKILL / "templates" / "capability-candidates.yaml")
+    decision = _yaml(SKILL / "templates" / "domain-decision.yaml")
+    candidate = candidates["candidates"][0]
+
+    assert decision["policy"]["goals"] == [candidate["business_intent"]]
+    assert decision["policy"]["approval_required_for"] == [candidate["business_intent"]]
+    assert decision["candidate_dispositions"][0]["candidate_id"] == candidate["id"]
+
+    example = _yaml(SKILL / "references" / "examples" / "server-serialized-transition.yaml")
+    commit = example["capability"]["commit_workflow"]
+    calls = [step["call"]["operation"] for step in commit if "call" in step]
+    assert calls == [example["operation"]["id"]]
+    assert commit[-1] == {"emit": {"value": "$.steps.cancelled"}}
 
 
 def test_skill_treats_client_interactions_as_independent_platform_neutral_evidence() -> None:

@@ -1,0 +1,42 @@
+schema_version: "2"
+kind: action
+id: orders.cancel
+title: Cancel an order
+description: Preview the current order and request one confirmed cancellation.
+
+input_schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  required: [order_id, reason]
+  properties:
+    order_id: {type: string, minLength: 1}
+    reason: {type: string, minLength: 1, maxLength: 500}
+
+output_schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+
+action:
+  execution_mode: single
+  approval: {mode: required}
+  expires_in_seconds: 300
+
+preview_workflow:
+  - id: current
+    call:
+      operation: orders.get
+      arguments: {order_id: $.input.order_id}
+  - emit: {value: $.steps.current}
+
+commit_workflow:
+  - id: cancelled
+    call:
+      operation: orders.cancel
+      arguments:
+        order_id: $.prepared.input.order_id
+        reason: $.prepared.input.reason
+  - emit: {value: $.steps.cancelled}
+
+policy: REPLACE_WITH_POLICY_ID
+evals: [orders-cancel-success, orders-cancel-conflict]

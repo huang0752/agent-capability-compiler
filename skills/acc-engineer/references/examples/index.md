@@ -2,6 +2,7 @@
 
 - Start successful cases from `../../templates/eval.yaml`.
 - Use `permission-negative-eval.yaml` as the paired authorization failure case when a Capability policy declares scopes or `tenant_mode: required`.
+- Use `server-serialized-transition.yaml` only when implementation/test Evidence proves that the source serializes the allowed-state transition. Replace every Evidence sentinel; the example intentionally fails strict validation before replacement.
 
 Keep identifiers aligned across files:
 

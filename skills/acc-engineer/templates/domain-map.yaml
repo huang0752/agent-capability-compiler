@@ -1,0 +1,21 @@
+schema_version: "2"
+
+# Global shallow discovery creates this denominator before any domain deep scan.
+# Keep exactly one dependency-ready domain in progress at a time.
+domains:
+  - id: orders
+    title: Order lifecycle
+    status: in_progress
+    candidate_ids:
+      - orders.cancel
+    route_ids:
+      - POST /orders/{order_id}/cancel
+    interaction_ids: []
+    dependency_domain_ids: []
+    evidence_refs:
+      - REPLACE_WITH_EVIDENCE_SOURCE_ID
+    active_decision_ref: null
+
+unclassified_candidate_ids: []
+preferred_order:
+  - orders

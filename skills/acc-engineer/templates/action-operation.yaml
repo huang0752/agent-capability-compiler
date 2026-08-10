@@ -1,0 +1,57 @@
+schema_version: "2"
+kind: action
+id: orders.cancel
+title: Cancel an order
+
+input_schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: false
+  required: [order_id, reason]
+  properties:
+    order_id: {type: string, minLength: 1}
+    reason: {type: string, minLength: 1, maxLength: 500}
+
+output_schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  additionalProperties: true
+  required: [id, state]
+  properties:
+    id: {type: string}
+    state: {type: string}
+    version: {type: string}
+
+http:
+  method: POST
+  path: /orders/{order_id}/cancel
+  path_parameters: {order_id: order_id}
+  query_parameters: {}
+  request:
+    kind: json
+    body_parameters: {/reason: reason}
+    max_request_bytes: 4096
+  success: {statuses: [200], body: json}
+  scopes: []
+  timeout_seconds: 15
+  max_response_bytes: 1048576
+  safety:
+    effect: transition
+    risk: high
+    reversibility: irreversible
+    retry: {mode: idempotent_only}
+    idempotency:
+      mode: source_key
+      target: {kind: header, name: X-Idempotency-Key}
+    concurrency:
+      mode: required
+      token: {kind: body, pointer: /version}
+      precondition: {kind: header, name: If-Match}
+
+context_bindings: {}
+evidence:
+  - source_id: REPLACE_WITH_EVIDENCE_SOURCE_ID
+    kind: source_file
+    path: REPLACE_WITH_SOURCE_RELATIVE_PATH
+    # Intentionally invalid until replaced by the digest of captured evidence.
+    digest: REPLACE_WITH_CAPTURED_EVIDENCE_DIGEST

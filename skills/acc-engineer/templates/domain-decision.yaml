@@ -1,0 +1,30 @@
+schema_version: "2"
+domain_id: orders
+revision: 1
+status: ready_for_review
+
+# Business policy narrows deployment intent; it never grants source permission.
+policy:
+  goals: [cancel_order]
+  allowed_effects: [read, transition]
+  maximum_risk: high
+  approval_required_for: [cancel_order]
+  excluded_intents: []
+
+candidate_dispositions:
+  - candidate_id: orders.cancel
+    disposition: accepted
+    materialized_capability_ids: [orders.cancel]
+    rationale: Evidence and the confirmed business policy support this candidate.
+
+candidate_snapshot_ids: [orders.cancel]
+# These conspicuous sentinels intentionally fail strict validation. Recompute them;
+# never copy a digest from this template.
+candidate_snapshot_digest: REPLACE_WITH_CANONICAL_CANDIDATE_SNAPSHOT_DIGEST
+candidate_ledger_digest: REPLACE_WITH_CANONICAL_CANDIDATE_LEDGER_DIGEST
+unresolved_questions: []
+dependency_decisions: []
+evidence_snapshot: []
+dependency_snapshot_digest: REPLACE_WITH_CANONICAL_DEPENDENCY_SNAPSHOT_DIGEST
+evidence_digest: REPLACE_WITH_CANONICAL_EVIDENCE_SNAPSHOT_DIGEST
+user_confirmation: null

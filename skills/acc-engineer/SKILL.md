@@ -25,13 +25,26 @@ If the request is only to audit or refine an existing ACC project, still run Pre
 - In system-complete scope, every eligible exclusion uses one `exclusion_rules` entry plus a distinct route `exclusion_decision`; a valid pair replaces `reason`. Ineligible, blocked, out-of-scope, and pilot/domain exclusions still require reason and Evidence. Capability Plan coverage must exactly mirror route dispositions and reference decisions without duplicating their prose.
 - Label direct Fake Runtime results `offline_candidate`. Use `gateway_offline_verified` only after the real Gateway protocol path succeeds against a Fake Source. Use `source_connected_verified` only after an explicitly authorized local/test source connection succeeds; none proves production behavior.
 
+## Domain wizard
+
+Run the system-complete denominator as a domain wizard, not an interface questionnaire:
+
+1. Perform a 全局浅扫 and create the complete Candidate Ledger, `DomainMap`, and dependency order before any domain deep scan.
+2. 一次只激活一个依赖已就绪的大领域；never activate a dependent domain merely because its routes are easy to inspect.
+3. Before deep inspection, ask the user to confirm the business goals, risk boundary, and `DomainPolicy`. 绝不把全部 route 交给用户选择。
+4. Deep-scan only the active domain. Automatically model every 证据清晰 candidate and retain uncertain facts as typed gaps.
+5. 一次只问一个 exception: evidence conflict, business ambiguity, high-risk policy choice, or missing user-controlled test boundary. Do not ask the user to classify ordinary routes.
+6. Review every 独立轴, then ask the user to confirm the versioned `DomainDecision`. Continue only with the next dependency-ready domain.
+
+The 源 JWT and source interface make the 最终裁决 on authorization. `Scope 只能收窄` what a deployment may attempt; it never grants a source permission. Action `approval 不是授权`: it confirms this exact prepared execution and cannot replace upstream authorization.
+
 ## Evidence and quality truth
 
 - Normalize Evidence into a `SourceContract` with `request_schema`, `response_schema`, completeness, and pointer-level `provenance`; do not turn observations into invented limits.
 - Normalize client surfaces, events, bindings, defaults, options, conditions, related data, states, and unknowns into the UI inventory, then adopt them through an `InteractionContract`. A hidden/disabled control is not authorization. 前端默认值或前端条件不能冒充 `SourceContract` authority; conflicts remain explicit.
 - Operation 输入 must stay within what the evidenced source accepts. Operation 输出 must cover what the evidenced source can return. A narrower Capability 输出 is allowed only when deterministic workflow projection is 可证明.
 - 一接口一工具不是天然缺陷，单 Operation search/detail/monitor can be the correct business Capability. Diagnose constructability, discoverability, data flow, composition, failure behavior, and output budget instead of optimizing 工具数量.
-- Coverage retains nine source/capability axes and adds ten independent interaction axes without an aggregate score. Route closure, interaction fidelity, source connection, and real client conformance remain distinct facts.
+- Coverage retains nine source/capability axes, ten interaction axes, and twelve independent Domain/Action axes without an aggregate score. Route closure, candidate safety, interaction fidelity, source connection, and real client conformance remain distinct facts.
 
 ## Authentication and request identity
 

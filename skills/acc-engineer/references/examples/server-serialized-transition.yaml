@@ -1,0 +1,99 @@
+# Platform-neutral example for a source that serializes state transitions itself.
+# Every Evidence sentinel must be replaced before copying any document into a project.
+operation:
+  schema_version: "2"
+  kind: action
+  id: jobs.cancel
+  title: Cancel a queued job
+  input_schema:
+    type: object
+    additionalProperties: false
+    required: [job_id]
+    properties: {job_id: {type: string, minLength: 1}}
+  output_schema: {type: object}
+  http:
+    method: POST
+    path: /jobs/{job_id}/cancel
+    path_parameters: {job_id: job_id}
+    query_parameters: {}
+    request: null
+    success: {statuses: [200], body: json}
+    scopes: []
+    timeout_seconds: 15
+    max_response_bytes: 1048576
+    safety:
+      effect: transition
+      risk: high
+      reversibility: irreversible
+      retry: {mode: never}
+      idempotency:
+        mode: state_idempotent
+        state_pointer: /state
+        terminal_values: [cancelled]
+      concurrency:
+        mode: server_serialized_state_predicate
+        read_operation_id: jobs.status
+        state_pointer: /state
+        allowed_values: [queued, running]
+  context_bindings: {}
+  evidence:
+    - &evidence
+      source_id: REPLACE_WITH_EVIDENCE_SOURCE_ID
+      kind: source_file
+      path: REPLACE_WITH_SOURCE_RELATIVE_PATH
+      digest: REPLACE_WITH_CAPTURED_EVIDENCE_DIGEST
+
+action_semantics:
+  method: POST
+  effect: transition
+  risk: high
+  reversibility: irreversible
+  retry: {mode: never}
+  idempotency:
+    mode: state_idempotent
+    state_pointer: /state
+    terminal_values: [cancelled]
+  concurrency:
+    mode: server_serialized_state_predicate
+    read_operation_id: jobs.status
+    state_pointer: /state
+    allowed_values: [queued, running]
+  outcome_resolution: {mode: status_query, operation_id: jobs.status}
+  evidence: *evidence
+  authority: implementation
+  provenance:
+    - {field: effect, evidence: *evidence, evidence_pointer: /transition/effect, authority: implementation}
+    - {field: risk, evidence: *evidence, evidence_pointer: /transition/risk, authority: implementation}
+    - {field: reversibility, evidence: *evidence, evidence_pointer: /transition/reversibility, authority: implementation}
+    - {field: retry, evidence: *evidence, evidence_pointer: /transition/retry, authority: implementation}
+    - {field: idempotency, evidence: *evidence, evidence_pointer: /transition/idempotency, authority: implementation}
+    - {field: conflict_control, evidence: *evidence, evidence_pointer: /transition/concurrency, authority: implementation}
+    - {field: outcome_resolution, evidence: *evidence, evidence_pointer: /transition/outcome, authority: implementation}
+
+capability:
+  schema_version: "2"
+  kind: action
+  id: jobs.cancel
+  title: Cancel a queued job
+  description: Preview source state, confirm cancellation, mutate once, then query status.
+  input_schema:
+    type: object
+    additionalProperties: false
+    required: [job_id]
+    properties: {job_id: {type: string, minLength: 1}}
+  output_schema: {type: object}
+  action:
+    execution_mode: single
+    approval: {mode: required}
+    expires_in_seconds: 300
+  preview_workflow:
+    - id: current
+      call: {operation: jobs.status, arguments: {job_id: $.input.job_id}}
+    - emit: {value: $.steps.current}
+  commit_workflow:
+    - id: cancelled
+      call: {operation: jobs.cancel, arguments: {job_id: $.prepared.input.job_id}}
+    # The attested outcome_resolution performs the status query exactly once.
+    - emit: {value: $.steps.cancelled}
+  policy: REPLACE_WITH_POLICY_ID
+  evals: [jobs-cancel-success, jobs-cancel-conflict]

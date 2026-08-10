@@ -17,6 +17,8 @@
 6. 检查 `provider.auth`/transport 组合、Operation 禁止凭据、`context_binding_allowlist` 与全部 `context_bindings` 编译诊断；不要把 Schema 可验证误写为 `streamable_http` Gateway 已运行。
 7. 分别检查 `route_disposition`、`operation_trace`、`scenario_coverage`、`constructability`、`discoverability_graph`、`composition`、`schema_fidelity`、`output_budget`、`live_observations`。Coverage 不生成总分，route closure 也不代表 usable。
 8. 另外逐项检查十个交互轴：`surface_disposition`、`interaction_trace`、`input_binding_fidelity`、`default_provenance`、`option_resolution`、`condition_coverage`、`related_data_graph`、`state_scenarios`、`presentation_projection`、`client_adapter_evidence`。不生成总分，源连接不能填充 client adapter 证据。
+9. 对每个已处理领域逐项检查十二个 Domain/Action 独立轴；Read route closure 不得掩盖 blocked Action，`source_connected_verified` 不得升级安全或源授权证明。
+10. 校验当前版本 `DomainDecision`、candidate ledger digest、active dependency refs 与用户确认绑定；未激活领域的历史 completed decision 不能填充依赖或确认轴。
 
 ## 门禁
 
@@ -26,6 +28,7 @@
 - 修复未触及原系统，未连接生产环境，也未引入 Secret 或未经安全合同的 Action。
 - 任何失败、警告或未运行项都被如实保留。
 - 任一 error 都阻断后续命令；只有 warning 时可以继续，但不得丢弃 warning。
+- 当前领域必须可由独立轴复核；没有总分或“整体可用”字段可替代逐轴失败。
 
 ## 输出
 

@@ -1,0 +1,37 @@
+schema_version: "2"
+
+# Claims marked authoritative must reference independently captured Evidence.
+# REPLACE_WITH_EVIDENCE_SOURCE_ID is intentionally unresolved until that artifact exists.
+candidates:
+  - id: orders.cancel
+    domain_id: orders
+    business_intent: cancel_order
+    route_ids:
+      - POST /orders/{order_id}/cancel
+    interaction_ids: []
+    kind_claim: action
+    effect_claim: transition
+    claims:
+      schema: &proven_claim
+        status: proven
+        evidence_refs: [REPLACE_WITH_EVIDENCE_SOURCE_ID]
+      effect: *proven_claim
+      risk: *proven_claim
+      reversibility: *proven_claim
+      approval: *proven_claim
+      retry: *proven_claim
+      conflict_control: *proven_claim
+      idempotency: *proven_claim
+      outcome_resolution: *proven_claim
+      lifecycle: *proven_claim
+      authorization_boundary:
+        status: upstream_authoritative
+        evidence_refs: [REPLACE_WITH_EVIDENCE_SOURCE_ID]
+      identity_binding:
+        status: identity_binding_proven
+        evidence_refs: [REPLACE_WITH_EVIDENCE_SOURCE_ID]
+      context_isolation:
+        status: context_isolation_proven
+        evidence_refs: [REPLACE_WITH_EVIDENCE_SOURCE_ID]
+    verification_level: semantics_evidenced
+    gaps: []

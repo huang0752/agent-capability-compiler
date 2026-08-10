@@ -16,6 +16,8 @@
 5. 查找 Agent 不应获得的参数、未脱敏字段和可以进一步收紧的权限/租户边界；`hidden/disabled` 不是授权。
 6. 仅依据现有 Evidence 改进 ACC 项目；需要新事实时返回 Analyze，而不是推测。
 7. 每轮改进后重跑 scope audit、interaction audit、Validate 和 Test，并分别比较全部独立 Coverage 轴、warning 与风险变化。
+8. 对当前领域的十二个 Domain/Action 独立轴逐项复核；自动修复证据清晰的 ACC 定义，只对冲突、异常、高风险或测试边界一次询问一个用户问题。
+9. 不以 Read 数量、route closure 或 source-connected 标签遮蔽 blocked Action；deferred 保持用户决策，不伪装成永久排除。
 
 ## 门禁
 
@@ -24,6 +26,7 @@
 - 高风险、Evidence 缺口和未确认事项已修复或明确保留为风险。
 - 候选保持业务级组合，避免为了指标增加低价值工具。
 - 重复 decision 和整域零能力 error 已消除；高排除率 warning 已解释并保留，不能靠删 Evidence 或改分母消除。
+- 当前领域经独立轴复核后才可形成新版 `DomainDecision`，并且只推进下一个依赖已就绪领域。
 
 ## 输出
 
