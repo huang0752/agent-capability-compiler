@@ -1,38 +1,37 @@
 {
   "artifact_kind": "acc_engineer_test_report",
-  "verified_at": "2026-08-06",
-  "status": "passed_with_documented_format_gate",
+  "verified_at": "2026-08-10",
+  "status": "passed_with_documented_limits",
   "validation_level": {
     "offline_candidate": ["acc test contract", "isolated runtime fixtures"],
-    "source_connected_verified": ["local synthetic FastAPI CRM HTTP boundary"]
+    "source_connected_verified": ["local synthetic FastAPI CRM HTTP boundary"],
+    "headless_verified": [],
+    "client_adapter_verified": []
   },
-  "compiled_ir_sha256": "da3598860f83cc01fd0824f68ba8ca6a7862e5f89700c7594891edf4d6de4258",
+  "interaction_scope": {
+    "mode": "none",
+    "surfaces": 0,
+    "interactions": 0,
+    "contracts": 0,
+    "unresolved": 0
+  },
+  "compiled_ir_sha256": "092159d28fe79dbf9c1e8809e261567ae3fb45849756db88ee74d86346be9f75",
   "acc_suites": [
     {"command": "acc test contract --json", "total": 9, "passed": 9, "failed": 0},
     {"command": "acc test runtime --json", "total": 9, "passed": 9, "failed": 0},
     {"command": "acc test e2e --json", "total": 9, "passed": 9, "failed": 0}
   ],
-  "repository_gates": {
-    "pytest": {"total": 720, "passed": 720, "failed": 0},
+  "maintained_example_gates": {
+    "pytest": {"file": "tests/e2e/test_fastapi_crm_example.py", "total": 12, "passed": 12, "failed": 0},
     "ruff_lint": {"passed": true},
-    "changed_file_format": {"passed": true},
-    "repository_format": {
-      "passed": false,
-      "outside_migration_files": 9,
-      "note": "Includes immutable synthetic source and separate scope-governance work; no source file was reformatted."
-    },
-    "mypy": {"source_files": 102, "passed": true},
-    "skill_quick_validate": {"passed": true}
-  },
-  "source_system_gates": {
-    "pytest": {"total": 34, "passed": 34, "failed": 0},
-    "source_files_changed": 0
+    "scope_audit": {"eligible_routes": 6, "composed": 6, "unresolved": 0},
+    "interaction_audit": {"surfaces": 0, "interactions": 0, "contracts": 0, "unresolved": 0}
   },
   "acceptance_checks": {
     "provider_auth": "bearer_secret",
     "operation_credential_ref_count": 0,
-    "context_bindings_count": 0,
-    "tenant_context_boundary": "required_policy_compatibility",
+    "context_bindings_count": 6,
+    "tenant_context_boundary": "explicit_operation_context_bindings",
     "real_rest_system": true,
     "pack_loaded": true,
     "mcp_stdio_tools_list": true,
@@ -49,11 +48,12 @@
   "deterministic_pack": {
     "builds": 2,
     "byte_identical": true,
-    "sha256": "6d13a596446fa7dd7cbe34d7345fd642d75bfca918fff7825de91686a18d97b5"
+    "sha256": "54661a1b2ef94bc000588b79a5d6c8f576940b7f84fa6c1c071be130621583b9"
   },
   "limits": [
     "No production system or production credential was used.",
     "No streamable_http Gateway or multi-user session was exercised.",
-    "The CRM candidate uses explicit tenant_id context_bindings with a fixed stdio PrincipalContext."
+    "The CRM candidate uses explicit tenant_id context_bindings with a fixed stdio PrincipalContext.",
+    "The source has no applicable client surface; no UI, headless, or client-adapter verification is claimed."
   ]
 }

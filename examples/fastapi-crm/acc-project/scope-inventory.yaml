@@ -19,6 +19,8 @@ routes:
     effect: read
     path: /customers
     evidence_sources: [crm-app]
+    usage_evidence_sources: []
+    interaction_ids: []
     eligibility: eligible
     disposition: composed
     operation_id: crm.search_customers
@@ -30,6 +32,8 @@ routes:
     effect: read
     path: /customers/{customer_id}
     evidence_sources: [crm-app]
+    usage_evidence_sources: []
+    interaction_ids: []
     eligibility: eligible
     disposition: composed
     operation_id: crm.get_customer
@@ -41,6 +45,8 @@ routes:
     effect: read
     path: /customers/{customer_id}/contacts
     evidence_sources: [crm-app]
+    usage_evidence_sources: []
+    interaction_ids: []
     eligibility: eligible
     disposition: composed
     operation_id: crm.list_customer_contacts
@@ -52,6 +58,8 @@ routes:
     effect: read
     path: /customers/{customer_id}/followups
     evidence_sources: [crm-app]
+    usage_evidence_sources: []
+    interaction_ids: []
     eligibility: eligible
     disposition: composed
     operation_id: crm.list_customer_followups
@@ -63,6 +71,8 @@ routes:
     effect: read
     path: /customers/{customer_id}/todos
     evidence_sources: [crm-app]
+    usage_evidence_sources: []
+    interaction_ids: []
     eligibility: eligible
     disposition: composed
     operation_id: crm.list_customer_todos
@@ -74,6 +84,8 @@ routes:
     effect: read
     path: /followups/overdue
     evidence_sources: [crm-app]
+    usage_evidence_sources: []
+    interaction_ids: []
     eligibility: eligible
     disposition: composed
     operation_id: crm.find_overdue_followups

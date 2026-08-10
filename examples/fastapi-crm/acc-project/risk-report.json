@@ -4,6 +4,13 @@
   "high_severity_unresolved": 0,
   "risks": [
     {
+      "area": "interaction_scope",
+      "severity": "informational",
+      "status": "not_applicable",
+      "risk": "The synthetic source contains API routes and tests but no applicable client surface.",
+      "mitigation": "The UI Interaction Inventory declares mode none with empty surfaces, interactions, and contracts; API route evidence is not promoted to client interaction evidence."
+    },
+    {
       "area": "capability_design",
       "severity": "low",
       "status": "accepted",
@@ -29,7 +36,7 @@
       "severity": "informational",
       "status": "compatibility_boundary",
       "risk": "The CRM Operations do not demonstrate explicit context_bindings.",
-      "mitigation": "The fixed stdio PrincipalContext supplies tenant_id through the required-tenant Policy compatibility path. Explicit binding behavior is covered by generic compiler/runtime tests and is not claimed as CRM acceptance."
+      "mitigation": "All six Operations declare compiler-checked tenant_id context bindings. The fixed stdio PrincipalContext supplies the trusted tenant value, and the maintained CRM E2E exercises that boundary."
     },
     {
       "area": "deployment",

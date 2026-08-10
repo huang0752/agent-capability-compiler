@@ -2,6 +2,14 @@
   "artifact_kind": "phase_3_planning_baseline",
   "status": "ready",
   "note": "This planning artifact is not acc coverage --json output.",
+  "scope_mode": "domain_complete",
+  "source_scope": {
+    "eligible_routes": 6,
+    "planned_or_composed": 6,
+    "excluded": 0,
+    "blocked_on_evidence": 0,
+    "unresolved": 0
+  },
   "candidate_operations": {
     "total": 6,
     "planned": [

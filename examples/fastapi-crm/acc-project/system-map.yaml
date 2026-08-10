@@ -47,6 +47,7 @@ candidate_operations:
       scopes: [customer.read]
       tenant_boundary: Request tenant must equal the tenant derived from the Bearer token.
     evidence_sources: [crm-app, crm-auth, crm-tests]
+    scope_route_ids: ["GET /customers"]
     confirmation: confirmed
   - id: crm.get_customer
     purpose: Retrieve one tenant-visible customer.
@@ -56,6 +57,7 @@ candidate_operations:
       scopes: [customer.read]
       tenant_boundary: Request tenant must equal token tenant; cross-tenant records resolve as 404.
     evidence_sources: [crm-app, crm-auth, crm-tests]
+    scope_route_ids: ["GET /customers/{customer_id}"]
     confirmation: confirmed
   - id: crm.list_customer_contacts
     purpose: List contacts for one tenant-visible customer.
@@ -65,6 +67,7 @@ candidate_operations:
       scopes: [contact.read]
       tenant_boundary: Request tenant must equal token tenant and the parent customer must be visible.
     evidence_sources: [crm-app, crm-auth, crm-tests]
+    scope_route_ids: ["GET /customers/{customer_id}/contacts"]
     confirmation: confirmed
   - id: crm.list_customer_followups
     purpose: List followups for one tenant-visible customer.
@@ -74,6 +77,7 @@ candidate_operations:
       scopes: [followup.read]
       tenant_boundary: Request tenant must equal token tenant and the parent customer must be visible.
     evidence_sources: [crm-app, crm-auth, crm-tests]
+    scope_route_ids: ["GET /customers/{customer_id}/followups"]
     confirmation: confirmed
   - id: crm.list_customer_todos
     purpose: List todos for one tenant-visible customer.
@@ -83,6 +87,7 @@ candidate_operations:
       scopes: [todo.read]
       tenant_boundary: Request tenant must equal token tenant and the parent customer must be visible.
     evidence_sources: [crm-app, crm-auth, crm-tests]
+    scope_route_ids: ["GET /customers/{customer_id}/todos"]
     confirmation: confirmed
   - id: crm.find_overdue_followups
     purpose: Find open followups due before a caller-supplied deterministic date.
@@ -92,6 +97,7 @@ candidate_operations:
       scopes: [followup.read]
       tenant_boundary: Request tenant must equal the tenant derived from the Bearer token.
     evidence_sources: [crm-app, crm-auth, crm-tests]
+    scope_route_ids: ["GET /followups/overdue"]
     confirmation: confirmed
 
 relationships:

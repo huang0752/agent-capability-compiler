@@ -10,10 +10,19 @@ This example demonstrates ACC against an independent, synthetic, read-only CRM:
 All records and demo Bearer values are synthetic. Nothing here is a production credential or
 deployment configuration.
 
+The maintained ACC project truthfully declares interaction scope `none`. The synthetic source tree
+contains FastAPI routes and API tests, but no browser, mobile, desktop, command, or other applicable
+client surface. `evidence/client-surface-inventory.json` records the bounded, read-only source-tree
+scan with explicit cache/bytecode exclusions, a sorted relative-file inventory, and its deterministic
+digest. Therefore `ui-interaction-inventory.yaml` has an evidence-bound rationale with empty
+surfaces, interactions, and summary counts, and the project contains no InteractionContract. The
+API tests remain valid route evidence; they are not client interaction evidence. 这不代表真实前端、
+headless interaction runner 或 client adapter 已验证。
+
 The ACC project declares the demo token once as Provider-level `bearer_secret` authentication.
 `CRM_DEMO_TOKEN` is an environment-variable reference in `project.yaml`; its value never enters the
-Pack, an Operation, or an MCP tool argument. The six Operations intentionally contain no legacy
-`credential_ref`.
+Pack, an Operation, or an MCP tool argument. The six Operations contain no per-Operation credential
+input.
 
 ## Run the source-system checks
 
@@ -65,9 +74,13 @@ The repository E2E test may be called `source_connected_verified` only after it 
 to this local synthetic CRM and succeeds. Neither level proves production behavior or validates an
 unrelated source checkout or online system.
 
+The interaction inventory is validated only as an honest `none` declaration.
+`headless_verified` requires declared interaction scenarios to run through the headless evaluator,
+and `client_adapter_verified` requires replay through a real client adapter. This example claims
+neither level; source-connected API evidence does not imply client interaction conformance.
+
 For new integrations, Provider authentication is one of `none`, `bearer_secret`, or
 `password_bearer`. Runtime supports compiler-checked `context_bindings` sourced from
-`PrincipalContext`, but this CRM candidate does not declare one. Its hidden `tenant_id` is still
-injected by the legacy required-tenant Policy compatibility path from the fixed stdio tenant
-context. This proves backward-compatible tenant isolation, not the explicit binding contract;
-account credentials, JWTs, and tenant identifiers still must not become Agent inputs.
+`PrincipalContext`; this CRM candidate declares `tenant_id` bindings on all six Operations. The
+fixed stdio Principal supplies that trusted tenant value, while account credentials, JWTs, and
+tenant identifiers remain outside Agent inputs.

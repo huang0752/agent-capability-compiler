@@ -48,6 +48,21 @@ capabilities:
     status: ready
 
 coverage:
+  scope_mode: domain_complete
+  scope_inventory: scope-inventory.yaml
+  route_dispositions:
+    planned: []
+    composed:
+      - GET /customers
+      - GET /customers/{customer_id}
+      - GET /customers/{customer_id}/contacts
+      - GET /customers/{customer_id}/followups
+      - GET /customers/{customer_id}/todos
+      - GET /followups/overdue
+    excluded: []
+    blocked_on_evidence: []
+    out_of_scope: []
+  exclusion_decision_refs: []
   high_value_operations:
     - crm.search_customers
     - crm.get_customer
@@ -55,9 +70,6 @@ coverage:
     - crm.list_customer_followups
     - crm.list_customer_todos
     - crm.find_overdue_followups
-  deliberately_excluded:
-    - item: write operations
-      reason: The source exposes no write route and ACC MVP is read-only.
 
 risks:
   - risk: Tenant identifiers are present in upstream responses.

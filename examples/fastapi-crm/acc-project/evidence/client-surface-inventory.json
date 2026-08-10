@@ -1,0 +1,29 @@
+{
+  "source_id": "crm-client-surface-inventory",
+  "kind": "content_summary",
+  "locator": "read-only source-tree discovery at ../system",
+  "summary": "The bounded synthetic source tree contains only the listed FastAPI service, API tests, and project metadata; no applicable client surface was found within this scan boundary.",
+  "digest": "sha256:644204a984fd0171cb285ee5456be391a072a79d0bb50eabebf5d66fff10f003",
+  "discovery": {
+    "root": "../system",
+    "include": ["**/*"],
+    "exclude": [
+      ".mypy_cache/**",
+      ".pytest_cache/**",
+      ".ruff_cache/**",
+      "**/__pycache__/**",
+      "**/*.pyc"
+    ],
+    "files": [
+      "README.md",
+      "pyproject.toml",
+      "src/fastapi_crm_system/__init__.py",
+      "src/fastapi_crm_system/app.py",
+      "src/fastapi_crm_system/auth.py",
+      "src/fastapi_crm_system/data.py",
+      "src/fastapi_crm_system/models.py",
+      "tests/test_app.py"
+    ],
+    "digest_input": "UTF-8 canonical JSON of files with compact separators followed by LF"
+  }
+}

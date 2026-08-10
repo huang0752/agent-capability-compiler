@@ -1,0 +1,8 @@
+schema_version: "2"
+scope:
+  mode: none
+  evidence_sources: [crm-client-surface-inventory]
+  rationale: The bounded synthetic source scan found only FastAPI routes and API tests; no applicable client surface was found within that tree.
+surfaces: []
+interactions: []
+summary: {surfaces: 0, interactions: 0, unresolved: 0}

@@ -24,6 +24,7 @@ from mcp.client.stdio import StdioServerParameters
 
 from acc_core.compiler import compile_project
 from acc_core.packaging import build_pack
+from acc_core.validation import validate_project
 from acc_runtime import GenericRuntime
 from acc_runtime.auth import BearerSecretAuthStrategy
 from acc_runtime.errors import RuntimeError as AccRuntimeError
@@ -145,6 +146,97 @@ def _assert_example_source_has_no_legacy_credentials(project_root: Path) -> None
 
 def test_example_uses_provider_bearer_auth_without_operation_credentials() -> None:
     _assert_example_source_has_no_legacy_credentials(PROJECT)
+
+
+def test_example_truthfully_declares_no_applicable_client_surface() -> None:
+    report = validate_project(PROJECT)
+
+    assert report.ok, report.diagnostics
+    inventory = report.ui_interaction_inventory
+    assert inventory is not None
+    assert inventory.scope.mode == "none"
+    assert inventory.scope.evidence_sources
+    assert inventory.scope.rationale is not None
+    assert "no applicable client" in inventory.scope.rationale.lower()
+    assert inventory.surfaces == []
+    assert inventory.interactions == []
+    assert inventory.summary.model_dump() == {
+        "surfaces": 0,
+        "interactions": 0,
+        "unresolved": 0,
+    }
+    assert report.interaction_contracts == {}
+
+    scope = yaml.safe_load((PROJECT / "scope-inventory.yaml").read_text(encoding="utf-8"))
+    assert all(route["interaction_ids"] == [] for route in scope["routes"])
+    assert all(route["usage_evidence_sources"] == [] for route in scope["routes"])
+    assert all(capability.kind == "read" for capability in report.capabilities.values())
+
+    readme = (PROJECT.parent / "README.md").read_text(encoding="utf-8")
+    handoff = (PROJECT / "HANDOFF.md").read_text(encoding="utf-8")
+    assert "不代表真实前端" in readme
+    assert "client_adapter_verified" in handoff
+    assert "未验证" in handoff
+    assert "static_verified" not in handoff
+
+
+def test_no_client_claim_is_bound_to_the_actual_controlled_source_tree() -> None:
+    evidence_path = PROJECT / "evidence" / "client-surface-inventory.json"
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    discovery = evidence["discovery"]
+    source_root = PROJECT / discovery["root"]
+    excluded_directory_names = {".mypy_cache", ".pytest_cache", ".ruff_cache", "__pycache__"}
+    actual_files = sorted(
+        path.relative_to(source_root).as_posix()
+        for path in source_root.rglob("*")
+        if path.is_file()
+        and not excluded_directory_names.intersection(path.relative_to(source_root).parts)
+        and path.suffix != ".pyc"
+    )
+    digest_input = (
+        json.dumps(actual_files, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        + "\n"
+    ).encode()
+
+    assert evidence["source_id"] == "crm-client-surface-inventory"
+    assert evidence["kind"] == "content_summary"
+    assert "read-only source-tree discovery" in evidence["locator"]
+    assert "no applicable client" in evidence["summary"].lower()
+    assert discovery["include"] == ["**/*"]
+    assert discovery["exclude"] == [
+        ".mypy_cache/**",
+        ".pytest_cache/**",
+        ".ruff_cache/**",
+        "**/__pycache__/**",
+        "**/*.pyc",
+    ]
+    assert discovery["files"] == actual_files
+    assert evidence["digest"] == f"sha256:{hashlib.sha256(digest_input).hexdigest()}"
+
+    inventory = yaml.safe_load(
+        (PROJECT / "ui-interaction-inventory.yaml").read_text(encoding="utf-8")
+    )
+    assert inventory["scope"]["evidence_sources"] == [evidence["source_id"]]
+
+
+def test_example_scope_inventory_closes_over_current_planning_artifacts() -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "skills" / "acc-engineer" / "scripts" / "scope_audit.py"),
+            "--project",
+            str(PROJECT),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    payload = json.loads(completed.stdout)
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert payload["ok"] is True
+    assert payload["diagnostics"] == []
 
 
 def test_credential_scan_ignores_generated_compiler_output(tmp_path: Path) -> None:
