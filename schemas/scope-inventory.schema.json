@@ -172,6 +172,19 @@
       "additionalProperties": false,
       "description": "One discovered source route with evidence-declared effect and disposition.",
       "properties": {
+        "candidate_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate Id"
+        },
         "capability_ids": {
           "items": {
             "minLength": 1,
@@ -198,6 +211,7 @@
         },
         "effect": {
           "enum": [
+            "unknown",
             "read",
             "create",
             "update",
@@ -210,6 +224,7 @@
         },
         "eligibility": {
           "enum": [
+            "undetermined",
             "eligible",
             "ineligible"
           ],
@@ -265,6 +280,7 @@
         },
         "kind": {
           "enum": [
+            "unknown",
             "read",
             "action"
           ],

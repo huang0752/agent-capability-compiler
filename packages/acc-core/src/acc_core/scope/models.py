@@ -68,16 +68,17 @@ class ScopeRoute(StrictModel):
     id: NonEmptyString
     domain: NonEmptyString
     method: Literal["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]
-    kind: Literal["read", "action"]
-    effect: Literal["read", "create", "update", "delete", "transition", "execute"]
+    kind: Literal["unknown", "read", "action"]
+    effect: Literal["unknown", "read", "create", "update", "delete", "transition", "execute"]
     path: NonEmptyString
     evidence_sources: list[NonEmptyString]
     usage_evidence_sources: list[NonEmptyString] = Field(default_factory=list)
     interaction_ids: list[NonEmptyString] = Field(default_factory=list)
-    eligibility: Literal["eligible", "ineligible"]
+    eligibility: Literal["undetermined", "eligible", "ineligible"]
     disposition: Literal["planned", "composed", "excluded", "blocked_on_evidence", "out_of_scope"]
     operation_id: NonEmptyString | None = None
     capability_ids: list[NonEmptyString] = Field(default_factory=list)
+    candidate_id: NonEmptyString | None = None
     reason: NonEmptyString | None = None
     exclusion_rule_id: NonEmptyString | None = None
     exclusion_decision: dict[str, object] | None = None
@@ -96,14 +97,46 @@ class ScopeRoute(StrictModel):
         """Require executable trace references for planned/composed routes."""
 
         if self.disposition in {"planned", "composed"}:
+            if self.eligibility != "eligible" or self.kind == "unknown":
+                raise ValueError("planned or composed routes must be eligible and known")
             if self.operation_id is None:
                 raise ValueError("operation_id is required for planned or composed routes")
             if not self.capability_ids:
                 raise ValueError("capability_ids are required for planned or composed routes")
-        if (self.kind == "read") != (self.effect == "read"):
+        elif self.operation_id is not None or self.capability_ids:
+            raise ValueError(
+                "only planned or composed routes may reference Operations or Capabilities"
+            )
+        if self.kind == "unknown":
+            if (
+                self.effect != "unknown"
+                or self.eligibility != "undetermined"
+                or self.disposition != "blocked_on_evidence"
+            ):
+                raise ValueError(
+                    "unknown routes require effect=unknown, eligibility=undetermined, "
+                    "and disposition=blocked_on_evidence"
+                )
+            if self.candidate_id is None:
+                raise ValueError("candidate_id is required for unknown routes")
+        elif (self.kind == "read" and self.effect != "read") or (
+            self.kind == "action"
+            and self.effect
+            not in {
+                "create",
+                "update",
+                "delete",
+                "transition",
+                "execute",
+            }
+        ):
             raise ValueError(
                 "read routes require effect=read; action routes require a mutation effect"
             )
+        if self.eligibility == "undetermined" and self.disposition != "blocked_on_evidence":
+            raise ValueError("undetermined routes must be blocked_on_evidence")
+        if self.disposition == "blocked_on_evidence" and self.eligibility != "undetermined":
+            raise ValueError("blocked_on_evidence routes must be undetermined")
         return self
 
 
@@ -153,7 +186,7 @@ class ScopeInventory(StrictModel):
                 route.disposition == "blocked_on_evidence" for route in self.routes
             ),
             "out_of_scope": sum(route.disposition == "out_of_scope" for route in self.routes),
-            "unresolved": 0,
+            "unresolved": sum(route.eligibility == "undetermined" for route in self.routes),
         }
         if self.summary.model_dump() != expected:
             raise ValueError("summary must exactly match the route inventory")

@@ -1278,6 +1278,22 @@ def test_action_lifecycle_requires_typed_adopted_evidence() -> None:
 
     assert "ACC_UI_ACTION_LIFECYCLE_REQUIRED" not in {item.code for item in report.diagnostics}
 
+    blocked_route = action_route.model_copy(
+        update={
+            "eligibility": "undetermined",
+            "disposition": "blocked_on_evidence",
+        }
+    )
+    documents["scope_inventory"] = documents["scope_inventory"].model_copy(
+        update={"routes": [blocked_route]}
+    )
+    report = analyze_interaction_fidelity(**documents)
+    assert "ACC_UI_ACTION_LIFECYCLE_REQUIRED" in {item.code for item in report.diagnostics}
+
+    documents["scope_inventory"] = documents["scope_inventory"].model_copy(
+        update={"routes": [action_route]}
+    )
+
     untrusted = lifecycle.model_copy(
         update={
             "commit": lifecycle.commit.model_copy(update={"evidence": _operation().evidence[0]})

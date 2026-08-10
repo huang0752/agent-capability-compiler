@@ -918,6 +918,8 @@ def analyze_interaction_fidelity(
             lifecycle_route_proven = lifecycle_interaction is not None and any(
                 route is not None
                 and route.kind == "action"
+                and route.eligibility == "eligible"
+                and route.disposition in {"planned", "composed"}
                 and (
                     route.operation_id in dependency_operation_ids
                     or capability_id in route.capability_ids
