@@ -66,6 +66,38 @@ def test_scope_inventory_parses_the_platform_neutral_route_denominator() -> None
     assert inventory.summary.eligible_routes == 1
 
 
+def test_scope_route_defaults_frontend_usage_and_interaction_links_to_empty() -> None:
+    value = _inventory()
+    routes = value["routes"]
+    assert isinstance(routes, list)
+    route = routes[0]
+    assert isinstance(route, dict)
+    route.pop("usage_evidence_sources")
+
+    inventory = ScopeInventory.model_validate(value)
+
+    assert inventory.routes[0].usage_evidence_sources == []
+    assert inventory.routes[0].interaction_ids == []
+
+
+@pytest.mark.parametrize(
+    "interaction_ids",
+    [["customers.load", "customers.load"], ["customers.submit", "customers.load"]],
+)
+def test_scope_route_rejects_duplicate_or_unsorted_interaction_ids(
+    interaction_ids: list[str],
+) -> None:
+    value = _inventory()
+    routes = value["routes"]
+    assert isinstance(routes, list)
+    route = routes[0]
+    assert isinstance(route, dict)
+    route["interaction_ids"] = interaction_ids
+
+    with pytest.raises(ValidationError, match="interaction_ids"):
+        ScopeInventory.model_validate(value)
+
+
 def test_scope_inventory_rejects_unknown_fields() -> None:
     value = _inventory()
     value["customer_specific_setting"] = True

@@ -30,7 +30,8 @@ routes:
     effect: read
     path: /REPLACE_WITH_EVIDENCED_RESOURCE
     evidence_sources: [REPLACE_WITH_ROUTE_EVIDENCE_SOURCE]
-    usage_evidence_sources: [REPLACE_WITH_NORMALIZED_USAGE_EVIDENCE_SOURCE]
+    usage_evidence_sources: []
+    interaction_ids: []
     eligibility: eligible
     disposition: planned
     operation_id: REPLACE_WITH_OPERATION_ID

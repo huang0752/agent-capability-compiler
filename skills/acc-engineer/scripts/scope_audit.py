@@ -744,17 +744,35 @@ def audit_inventory(
                 path=path,
                 pointer=f"{pointer}/evidence_sources",
             )
-        if (
-            "usage_evidence_sources" in route
-            and non_empty_string_list(route.get("usage_evidence_sources")) is None
-        ):
-            add_issue(
-                diagnostics,
-                "ACC_SCOPE_EVIDENCE_REQUIRED",
-                "route usage evidence must contain unique non-empty references",
-                path=path,
-                pointer=f"{pointer}/usage_evidence_sources",
-            )
+        if "usage_evidence_sources" in route:
+            usage = string_list_at(route, "usage_evidence_sources")
+            if (
+                usage is None
+                or any(not item.strip() for item in usage)
+                or len(usage) != len(set(usage))
+            ):
+                add_issue(
+                    diagnostics,
+                    "ACC_SCOPE_EVIDENCE_REQUIRED",
+                    "route usage evidence must contain unique non-empty references",
+                    path=path,
+                    pointer=f"{pointer}/usage_evidence_sources",
+                )
+        if "interaction_ids" in route:
+            interaction_ids = string_list_at(route, "interaction_ids")
+            if (
+                interaction_ids is None
+                or any(not item.strip() for item in interaction_ids)
+                or len(interaction_ids) != len(set(interaction_ids))
+                or interaction_ids != sorted(interaction_ids)
+            ):
+                add_issue(
+                    diagnostics,
+                    "ACC_SCOPE_INTERACTION_IDS_INVALID",
+                    "route interaction identifiers must be unique non-empty sorted references",
+                    path=path,
+                    pointer=f"{pointer}/interaction_ids",
+                )
 
         eligibility = string_at(route, "eligibility")
         if eligibility not in ELIGIBILITIES:

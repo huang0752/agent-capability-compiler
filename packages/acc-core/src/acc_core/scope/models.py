@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from acc_core.models import NonEmptyString, StrictModel
 
@@ -73,6 +73,7 @@ class ScopeRoute(StrictModel):
     path: NonEmptyString
     evidence_sources: list[NonEmptyString]
     usage_evidence_sources: list[NonEmptyString] = Field(default_factory=list)
+    interaction_ids: list[NonEmptyString] = Field(default_factory=list)
     eligibility: Literal["eligible", "ineligible"]
     disposition: Literal["planned", "composed", "excluded", "blocked_on_evidence", "out_of_scope"]
     operation_id: NonEmptyString | None = None
@@ -80,6 +81,15 @@ class ScopeRoute(StrictModel):
     reason: NonEmptyString | None = None
     exclusion_rule_id: NonEmptyString | None = None
     exclusion_decision: dict[str, object] | None = None
+
+    @field_validator("interaction_ids")
+    @classmethod
+    def validate_interaction_ids(cls, value: list[str]) -> list[str]:
+        """Keep interaction cross-references deterministic without interpreting UI semantics."""
+
+        if len(value) != len(set(value)) or value != sorted(value):
+            raise ValueError("interaction_ids entries must be unique and sorted")
+        return value
 
     @model_validator(mode="after")
     def validate_planned_trace(self) -> ScopeRoute:

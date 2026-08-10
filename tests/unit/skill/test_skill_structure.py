@@ -154,12 +154,14 @@ def test_templates_track_current_strict_public_models() -> None:
         "capability_ids",
         "reason",
         "usage_evidence_sources",
+        "interaction_ids",
         "exclusion_rule_id",
         "exclusion_decision",
     }
     assert "domain" in route
     assert "domain_id" not in route
-    assert route["usage_evidence_sources"]
+    assert route["usage_evidence_sources"] == []
+    assert route["interaction_ids"] == []
     assert route["exclusion_rule_id"] is None
     assert route["exclusion_decision"] is None
     operation = _yaml(SKILL / "templates" / "system-map.yaml")["candidate_operations"][0]

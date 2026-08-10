@@ -27,6 +27,7 @@ def _route(
     operation_id: str | None = "customer.search",
     eligibility: str = "eligible",
     usage_evidence_sources: list[str] | None = None,
+    interaction_ids: list[str] | None = None,
     exclusion_rule_id: str | None = None,
     exclusion_decision: dict[str, object] | None = None,
 ) -> dict[str, object]:
@@ -48,6 +49,7 @@ def _route(
             if usage_evidence_sources is not None
             else {}
         ),
+        **({"interaction_ids": interaction_ids} if interaction_ids is not None else {}),
         **({"exclusion_rule_id": exclusion_rule_id} if exclusion_rule_id is not None else {}),
         **({"exclusion_decision": exclusion_decision} if exclusion_decision is not None else {}),
     }
@@ -1602,6 +1604,43 @@ def test_malformed_frontend_usage_evidence_cannot_disable_the_risk_signal(
     assert completed.returncode == 3
     assert payload["diagnostics"][0]["code"] == "ACC_SCOPE_EVIDENCE_REQUIRED"
     assert payload["diagnostics"][0]["pointer"] == "/routes/0/usage_evidence_sources"
+
+
+def test_empty_frontend_usage_evidence_does_not_fabricate_a_usage_signal(tmp_path: Path) -> None:
+    project = _write_project(
+        tmp_path,
+        routes=[
+            _route(
+                "customer.search",
+                usage_evidence_sources=[],
+                interaction_ids=[],
+            )
+        ],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 0
+    assert payload["ok"] is True
+
+
+@pytest.mark.parametrize(
+    "interaction_ids",
+    [["customers.load", "customers.load"], ["customers.submit", "customers.load"], [""]],
+)
+def test_scope_audit_rejects_malformed_interaction_ids(
+    tmp_path: Path, interaction_ids: list[str]
+) -> None:
+    project = _write_project(
+        tmp_path,
+        routes=[_route("customer.search", interaction_ids=interaction_ids)],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert payload["diagnostics"][0]["code"] == "ACC_SCOPE_INTERACTION_IDS_INVALID"
+    assert payload["diagnostics"][0]["pointer"] == "/routes/0/interaction_ids"
 
 
 def test_domain_with_eligible_routes_requires_a_capability(tmp_path: Path) -> None:
