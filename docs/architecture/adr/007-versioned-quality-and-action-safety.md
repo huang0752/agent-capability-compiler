@@ -21,7 +21,9 @@ ACC 使用单一当前格式合同：
 部署可调用性与设计覆盖分别处理：
 
 - Scope callability 比较 Capability 的路径要求、部署 Scope ceiling 和已知 Principal Scope。空 ceiling 默认拒绝；登录前无法知道的源权限保持 unknown。
-- Coverage 独立报告 route disposition、Operation trace、scenario coverage、constructability、discoverability、composition、schema fidelity、output budget 和 live observations，不生成总分，也不把 route closure 当作 usable。
+- Coverage 独立报告九个基础质量轴，以及 surface disposition、interaction trace、input/default/option/condition fidelity、related-data graph、state scenarios、presentation projection、client-adapter evidence 十个交互轴；不生成总分，也不把 route closure 当作 usable。
+
+交互验证采用彼此独立的 `contract_declared`、`static_verified`、`headless_verified`、`runtime_offline_verified`、`source_connected_verified` 与 `client_adapter_verified` 事实。真实源连通不能替代客户端适配验证；required scenario 的失败或跳过都不能形成 verified 报告。Runtime 只消费 compiler 输出的安全公共投影，不承担客户端渲染与交互执行。
 
 Action 采用默认拒绝的显式状态机：
 
@@ -44,7 +46,9 @@ prepare -> approve -> commit -> status
 
 ## Current implementation boundary
 
-当前实现已包含单一格式模型、Schema、项目 sidecar 校验、Schema fidelity、Capability quality、九轴 Coverage、Scope callability、Action 编译证明、部署策略、直接 Runtime Action Coordinator、开发/测试内存 Store 和 Live Gateway 测试基础。
+当前实现已包含单一格式模型、Schema、项目 sidecar 校验、Schema fidelity、Capability quality、基础质量轴与十个交互轴 Coverage、Scope callability、Action 编译证明、部署策略、直接 Runtime Action Coordinator、开发/测试内存 Store 和 Live Gateway 测试基础。
+
+跨行业 fixture 以完整的当前格式 Project、Operation、Capability、Policy、Eval、SourceContract、CapabilityQuality、Scope 和 UI 合同运行 fidelity analyzer、compiler 与 Coverage，证明同一平台中立合同可表达 CRM list→detail、ERP 共享标识与真实 Action Capability 生命周期声明、独立 selector、单 job 监控、长文本展示、增长列表和纯客户端交互。它们使用受控 client artifact Evidence，不代表这些行业的生产客户端、权限源或线上数据已经验证。
 
 普通 Generic Runtime/MCP 工具面仍拒绝 Action 并要求专用生命周期；尚无生产 durable Action Store、可信审批签发服务或集中审计后端。Action 的 MCP/CLI 接线和生产部署门禁仍是后续工作。因此当前已完成发布门禁并稳定对 Agent 暴露的执行面仍是 Read Capability，不能宣称生产 Action 运行链路已完成。
 

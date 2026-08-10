@@ -50,7 +50,7 @@ ACC 负责：
 
 - 稳定的 `acc` CLI、Schema 和结构化诊断；
 - Evidence 绑定、引用检查、Policy 校验和 Workflow 编译；
-- SourceContract、CapabilityQuality、Eval、九轴 Coverage 和可重复构建的 Capability Pack；
+- SourceContract、CapabilityQuality、Eval、九个基础质量轴与十个交互轴的 Coverage，以及可重复构建的 Capability Pack；
 - 固定通用 Runtime、MCP stdio、REST Provider、Provider 级认证和 SecretRef；
 - Adapter SDK 基础契约、测试工具和 Fake Adapter；
 - 面向 Coding Agent 的 ACC Engineer Skill。
@@ -131,7 +131,7 @@ acc pack --json
 acc run example-crm-0.1.0.accpkg
 ```
 
-以上命令均已在当前检出版本实现；开发仓库中可以统一写成 `uv run acc ...`。Coverage 只提供当前九轴报告，并要求项目根存在合法 `scope-inventory.yaml`。
+以上命令均已在当前检出版本实现；开发仓库中可以统一写成 `uv run acc ...`。Coverage 只报告相互独立的事实轴，并要求项目根存在合法 `scope-inventory.yaml`。
 
 ### 运行多用户 Gateway
 
@@ -349,7 +349,9 @@ Action 使用显式 `prepare → approve → commit → status` 状态机。Acti
 
 部署 Scope ceiling 只会收紧 Pack 的 Scope 要求。`acc run` 在监听前报告每个 Capability 的 `callable`、`conditional`、`denied` 或 `unknown`；空 ceiling 默认拒绝，`--strict-scope` 可拒绝确定不可调用的部署，`--scope-ceiling-from-pack` 也不代表 Pack 自动获得源权限。登录前未知的用户源权限保持 `unknown`，登录后仍由源系统执行最终授权。
 
-Coverage 直接消费平台中立的 Scope Inventory，并分别报告 `route_disposition`、`operation_trace`、`scenario_coverage`、`constructability`、`discoverability_graph`、`composition`、`schema_fidelity`、`output_budget` 和 `live_observations`。它不生成总分，也不把“路由已分类”解释为“Capability 可用”。
+Coverage 直接消费平台中立的 Scope Inventory。除 `route_disposition`、`operation_trace`、`scenario_coverage`、`constructability`、`discoverability_graph`、`composition`、`schema_fidelity`、`output_budget` 和 `live_observations` 外，还独立报告 `surface_disposition`、`interaction_trace`、`input_binding_fidelity`、`default_provenance`、`option_resolution`、`condition_coverage`、`related_data_graph`、`state_scenarios`、`presentation_projection` 和 `client_adapter_evidence`。它不生成总分，也不把“路由已分类”解释为“Capability 可用”。
+
+交互验证等级分别为 `contract_declared`、`static_verified`、`headless_verified`、`runtime_offline_verified`、`source_connected_verified` 和 `client_adapter_verified`，等级之间不自动升级。尤其是连通真实或隔离测试源，只证明所执行的源请求路径；没有与当前 interaction digest 绑定、且所有 required scenarios 均通过的客户端适配报告时，仍不得声明 `client_adapter_verified`。Runtime 公开只读、去 Evidence 的交互 manifest 并执行安全公共默认值，但它不是浏览器、移动端渲染器或 UI 引擎。
 
 ### Capability Pack
 
@@ -469,8 +471,9 @@ uv run ruff format packages tests skills
 | M6 | FastAPI CRM 端到端验收 | 已完成 |
 | M7 | Provider 级认证、PrincipalContext 与结构化范围治理 | 已完成 |
 | M8 | 可选多用户 Streamable HTTP Gateway | 已完成 |
-| M9 | SourceContract、CapabilityQuality、Scope callability、九轴 Coverage | 已完成 |
+| M9 | SourceContract、CapabilityQuality、Scope callability、独立基础质量 Coverage | 已完成 |
 | M10 | Action 编译/Runtime 状态机与 Live 验证 | 开发中：基础实现存在，MCP Action、durable Store 和生产审批/审计尚未完成 |
+| M11 | 平台中立的前端交互合同与验证 | 已完成：Sidecar、静态证明、Runtime manifest、Testkit、十个交互轴和跨行业 fixtures |
 
 更细的检出版本进度记录在 `docs/progress.md`。生产可用性必须以发布说明、对应 Pack/Runtime 测试证据和安全评审为准。
 

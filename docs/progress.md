@@ -11,20 +11,22 @@
 | 6 — CRM acceptance | Complete | ACC gates 9/9 each; source 34 passed; repository 281 passed; deterministic Pack and real MCP stdio |
 | 7 — generic auth, identity, and scope governance | Complete | Provider auth, PrincipalContext, structured scope audit, stdio/source contracts |
 | 8 — optional multi-user HTTP Gateway | Complete | 1100 passed; Ruff; mypy; Schema/CRM compile; Skill validation; independent security reviews |
-| 9 — quality contracts and Coverage | Complete | current-format SourceContract, CapabilityQuality, Scope callability, nine-axis Coverage, full release gates |
+| 9 — quality contracts and Coverage | Complete | current-format SourceContract, CapabilityQuality, Scope callability, independent base-quality Coverage, full release gates |
 | 10 — Action and Live validation | In progress | compiler/runtime foundations exist; MCP Action and durable production integrations remain pending |
+| 11 — interaction conformance | Complete | platform-neutral sidecars, static proof, Runtime manifest, Testkit evaluator, ten interaction axes, seven cross-industry fixtures, and full release gates |
 
 This file records fresh command evidence at each milestone. A status changes to complete only after its focused tests, the full test suite, lint, type checking, diff review, and milestone commit have succeeded.
 
 ## Current-format boundary — 2026-08-10
 
 - Project、Operation、Capability、IR 与 Pack 只接受当前格式 `2`；旧格式在解析边界稳定拒绝。部署仍默认 `allowed_effects={read}`。
-- Core 已加入平台中立的 SourceContract/provenance、CapabilityQuality、Schema fidelity、constructability/discoverability/composition、保守输出预算和九轴 Coverage API。Coverage 不生成总分，route disposition closure 不代表 Capability usable。
+- Core 已加入平台中立的 SourceContract/provenance、CapabilityQuality、Schema fidelity、constructability/discoverability/composition、保守输出预算，以及十个独立交互 Coverage 轴。Coverage 不生成总分，route disposition closure 不代表 Capability usable。
 - Runtime/CLI 已加入路径感知 Scope callability：空 deployment ceiling 默认拒绝，确定不可调用项可由 strict mode 阻止启动，登录前未知的源权限保持 unknown。
 - Action 已有严格模型、编译证明、Pack/Loader 合同、部署策略、直接 Runtime Coordinator、审批协议和显式开发/测试内存 Store。状态机为 `prepare → approve → commit → status`，不能简化为允许 `POST`。
 - Action semantics 已由 SourceContract 可信 Evidence 逐字段绑定，并在 compiler IR 与 Runtime 之间做摘要证明；Coordinator 也已有 durable/audit fail-closed 门禁和 secret-safe lifecycle audit 合同。当前 Generic Runtime 的普通 `tools()`/`call()` 和 MCP Server 仍未暴露 Action 生命周期；生产 durable Store、可信审批签发、集中审计后端及完整 MCP/CLI Action 接线尚未完成。因此 M10 仍不能标记 Complete，也不能宣称生产 Action 已可用。
 - Live 验证术语分为 `offline_candidate`、`gateway_offline_verified` 和 `source_connected_verified`。历史里程碑使用的旧二层标签保留为当时记录，不自动升级为更高等级；新报告必须依据实际传输和源连接重新判定。
-- 当前格式收口门禁：`uv run --frozen pytest -q` 为 1335 passed（仅既有 Starlette 弃用警告）；Ruff format/check 通过；mypy 检查 180 个源码文件通过；九份公开 Schema 可重复生成；FastAPI CRM validate/compile/coverage 通过，两次 Pack 构建得到相同 SHA-256 `0252a23c562b0e0f73909c22342b9f0f6ff006e703b36b4fbfbe1cba5a1d5820`。
+- 交互验证事实分为 `contract_declared`、`static_verified`、`headless_verified`、`runtime_offline_verified`、`source_connected_verified` 和 `client_adapter_verified`。源连通与真实客户端适配验证相互独立；required scenario 未执行、失败或跳过时不得升级为 verified。
+- 交互合同完整门禁：`uv run --frozen pytest -q` 为 1548 passed（仅既有 Starlette 弃用警告）；Ruff format/check 通过；mypy 检查 197 个源码文件通过；十一份公开 Schema 可重复生成。FastAPI CRM validate/compile/coverage 通过，IR SHA-256 为 `092159d28fe79dbf9c1e8809e261567ae3fb45849756db88ee74d86346be9f75`，两次 Pack 构建得到相同 SHA-256 `54661a1b2ef94bc000588b79a5d6c8f576940b7f84fa6c1c071be130621583b9`。
 
 ## Verification log
 
