@@ -149,6 +149,7 @@ class CapabilityCandidate(StrictModel):
     user_disposition: Literal["undecided", "accepted", "deferred", "rejected"]
     verification_level: Literal[
         "discovered",
+        "action_discovered",
         "semantics_evidenced",
         "contract_ready",
         "offline_verified",
