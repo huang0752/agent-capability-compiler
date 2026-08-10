@@ -14,20 +14,35 @@
 | 9 — quality contracts and Coverage | Complete | current-format SourceContract, CapabilityQuality, Scope callability, independent base-quality Coverage, full release gates |
 | 10 — Action and Live validation | In progress | compiler-proven Gateway MCP lifecycle is offline verified; production durable Store, approval issuer, audit backend, and source-connected sandbox remain pending |
 | 11 — interaction conformance | Complete | platform-neutral sidecars, static proof, Runtime manifest, Testkit evaluator, ten interaction axes, seven cross-industry fixtures, and full release gates |
+| 12 — AI domain-guided discovery | Complete | current-format domain contracts, deterministic Core/CLI, Skill flow, Runtime strategies, 7 cross-industry fixtures, reproducible Schema/Pack, and full release gates |
 
 This file records fresh command evidence at each milestone. A status changes to complete only after its focused tests, the full test suite, lint, type checking, diff review, and milestone commit have succeeded.
 
 ## Current-format boundary — 2026-08-10
 
 - Project、Operation、Capability、IR 与 Pack 只接受当前格式 `2`；旧格式在解析边界稳定拒绝。部署仍默认 `allowed_effects={read}`。
+- 全局 AI 扫描由 ACC Engineer Skill 所在的 Coding Agent 执行；ACC Core 与 Runtime 都不调用 LLM。当前仓库实现的是结构化输入、确定性闭包和失败关闭，不宣称生产 AI 扫描已经验证。
+- 新的领域向导先生成 DomainMap 和完整 Candidate Ledger，再按依赖与显式优先顺序一次处理一个已就绪领域。用户确认业务目标与策略，不逐条选择 route；证据清晰项自动处理，例外一次只问一个问题。unknown 候选不能被伪装为 ineligible 或消失。
+- DomainDecision 按 revision 版本化，并绑定 Candidate Ledger、领域候选、Evidence 和依赖快照。Evidence 变化通过 DomainChangeRequest 精确重开受影响领域，不覆盖历史确认。
+- 源 JWT 与源 API 是最终授权者，ACC Scope 只能收窄。DomainDecision、部署 allowlist 与 Action approval 均不授予源权限；登录前未知权限保持 unknown，最终 REST 请求仍由源系统鉴权。
 - Core 已加入平台中立的 SourceContract/provenance、CapabilityQuality、Schema fidelity、constructability/discoverability/composition、保守输出预算，以及十个独立交互 Coverage 轴。Coverage 不生成总分，route disposition closure 不代表 Capability usable。
+- Coverage 另有十二个相互独立的领域与 Action Coverage 轴，分别保留业务目标、候选分类、安全语义、身份授权、Action 生命周期、冲突控制、幂等、结果解析、验证等级、跨领域依赖和用户决策事实；没有总分或 deployable/usable 推断。
 - Runtime/CLI 已加入路径感知 Scope callability：空 deployment ceiling 默认拒绝，确定不可调用项可由 strict mode 阻止启动，登录前未知的源权限保持 unknown。
 - Action 已有严格模型、编译证明、Pack/Loader 合同、部署策略、Runtime Coordinator、审批协议和显式开发/测试内存 Store。状态机为 `prepare → approve → commit → status`，不能简化为允许 `POST`。
-- Action semantics 已由 SourceContract 可信 Evidence 逐字段绑定，并在 compiler IR 与 Runtime 之间做摘要证明。Gateway 只从当前 Pack IR 与同一 Provider 构造 Coordinator，缺少显式部署依赖时拒绝 Action Pack；DeploymentPolicy 禁止的能力不会出现在 tools/list 或公开 manifest。业务 prepare、外部 approval handle、commit/status、A/B 会话隔离、一次 mutation 与 replay 已经由官方 MCP SDK 在 Fake Source 上验证。
+- Action semantics 已由 SourceContract 可信 Evidence 逐字段绑定，并在 compiler IR 与 Runtime 之间做摘要证明。乐观并发要求可信 token/precondition；服务端状态谓词策略与状态幂等、`retry: never` 和 `status_query` 成组验证。Gateway 只从当前 Pack IR 与同一 Provider 构造 Coordinator，缺少显式部署依赖时拒绝 Action Pack；DeploymentPolicy 禁止的能力不会出现在 tools/list 或公开 manifest。既有业务 prepare、外部 approval handle、commit/status 与 A/B 会话隔离由官方 MCP SDK 在 Fake Source 上验证；服务端状态策略的终态短路、一次 mutation 和未知结果 replay 目前由独立 Runtime/Fake Provider 测试验证。
 - 普通 Generic Runtime 的 `tools()`/`call()` 仍不能直连 Action。生产 durable Store、可信审批签发服务、集中审计后端和 source-connected 隔离沙箱仍由部署者提供，因此 M10 保持 In progress，当前结论是 `gateway_offline_verified`，不是生产 Action 可用性声明。
 - Live 验证术语分为 `offline_candidate`、`gateway_offline_verified` 和 `source_connected_verified`。历史里程碑使用的旧二层标签保留为当时记录，不自动升级为更高等级；新报告必须依据实际传输和源连接重新判定。
 - 交互验证事实分为 `contract_declared`、`static_verified`、`headless_verified`、`runtime_offline_verified`、`source_connected_verified` 和 `client_adapter_verified`。源连通与真实客户端适配验证相互独立；required scenario 未执行、失败或跳过时不得升级为 verified。
-- 当前完整门禁：`uv run --frozen pytest -q` 为 1568 passed（仅既有 Starlette 弃用警告）；Ruff format/check 通过；mypy 检查 199 个源码文件通过。Action focused/Runtime/Gateway/Testkit 相邻门禁为 724 passed，独立安全复审为 0 Critical / 0 Important。交互合同十一份公开 Schema、FastAPI CRM 的既有确定性验证边界保持不变。
+- 当前完整门禁：`uv run --frozen pytest -q` 为 1763 passed（仅 1 条既有 Starlette 弃用警告）；Ruff format/check 检查 271 个文件通过；mypy 检查 213 个源码文件通过。双次导出的 16 份公开 Schema 与仓库逐字节一致。CRM Read、Finance 乐观并发 Action、Content 服务端状态谓词 Action 的双 Pack 均字节一致，SHA-256 分别为 `eacd5f4ca429cca7547029a0f9381d9b9bf092d305d745602742241babe2a590`、`2f3dc5ef768c5c6eac113c22d2c7108a643be0d590c401c2bc37d28aace6e760`、`19cea9a8594716c0edf51ceb20c6d2cf7e9decb7ca7d563e629c44c6825094b1`，JWT-like、Bearer value、private-key 和 raw-confirmation sentinel 扫描均无命中。FastAPI CRM 的 validate、compile、coverage 与双 Pack 也通过，Pack SHA-256 为 `7944a3fdc2ea03c4d373242c416d0780b8c24d4960d7e0367431b8dacb7c3f04`。
+
+### 2026-08-10 — Milestone 12
+
+- ACC Engineer Skill 完成平台中立的全局浅扫、领域分组、单领域业务目标确认、证据清晰候选自动处理、单例外问题与版本化 DomainDecision 循环；Core/Runtime 不调用 LLM。
+- DomainMap、CapabilityCandidateLedger、DomainDecision、DomainChangeRequest、readiness、Evidence 影响图和十二个独立领域与 Action Coverage 轴已纳入当前格式合同。`acc domains status/show/review/impact` 只执行确定性类型化逻辑。
+- 源 JWT 与源 API 保持最终权限权威；ACC Scope、部署 allowlist、DomainDecision 与 Action approval 只能收窄，不能授予源权限。
+- Action 同时支持证据化乐观并发与服务端状态谓词策略；状态查询参数只来自编译证明的 Capability 输入或 Policy 公开的已密封 preview，歧义结果保持 `outcome_unknown` 且不重放 mutation。
+- 7 类完整 current-format fixture 覆盖 CRM、ERP、财务、内容、任务、权限和移动端；13 个跨行业正反例通过，生产代码没有项目专属分支。
+- `uv lock --check`、Ruff format/check、严格 mypy、1763 项 pytest、Skill quick validation、双次 16 Schema 对比、3 类代表 Pack 和 FastAPI CRM 确定性构建全部通过。生产 AI 扫描和生产源 Action 仍不在本里程碑的验证声明内。
 
 ## Verification log
 

@@ -1,4 +1,4 @@
-# ADR 006: Evidence-bound operations
+# ADR 006: Typed Evidence for operations and capability candidates
 
 ## Status
 
@@ -6,28 +6,33 @@ Accepted.
 
 ## Context
 
-Coding Agent 擅长从源码、OpenAPI、测试和文档中提炼接口，但也可能把推测写成事实。正式 Operation 一旦进入 Capability Pack，Runtime 会用它访问真实系统；错误的路径、字段、权限或租户假设会导致越权、数据泄露或不可用工具。
+Coding Agent 能从源码、OpenAPI、测试、文档和客户端实现中发现能力，也可能把推测写成事实。只查看接口还会漏掉前端默认值、选项来源、显示条件、状态分支、关联数据和纯客户端交互。正式 Operation 一旦进入 Capability Pack，Runtime 会用它访问真实系统；错误的路径、字段、效果、权限或租户假设会导致越权、数据泄露或不可用工具。
+
+能力发现还有一个更早的风险：如果扫描结果只保留“看起来可做”的接口，不确定的业务候选就会静默消失。后续 Coverage 无法区分“没有能力”和“能力尚未证明”，用户也无法确认完整的业务领域。
 
 ## Decision
 
-每个正式 Operation 必须绑定可验证的 Evidence。至少要能追溯其 API 路径、HTTP 方法、输入字段、输出字段、权限、Scope、租户边界、读取或写入效果以及错误状态。
+ACC 只维护当前格式 `2`，不提供旧格式兼容或隐式迁移。Evidence 是独立、带摘要的事实注册表；Domain、Candidate、Decision、Operation、SourceContract 和交互合同只保存受限引用与可审查的结构化结论，不把原始秘密、完整源码或用户确认原文打入 Pack。
 
-第一版 Evidence 支持文件路径与行号范围、JSON Pointer、OpenAPI Operation 和内容摘要。Operation 引用 Evidence 的定位信息与摘要；ACC Core 校验引用存在、格式有效且覆盖正式声明。缺失、失效或不足以支持声明的 Evidence 使校验失败。未确认内容必须保留为待确认事项，不能编译为正式 Operation。
+全局浅扫必须把发现结果写入类型化的 `CapabilityCandidateLedger`。Candidate 记录业务意图、领域、route、interaction、`unknown`/`read`/`action` 分类，以及 schema、effect、risk、reversibility、approval、retry、conflict control、idempotency、outcome resolution、lifecycle、authorization boundary、identity binding 和 context isolation 等独立声明。每个权威声明都必须引用匹配的 Evidence；缺证据的声明保持 `unknown`、`missing` 或 `candidate`。
 
-Operation 还必须使用封闭的输入输出 Schema，并在第一版明确声明 `safety.effect: read`；仅允许有证据支持的 `GET`/`HEAD`，不得用常识补造接口、字段或权限。
+`unknown` 候选不能被伪装为 `ineligible` 或消失。客观不可用结论必须由单独的 `ineligibility_claim` 与 Evidence 支持；缺少 Action 安全 Evidence 只能形成阻塞缺口，不能自动把候选降格为 Read 或排除。Candidate 也不会因为用户选择而直接成为可执行能力；只有完成证据闭包、经版本化 DomainDecision 接受并物化为通过校验的 Operation/Capability 后，才可能进入 Pack。
 
-v2 通过 SourceContract 将 Evidence 归一化为请求/响应 Schema、完整性与 pointer-level provenance。Operation 输入必须是源接受范围的安全子集，Operation 输出必须覆盖源可能响应；observation 不能证明业务上界。v2 Action 的 effect 与安全合同遵循 [ADR 007](007-versioned-quality-and-action-safety.md)，不会放宽 v1。
+每个正式 Operation 必须绑定可验证的 Evidence，至少能追溯 API 路径、HTTP 方法、输入字段、输出字段、身份与上下文绑定、Scope、租户边界、业务效果和错误状态。Evidence 可以定位文件与行号、JSON Pointer、OpenAPI Operation 或受限外部事实，并携带内容摘要。SourceContract 把这些事实归一化为封闭请求/响应 Schema、完整性与 JSON Pointer 级 provenance：Operation 输入必须是源接受范围的安全子集，输出必须覆盖源可能响应；运行 observation 不能证明业务上界。
+
+Action 的 method、effect、risk、reversibility、retry、idempotency、concurrency 与结果解析同样需要逐字段 provenance。前端 Evidence 可以证明交互、默认值、关联关系和客户端状态，但不能单独证明服务端授权或写入语义；OpenAPI 也不能替代缺失的权限、租户和业务效果证据。多个来源冲突时保持 contradicted 或停止，不能选择更方便的结论。
 
 ## Consequences
 
-- 每个运行时操作都可以回溯到原系统事实，审查者能定位并复核依据。
-- 源系统变化导致摘要或定位失效时，接入项目需要重新分析、冻结 Evidence 并测试。
-- Evidence 捕获和覆盖校验增加接入成本，但把不确定性阻挡在编译期。
-- 证据只能证明来源中表达的事实；多个来源冲突时必须停止并人工澄清。
+- 每个候选与运行时 Operation 都可回溯到原系统事实，审查者能区分已证明、未决、矛盾和失效状态。
+- 全局扫描不会通过隐藏未知项制造虚假的高覆盖率；补证据和明确排除都会留下可审查轨迹。
+- 源系统或客户端变化导致摘要失效时，相关 Candidate、DomainDecision 和物化能力必须进入影响分析与重新确认。
+- Evidence 捕获与闭包校验增加接入成本，但把接口猜测、权限猜测和 Action 安全猜测阻挡在编译期。
 
 ## Rejected alternatives
 
-- **允许无 Evidence 的正式 Operation**：无法区分系统事实与模型推测。
-- **只记录自由文本说明**：缺少机器可校验的定位与完整性信息。
-- **仅依赖 OpenAPI**：OpenAPI 可能缺少权限、租户、错误或业务效果，需要源码、测试等补充证据。
-- **运行时再验证接口猜测**：把设计错误和潜在越权推迟到生产环境。
+- **允许无 Evidence 的正式 Operation 或 Candidate 权威声明**：无法区分系统事实与模型推测。
+- **只记录自由文本说明**：缺少机器可校验的定位、摘要、声明类型和依赖闭包。
+- **仅依赖 OpenAPI 或后端 route**：会漏掉权限、租户、业务效果和客户端独有交互。
+- **把 unknown 自动标记为 ineligible**：掩盖待发现的业务能力，并允许通过删除未决项刷 Coverage。
+- **运行时再验证接口猜测**：把设计错误和潜在越权推迟到真实系统。

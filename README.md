@@ -1,6 +1,6 @@
 # Agent Capability Compiler (ACC)
 
-ACC 是一个**零代码侵入式 Agent 能力接入工具链**。它帮助 Coding Agent 从已有系统的源码、接口文档、权限规则和测试中提取有证据支持的业务能力，将其编译为可重复构建的 Capability Pack，再由固定的通用 Runtime 通过 MCP 暴露给 Agent。
+ACC 是一个**零代码侵入式 Agent 能力接入工具链**。它帮助 Coding Agent 从已有系统的源码、接口文档、前端交互、默认值、关联数据、权限规则和测试中提取有证据支持的业务能力，将其编译为可重复构建的 Capability Pack，再由固定的通用 Runtime 通过 MCP 暴露给 Agent。
 
 ACC 不修改已有业务系统，不要求业务系统嵌入 Agent SDK 或接入 MCP。运行时只访问已有 REST API，或访问独立部署的旁路 Adapter。
 
@@ -12,19 +12,19 @@ ACC 不修改已有业务系统，不要求业务系统嵌入 Agent SDK 或接�
 直接让模型观察系统并临时拼接请求，难以保证权限、证据和行为可重复。ACC 将接入过程拆成两个边界清晰的阶段：
 
 - **编译期有 AI**：Codex、Claude Code 等宿主负责分析、规划、创建能力定义、运行测试并根据诊断修复。
-- **运行期无 AI**：ACC Runtime 只执行已经校验和编译的 Pack；不调用 LLM，不生成代码，不临时构造未知请求。
+- **运行期无 AI**：ACC Runtime 只执行已经校验和编译的 Pack。Runtime 不调用 LLM，不生成代码，不临时构造未知请求。
 
 完整链路如下：
 
 ```text
-已有系统源码 / OpenAPI / 权限规则 / 测试（只读）
+已有系统源码 / OpenAPI / 前端交互 / 权限规则 / 测试（只读）
                          │
                          ▼
               Codex / Claude Code 等宿主
                          │ 加载 ACC Engineer Skill
                          ▼
-  Scope Inventory / Evidence / SourceContract / CapabilityQuality
-                 Operation / Capability / Policy / Eval
+ DomainMap / Candidate Ledger / DomainDecision / Scope Inventory
+ Evidence / SourceContract / CapabilityQuality / Operation / Capability
                          │
                          ▼
           ACC Core：校验、编译、测试、确定性打包
@@ -44,13 +44,28 @@ ACC 不修改已有业务系统，不要求业务系统嵌入 Agent SDK 或接�
              原系统 REST API / 独立 Adapter
 ```
 
+## AI 领域向导式能力发现
+
+全局 AI 扫描由 ACC Engineer Skill 所在的 Coding Agent 执行；ACC Core 与 Runtime 都不调用 LLM。Agent 先对后端、OpenAPI、客户端交互、默认值、选项、条件和关联数据做全局浅扫，生成平台中立的 `DomainMap` 与 `CapabilityCandidateLedger`。这一步是编译期分析工作，不表示 ACC Runtime 内置了扫描模型，也不表示任何生产系统已被扫描或验证。
+
+向导随后按依赖和显式优先顺序，一次只激活一个已就绪的业务领域：
+
+1. 用户确认业务目标与策略，不逐条选择 route，也不逐条审核全部接口。
+2. Coding Agent 深扫当前领域，把证据清晰的 Read、Action 和纯客户端候选自动分类；涉及默认数据、关联数据或展示条件时同时保留前端证据。
+3. 无法由 Evidence 闭合的例外一次只问一个问题。`unknown` 候选不能被伪装为 `ineligible` 或消失；只有独立 Evidence 支持的不可用结论才允许排除。
+4. 当前领域形成版本化的 `DomainDecision`，绑定候选、依赖和 Evidence 快照；完成并确认后才进入下一个领域。
+
+用户选择的是业务目标、允许的效果、风险上限、需审批的业务意图和明确排除项。route、接口字段、Candidate 分类与安全声明由 Evidence 和确定性校验闭合，不能通过用户随手勾选获得真实性。
+
+源 JWT 与源 API 是最终授权者。ACC Scope 只能收窄源系统可能允许的范围，不能创建角色、授予权限或替代源系统逐请求鉴权；Action approval 只批准一次已证明的业务变更，也不是源权限。
+
 ## 产品边界
 
 ACC 负责：
 
 - 稳定的 `acc` CLI、Schema 和结构化诊断；
 - Evidence 绑定、引用检查、Policy 校验和 Workflow 编译；
-- SourceContract、CapabilityQuality、Eval、九个基础质量轴与十个交互轴的 Coverage，以及可重复构建的 Capability Pack；
+- SourceContract、CapabilityQuality、Eval、九个基础质量轴、十个交互轴与十二个相互独立的领域与 Action Coverage 轴，以及可重复构建的 Capability Pack；
 - 固定通用 Runtime、MCP stdio、REST Provider、Provider 级认证和 SecretRef；
 - Adapter SDK 基础契约、测试工具和 Fake Adapter；
 - 面向 Coding Agent 的 ACC Engineer Skill。
@@ -343,13 +358,15 @@ CapabilityQuality 另外记录业务 intent、selector acquisition、producer Ca
 
 Action 使用显式 `prepare → approve → commit → status` 状态机。Action Operation 必须声明 effect、risk、reversibility、retry、idempotency 和 concurrency；编译器证明 preview 只读、commit 的变更拓扑受限，并按风险推导审批要求。部署策略默认 `allowed_effects={read}`，Pack 声明不能自行扩大部署权限。
 
-当前仓库已经有严格的当前模型、证据绑定的 Action semantics、编译与 Runtime 双重证明、Pack/Loader 版本门禁、部署策略、Action Coordinator、secret-safe 审计合同和开发/测试内存 Store。普通 Generic Runtime 的 `tools()`/`call()` 仍会拒绝 Action 并要求专用生命周期，因此 MCP stdio 与 Streamable HTTP 尚未对 Agent 暴露 Action 工具。内存 Store 明确不是 durable 实现；生产 Action 仍缺少可信审批签发、durable Store、生产审计后端和完整 MCP/CLI 接线。不能通过允许任意 `POST` 绕过这些边界。
+当前合同支持两类证据化并发策略：乐观并发要求可信 token 与源请求 precondition；服务端状态谓词策略先通过声明的 Read Operation 检查允许状态，并与状态幂等、`retry: never` 和 `status_query` 结果解析成组使用。Runtime 只执行 compiler IR 中已证明且摘要绑定的策略；失败或歧义结果保持 `outcome_unknown`，不能由 Agent 宣称成功。
+
+当前仓库已经有严格的当前模型、证据绑定的 Action semantics、编译与 Runtime 双重证明、Pack/Loader 版本门禁、部署策略、Action Coordinator、secret-safe 审计合同和开发/测试内存 Store。普通 Generic Runtime 的 `tools()`/`call()` 仍会拒绝 Action；多用户 Gateway 只有在 Pack、部署 allowlist、可信 ApprovalAuthority、Store 与审计依赖均闭合时，才通过专用 `prepare → approve → commit → status` 工具暴露 Action。该路径目前由 Fake Source 离线验证，不是生产源 Action 已连接验证。内存 Store 明确不是 durable 实现；生产 Action 仍需要可信审批签发、durable Store、生产审计后端和 source-connected 隔离验收。不能通过允许任意 `POST` 绕过这些边界，Action approval 也不能替代源 JWT 对最终 REST 请求的鉴权。
 
 ### Scope callability 与 Coverage
 
-部署 Scope ceiling 只会收紧 Pack 的 Scope 要求。`acc run` 在监听前报告每个 Capability 的 `callable`、`conditional`、`denied` 或 `unknown`；空 ceiling 默认拒绝，`--strict-scope` 可拒绝确定不可调用的部署，`--scope-ceiling-from-pack` 也不代表 Pack 自动获得源权限。登录前未知的用户源权限保持 `unknown`，登录后仍由源系统执行最终授权。
+部署 Scope ceiling 只会收紧 Pack 的 Scope 要求。`acc run` 在监听前报告每个 Capability 的 `callable`、`conditional`、`denied` 或 `unknown`；空 ceiling 默认拒绝，`--strict-scope` 可拒绝确定不可调用的部署，`--scope-ceiling-from-pack` 也不代表 Pack 自动获得源权限。登录前未知的用户源权限保持 `unknown`，登录后仍由源 JWT 与源 API 对每次请求执行最终授权。
 
-Coverage 直接消费平台中立的 Scope Inventory。除 `route_disposition`、`operation_trace`、`scenario_coverage`、`constructability`、`discoverability_graph`、`composition`、`schema_fidelity`、`output_budget` 和 `live_observations` 外，还独立报告 `surface_disposition`、`interaction_trace`、`input_binding_fidelity`、`default_provenance`、`option_resolution`、`condition_coverage`、`related_data_graph`、`state_scenarios`、`presentation_projection` 和 `client_adapter_evidence`。它不生成总分，也不把“路由已分类”解释为“Capability 可用”。
+Coverage 直接消费平台中立的 Scope Inventory、DomainMap 和 Candidate Ledger。除 `route_disposition`、`operation_trace`、`scenario_coverage`、`constructability`、`discoverability_graph`、`composition`、`schema_fidelity`、`output_budget` 和 `live_observations` 外，还独立报告十个交互轴，以及 `domain_disposition`、`business_goals`、`candidate_classification`、`semantics_provenance`、`identity_authorization`、`action_lifecycle`、`conflict_control`、`idempotency`、`outcome_resolution`、`verification`、`cross_domain_dependency`、`user_decision_trace` 十二个领域与 Action 轴。它不生成总分，也不把“路由已分类”“候选已确认”或“源已连接”解释为 Capability 可用或 Action 安全。
 
 交互验证等级分别为 `contract_declared`、`static_verified`、`headless_verified`、`runtime_offline_verified`、`source_connected_verified` 和 `client_adapter_verified`，等级之间不自动升级。尤其是连通真实或隔离测试源，只证明所执行的源请求路径；没有与当前 interaction digest 绑定、且所有 required scenarios 均通过的客户端适配报告时，仍不得声明 `client_adapter_verified`。Runtime 公开只读、去 Evidence 的交互 manifest 并执行安全公共默认值，但它不是浏览器、移动端渲染器或 UI 引擎。
 
@@ -472,14 +489,15 @@ uv run ruff format packages tests skills
 | M7 | Provider 级认证、PrincipalContext 与结构化范围治理 | 已完成 |
 | M8 | 可选多用户 Streamable HTTP Gateway | 已完成 |
 | M9 | SourceContract、CapabilityQuality、Scope callability、独立基础质量 Coverage | 已完成 |
-| M10 | Action 编译/Runtime 状态机与 Live 验证 | 开发中：基础实现存在，MCP Action、durable Store 和生产审批/审计尚未完成 |
+| M10 | Action 编译/Runtime 状态机与 Live 验证 | 开发中：Gateway Action 已离线验证；生产 durable Store、审批/审计与 source-connected 隔离验收未完成 |
 | M11 | 平台中立的前端交互合同与验证 | 已完成：Sidecar、静态证明、Runtime manifest、Testkit、十个交互轴和跨行业 fixtures |
+| M12 | AI 领域向导式能力发现 | 已完成：当前格式合同、确定性 Core/CLI、Skill 工作流、Runtime 策略、跨行业 fixtures、Schema 复现与发布门禁均已闭合 |
 
 更细的检出版本进度记录在 `docs/progress.md`。生产可用性必须以发布说明、对应 Pack/Runtime 测试证据和安全评审为准。
 
 ## 路线图原则
 
-后续版本继续完成 Action MCP/CLI 接线、durable Store、可信审批与审计实现。在这些边界有明确实现和验证前，以下规则保持不变：运行期无 LLM、原系统源码零代码修改、正式 Operation 必须证据绑定、Runtime 通用且确定、部署默认只允许 read、不能宣称生产写入已可用。
+后续版本继续完成生产 durable Store、可信审批与审计集成，以及真实隔离源上的 Action 验收。在这些边界有明确实现和验证前，以下规则保持不变：运行期无 LLM、原系统源码零代码修改、正式 Operation 必须证据绑定、Runtime 通用且确定、部署默认只允许 read、不能宣称生产写入已可用。
 
 ## License
 

@@ -448,6 +448,36 @@ def test_skill_runs_a_single_domain_wizard_instead_of_asking_users_to_classify_r
         assert "领域" in text, guide
 
 
+def test_public_docs_define_domain_discovery_and_authorization_boundaries() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    progress = (ROOT / "docs" / "progress.md").read_text(encoding="utf-8")
+    adr_root = ROOT / "docs" / "architecture" / "adr"
+    adr_006 = (adr_root / "006-evidence-bound-operations.md").read_text(encoding="utf-8")
+    adr_007 = (adr_root / "007-versioned-quality-and-action-safety.md").read_text(encoding="utf-8")
+    adr_008_path = adr_root / "008-ai-domain-guided-discovery.md"
+    adr_008 = adr_008_path.read_text(encoding="utf-8") if adr_008_path.is_file() else ""
+    public_docs = "\n".join((readme, progress, adr_006, adr_007, adr_008))
+
+    assert "确认业务目标与策略" in readme
+    assert "不逐条选择 route" in readme
+    assert "全局 AI 扫描由 ACC Engineer Skill 所在的 Coding Agent 执行" in public_docs
+    assert "ACC Core 与 Runtime 都不调用 LLM" in public_docs
+    assert "源 JWT 与源 API 是最终授权者" in public_docs
+    assert "ACC Scope 只能收窄" in public_docs
+    assert "unknown 候选不能被伪装为 ineligible 或消失" in public_docs
+    assert "版本化的 `DomainDecision`" in public_docs
+    assert "十二个相互独立的领域与 Action Coverage 轴" in public_docs
+    assert "Runtime 不调用 LLM" in readme
+    assert adr_008.startswith("# ADR 008:")
+
+    for unsupported_claim in (
+        "当前已完成生产 AI 扫描验证",
+        "当前已完成生产源 Action 连接验证",
+        "ACC Scope 可以授予源系统权限",
+    ):
+        assert unsupported_claim not in public_docs
+
+
 def test_skill_ships_platform_neutral_domain_and_action_templates() -> None:
     required = {
         "domain-map.yaml",

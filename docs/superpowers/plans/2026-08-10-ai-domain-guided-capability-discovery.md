@@ -28,7 +28,7 @@ No task adds an LLM client to Core or Runtime. The installed Coding Agent follow
 - Create: `packages/acc-core/src/acc_core/domains/__init__.py`
 - Test: `tests/unit/core/test_domain_models.py`
 
-- [ ] **Step 1: Write failing strict-model tests**
+- [x] **Step 1: Write failing strict-model tests**
 
 ```python
 import pytest
@@ -110,18 +110,21 @@ def test_completed_decision_rejects_blocked_candidates() -> None:
                 "unresolved_questions": [],
                 "dependency_snapshot_digest": "sha256:" + "a" * 64,
                 "evidence_digest": "sha256:" + "b" * 64,
-                "user_confirmation": {"text": "Complete orders", "confirmed_at": "2026-08-10T00:00:00Z"},
+                "user_confirmation": {
+                    "text": "Complete orders",
+                    "confirmed_at": "2026-08-10T00:00:00Z",
+                },
             }
         )
 ```
 
-- [ ] **Step 2: Run the new test and verify RED**
+- [x] **Step 2: Run the new test and verify RED**
 
 Run: `uv run --frozen pytest -q tests/unit/core/test_domain_models.py`
 
 Expected: collection fails with `ModuleNotFoundError: No module named 'acc_core.domains'`.
 
-- [ ] **Step 3: Implement frozen strict models and sorted-reference validators**
+- [x] **Step 3: Implement frozen strict models and sorted-reference validators**
 
 ```python
 class CandidateClaim(StrictModel):
@@ -179,7 +182,9 @@ class DomainDecision(StrictModel):
     @model_validator(mode="after")
     def completed_is_closed(self) -> Self:
         if self.status == "completed" and (
-            self.blocked_candidate_ids or self.unresolved_questions or self.user_confirmation is None
+            self.blocked_candidate_ids
+            or self.unresolved_questions
+            or self.user_confirmation is None
         ):
             raise ValueError("completed domain decisions must be closed and confirmed")
         return self
@@ -187,13 +192,13 @@ class DomainDecision(StrictModel):
 
 Implement `DomainMap`, `DomainPolicy`, `CapabilityCandidateLedger`, `UserConfirmation`, and `DomainChangeRequest` in the same module. All identifier lists must be sorted and unique; domain dependencies must reject self-reference; a candidate ID may occur at most once across domains plus `unclassified_candidate_ids`. Task 2 project validation proves exact closure against the separate Candidate Ledger.
 
-- [ ] **Step 4: Run model tests and adjacent model regression**
+- [x] **Step 4: Run model tests and adjacent model regression**
 
 Run: `uv run --frozen pytest -q tests/unit/core/test_domain_models.py tests/unit/core/test_scope_models.py tests/unit/core/test_models.py`
 
 Expected: all tests pass.
 
-- [ ] **Step 5: Commit the model slice**
+- [x] **Step 5: Commit the model slice**
 
 ```bash
 git add packages/acc-core/src/acc_core/domains tests/unit/core/test_domain_models.py
@@ -214,7 +219,7 @@ git commit -m "feat(core): 定义领域能力候选与决策合同"
 - Test: `tests/unit/core/test_project_domain_validation.py`
 - Test: `tests/integration/pack/test_pack.py`
 
-- [ ] **Step 1: Write RED tests for optional sidecars and exact closure**
+- [x] **Step 1: Write RED tests for optional sidecars and exact closure**
 
 ```python
 def test_domain_sidecars_load_as_typed_documents(current_project: Path) -> None:
@@ -244,13 +249,13 @@ def test_domain_map_rejects_missing_and_orphan_candidates(current_project: Path)
 
 Also assert that a project with none of the four sidecar families retains current validation output, while declaring any one of `domain-map.yaml` or `capability-candidates.yaml` requires the other.
 
-- [ ] **Step 2: Run the focused test and verify missing report fields**
+- [x] **Step 2: Run the focused test and verify missing report fields**
 
 Run: `uv run --frozen pytest -q tests/unit/core/test_project_domain_validation.py`
 
 Expected: tests fail because `ValidationReport` has no domain fields and schemas are not exported.
 
-- [ ] **Step 3: Add typed paths and loaders to ValidationReport**
+- [x] **Step 3: Add typed paths and loaders to ValidationReport**
 
 ```python
 @dataclass(slots=True)
@@ -268,17 +273,17 @@ class ValidationReport:
 
 Load fixed files `domain-map.yaml` and `capability-candidates.yaml`, plus strict collections under `domain-decisions/` and `domain-change-requests/`. Reject duplicate IDs, mismatched filename/document IDs, symlinks, oversized files, missing candidate references, orphan candidates, unknown decision domains, and multiple revisions for the same domain in the active project.
 
-- [ ] **Step 4: Export four schemas and allow sidecars in Pack format 2**
+- [x] **Step 4: Export four schemas and allow sidecars in Pack format 2**
 
 Add schema registry entries with canonical names `domain-map`, `capability-candidates`, `domain-decision`, and `domain-change-request`. Extend the format-2 Pack member allowlist to the fixed files and directories. Do not make sidecars Runtime requirements; Runtime ignores them except for their compiler-produced summaries added in later tasks.
 
-- [ ] **Step 5: Run validation, schema, and Pack tests**
+- [x] **Step 5: Run validation, schema, and Pack tests**
 
 Run: `uv run --frozen pytest -q tests/unit/core/test_project_domain_validation.py tests/unit/core/test_cli.py tests/integration/pack/test_pack.py`
 
 Expected: all tests pass and two builds containing domain sidecars are byte-identical.
 
-- [ ] **Step 6: Commit schema and loading support**
+- [x] **Step 6: Commit schema and loading support**
 
 ```bash
 git add packages/acc-core/src/acc_core/schemas/export.py packages/acc-core/src/acc_core/validation/project.py packages/acc-core/src/acc_core/cli/main.py packages/acc-core/src/acc_core/packaging/pack.py schemas tests/unit/core/test_project_domain_validation.py tests/integration/pack/test_pack.py
@@ -294,7 +299,7 @@ git commit -m "feat(core): 加载领域向导项目合同"
 - Test: `tests/unit/core/test_scope_models.py`
 - Test: `tests/unit/skill/test_scope_audit.py`
 
-- [ ] **Step 1: Write RED tests proving missing Action evidence cannot become ineligible**
+- [x] **Step 1: Write RED tests proving missing Action evidence cannot become ineligible**
 
 ```python
 def test_unknown_candidate_is_blocked_instead_of_ineligible() -> None:
@@ -331,13 +336,13 @@ def test_action_candidate_cannot_use_ineligible_for_missing_safety_evidence(
     assert "ACC_SCOPE_ACTION_GAP_MISCLASSIFIED" in diagnostic_codes(report)
 ```
 
-- [ ] **Step 2: Run focused Scope tests and verify enum/model failures**
+- [x] **Step 2: Run focused Scope tests and verify enum/model failures**
 
 Run: `uv run --frozen pytest -q tests/unit/core/test_scope_models.py tests/unit/skill/test_scope_audit.py -k 'unknown or action_gap or candidate'`
 
 Expected: tests fail because `unknown`, `undetermined`, and `candidate_id` are unsupported.
 
-- [ ] **Step 3: Extend ScopeRoute without weakening compiled Operations**
+- [x] **Step 3: Extend ScopeRoute without weakening compiled Operations**
 
 ```python
 class ScopeRoute(StrictModel):
@@ -365,7 +370,7 @@ class ScopeRoute(StrictModel):
 
 Keep `Operation` models strict and unchanged: only discovery artifacts accept unknown states.
 
-- [ ] **Step 4: Add auditor rules against denominator distortion**
+- [x] **Step 4: Add auditor rules against denominator distortion**
 
 The auditor must load the candidate ledger through Core. Require every `unknown` or `action` route to reference a candidate. When candidate gaps contain semantics, authorization boundary, conflict control, idempotency, lifecycle, or outcome resolution, require `eligibility=undetermined` plus `disposition=blocked_on_evidence` unless the candidate has an objective, evidence-backed `ineligibility_claim`. Add diagnostics:
 
@@ -374,13 +379,13 @@ The auditor must load the candidate ledger through Core. Require every `unknown`
 - `ACC_SCOPE_ACTION_GAP_MISCLASSIFIED`
 - `ACC_SCOPE_ACTION_INELIGIBILITY_UNPROVEN`
 
-- [ ] **Step 5: Run full Scope model/auditor tests**
+- [x] **Step 5: Run full Scope model/auditor tests**
 
 Run: `uv run --frozen pytest -q tests/unit/core/test_scope_models.py tests/unit/skill/test_scope_audit.py`
 
 Expected: all tests pass; existing read-only inventories remain valid.
 
-- [ ] **Step 6: Commit the tri-state denominator**
+- [x] **Step 6: Commit the tri-state denominator**
 
 ```bash
 git add packages/acc-core/src/acc_core/scope/models.py skills/acc-engineer/scripts/scope_audit.py skills/acc-engineer/templates/scope-inventory.yaml tests/unit/core/test_scope_models.py tests/unit/skill/test_scope_audit.py
@@ -395,7 +400,7 @@ git commit -m "feat(scope): 保留未决业务能力候选"
 - Modify: `packages/acc-core/src/acc_core/validation/project.py`
 - Test: `tests/unit/compiler/test_domain_readiness.py`
 
-- [ ] **Step 1: Write RED readiness tests**
+- [x] **Step 1: Write RED readiness tests**
 
 ```python
 def test_domain_readiness_separates_evidence_gaps_from_user_deferral() -> None:
@@ -424,19 +429,27 @@ def test_upstream_authoritative_permission_is_not_a_readiness_gap() -> None:
     assert analyze_candidate_readiness(candidate).authorization_status == "source_final"
 ```
 
-- [ ] **Step 2: Run focused tests and verify missing analyzer**
+- [x] **Step 2: Run focused tests and verify missing analyzer**
 
 Run: `uv run --frozen pytest -q tests/unit/compiler/test_domain_readiness.py`
 
 Expected: collection fails because `analyze_domain_readiness` is not defined.
 
-- [ ] **Step 3: Implement pure readiness functions and stable diagnostics**
+- [x] **Step 3: Implement pure readiness functions and stable diagnostics**
 
 ```python
 @dataclass(frozen=True, slots=True)
 class DomainReadiness:
     domain_id: str
-    status: Literal["not_started", "in_progress", "awaiting_user", "validation_failed", "ready_for_review", "completed", "stale"]
+    status: Literal[
+        "not_started",
+        "in_progress",
+        "awaiting_user",
+        "validation_failed",
+        "ready_for_review",
+        "completed",
+        "stale",
+    ]
     accepted_candidate_ids: tuple[str, ...]
     blocked_candidate_ids: tuple[str, ...]
     deferred_candidate_ids: tuple[str, ...]
@@ -468,7 +481,7 @@ def analyze_candidate_readiness(candidate: CapabilityCandidate) -> CandidateRead
 
 The analyzer must never treat missing source permission lists as a gap when identity binding and upstream final authorization are evidenced. It must error if ACC claims it can grant source permission, if a completed decision digest is stale, or if accepted candidates retain blocking gaps.
 
-- [ ] **Step 4: Merge analyzer diagnostics into project validation**
+- [x] **Step 4: Merge analyzer diagnostics into project validation**
 
 When domain sidecars exist, call the analyzer after Scope, Operations, Capabilities, interactions, and SourceContracts are loaded. Preserve exact sidecar paths in diagnostics. Add stable codes:
 
@@ -478,13 +491,13 @@ When domain sidecars exist, call the analyzer after Scope, Operations, Capabilit
 - `ACC_DOMAIN_SOURCE_AUTHORITY_OVERRIDDEN`
 - `ACC_DOMAIN_DEPENDENCY_UNRESOLVED`
 
-- [ ] **Step 5: Run analyzer and project-validation regression**
+- [x] **Step 5: Run analyzer and project-validation regression**
 
 Run: `uv run --frozen pytest -q tests/unit/compiler/test_domain_readiness.py tests/unit/core/test_project_domain_validation.py tests/unit/core/test_project_validation.py`
 
 Expected: all tests pass.
 
-- [ ] **Step 6: Commit readiness analysis**
+- [x] **Step 6: Commit readiness analysis**
 
 ```bash
 git add packages/acc-core/src/acc_core/domains packages/acc-core/src/acc_core/validation/project.py tests/unit/compiler/test_domain_readiness.py tests/unit/core/test_project_domain_validation.py
@@ -500,7 +513,7 @@ git commit -m "feat(core): 派生领域候选就绪状态"
 - Test: `tests/unit/compiler/test_domain_coverage.py`
 - Modify: `tests/unit/compiler/test_analysis_tools.py`
 
-- [ ] **Step 1: Write RED tests for independent axes and no total score**
+- [x] **Step 1: Write RED tests for independent axes and no total score**
 
 ```python
 def test_action_candidates_cannot_hide_behind_read_route_closure() -> None:
@@ -526,13 +539,13 @@ def test_source_connected_does_not_upgrade_source_authorization_or_action_safety
     assert coverage.conflict_control_fidelity.status == "unknown"
 ```
 
-- [ ] **Step 2: Run tests and verify missing fields**
+- [x] **Step 2: Run tests and verify missing fields**
 
 Run: `uv run --frozen pytest -q tests/unit/compiler/test_domain_coverage.py`
 
 Expected: tests fail because domain Coverage axes do not exist.
 
-- [ ] **Step 3: Add typed independent axes**
+- [x] **Step 3: Add typed independent axes**
 
 Add these fields to the current Coverage report, using `not_declared` when domain sidecars are absent:
 
@@ -553,17 +566,17 @@ user_decision_trace: UserDecisionTraceCoverage
 
 Do not add a combined status, score, percentage, or usable field.
 
-- [ ] **Step 4: Implement deterministic axis analysis**
+- [x] **Step 4: Implement deterministic axis analysis**
 
 Consume `ValidationReport.domain_map`, candidate ledger, decisions, Scope links, Operations, Capabilities, and diagnostics. A route can be structurally closed while its candidate remains blocked. User-deferred candidates appear only in the user decision axis and do not count as rejected or verified.
 
-- [ ] **Step 5: Run Coverage regression**
+- [x] **Step 5: Run Coverage regression**
 
 Run: `uv run --frozen pytest -q tests/unit/compiler/test_domain_coverage.py tests/unit/compiler/test_analysis_tools.py tests/integration/test_cli_milestone2.py -k 'coverage'`
 
 Expected: all tests pass; existing projects serialize the new axes as `not_declared` without changing prior axis semantics.
 
-- [ ] **Step 6: Commit domain Coverage**
+- [x] **Step 6: Commit domain Coverage**
 
 ```bash
 git add packages/acc-core/src/acc_core/coverage tests/unit/compiler/test_domain_coverage.py tests/unit/compiler/test_analysis_tools.py tests/integration/test_cli_milestone2.py
@@ -578,7 +591,7 @@ git commit -m "feat(coverage): 报告领域与 Action 候选覆盖"
 - Test: `tests/unit/core/test_domain_cli.py`
 - Test: `tests/integration/test_cli_milestone2.py`
 
-- [ ] **Step 1: Write RED CLI tests**
+- [x] **Step 1: Write RED CLI tests**
 
 ```python
 def test_domains_status_recommends_one_next_domain(current_project: Path) -> None:
@@ -616,13 +629,13 @@ def test_domains_review_never_accepts_route_ids_as_user_choices(
     assert result.envelope["error"]["code"] == "ACC_DOMAIN_BUSINESS_GOAL_REQUIRED"
 ```
 
-- [ ] **Step 2: Run tests and verify parser failure**
+- [x] **Step 2: Run tests and verify parser failure**
 
 Run: `uv run --frozen pytest -q tests/unit/core/test_domain_cli.py`
 
 Expected: argparse rejects the unknown `domains` command.
 
-- [ ] **Step 3: Add non-interactive structured commands**
+- [x] **Step 3: Add non-interactive structured commands**
 
 Add:
 
@@ -635,17 +648,17 @@ acc domains impact PROJECT --changed-evidence CHANGED_EVIDENCE_FILE --json
 
 `status` and `show` are read-only. `review --check` validates a proposed DomainDecision but does not write. A later explicit `--write` may atomically install a validated decision; it must reject route IDs where business goal or candidate IDs are required. No command calls an LLM.
 
-- [ ] **Step 4: Implement next-domain ordering**
+- [x] **Step 4: Implement next-domain ordering**
 
 Use topological dependency order first, then domain risk and stable ID. A user-provided `preferred_order` in DomainMap can reorder only nodes whose dependencies are already complete. Cycles return `ACC_DOMAIN_DEPENDENCY_CYCLE` with exact domain IDs.
 
-- [ ] **Step 5: Run CLI tests and help snapshot**
+- [x] **Step 5: Run CLI tests and help snapshot**
 
 Run: `uv run --frozen pytest -q tests/unit/core/test_domain_cli.py tests/unit/core/test_cli.py tests/integration/test_cli_milestone2.py`
 
 Expected: all tests pass and `acc domains --help` lists only deterministic commands.
 
-- [ ] **Step 6: Commit the domain CLI**
+- [x] **Step 6: Commit the domain CLI**
 
 ```bash
 git add packages/acc-core/src/acc_core/cli tests/unit/core/test_domain_cli.py tests/unit/core/test_cli.py tests/integration/test_cli_milestone2.py
@@ -662,7 +675,7 @@ git commit -m "feat(cli): 提供领域向导确定性状态命令"
 - Test: `tests/unit/core/test_action_models.py`
 - Test: `tests/unit/compiler/test_action_compiler.py`
 
-- [ ] **Step 1: Write RED tests for non-optimistic but evidenced source safety**
+- [x] **Step 1: Write RED tests for non-optimistic but evidenced source safety**
 
 ```python
 def test_server_serialized_transition_requires_state_predicate_and_status_query() -> None:
@@ -691,18 +704,21 @@ def test_server_serialized_transition_requires_state_predicate_and_status_query(
 def test_server_serialized_transition_rejects_retry_or_missing_implementation_claim() -> None:
     proof = prove_action_capability(
         _action_capability(preview="jobs.status", commit="jobs.cancel", status="jobs.status"),
-        {"jobs.status": _read_operation(), "jobs.cancel": _server_serialized_operation(retry="idempotent_only")},
+        {
+            "jobs.status": _read_operation(),
+            "jobs.cancel": _server_serialized_operation(retry="idempotent_only"),
+        },
     )
     assert "ACC_COMPILE_ACTION_SERVER_SERIALIZED_RETRY_FORBIDDEN" in proof.codes
 ```
 
-- [ ] **Step 2: Run Action model/compiler tests and verify enum failures**
+- [x] **Step 2: Run Action model/compiler tests and verify enum failures**
 
 Run: `uv run --frozen pytest -q tests/unit/core/test_action_models.py tests/unit/compiler/test_action_compiler.py -k 'server_serialized or state_idempotent'`
 
 Expected: model validation rejects the new strategy modes.
 
-- [ ] **Step 3: Replace two-mode contracts with discriminated strategy unions**
+- [x] **Step 3: Replace two-mode contracts with discriminated strategy unions**
 
 ```python
 class OptimisticTokenConcurrency(StrictModel):
@@ -752,11 +768,11 @@ type IdempotencyContractV2 = Annotated[
 
 Keep existing source-key behavior under `mode: source_key`. Retain `unsupported` for honestly unsupported cases. The existing `concurrency.mode: required` wire shape remains byte-for-byte valid and is modeled internally as the optimistic-token branch; do not rename its discriminator. Do not implement `compensating_transaction` or saga execution in this slice.
 
-- [ ] **Step 4: Add field-level ActionSemantics provenance**
+- [x] **Step 4: Add field-level ActionSemantics provenance**
 
 Replace the single authority claim with sorted claims for `effect`, `risk`, `reversibility`, `retry`, `idempotency`, `conflict_control`, and `outcome_resolution`. Each claim references existing Evidence and an `evidence_pointer`. Only `implementation`, `contract`, or `test` authority can prove safety; observation cannot.
 
-- [ ] **Step 5: Implement the exact compiler matrix**
+- [x] **Step 5: Implement the exact compiler matrix**
 
 Rules:
 
@@ -766,13 +782,13 @@ Rules:
 - create/execute: continue requiring source-key idempotency in this slice;
 - unsupported conflict control: continue rejecting update/delete/transition.
 
-- [ ] **Step 6: Run complete Core Action regression**
+- [x] **Step 6: Run complete Core Action regression**
 
 Run: `uv run --frozen pytest -q tests/unit/core/test_action_models.py tests/unit/core/test_source_contract_models.py tests/unit/compiler/test_action_compiler.py tests/unit/compiler/test_compiler.py`
 
 Expected: all tests pass; existing optimistic-token projects compile without semantic changes.
 
-- [ ] **Step 7: Commit strategy expansion**
+- [x] **Step 7: Commit strategy expansion**
 
 ```bash
 git add packages/acc-core/src/acc_core/models/actions.py packages/acc-core/src/acc_core/contracts/models.py packages/acc-core/src/acc_core/compiler/actions.py packages/acc-core/src/acc_core/compiler/ir.py tests/unit/core/test_action_models.py tests/unit/core/test_source_contract_models.py tests/unit/compiler/test_action_compiler.py tests/unit/compiler/test_compiler.py
@@ -789,7 +805,7 @@ git commit -m "feat(actions): 支持证据化服务端状态并发策略"
 - Test: `tests/unit/runtime/test_http_action_provider.py`
 - Test: `tests/integration/runtime/test_action_mcp_gateway.py`
 
-- [ ] **Step 1: Write RED tests for server-serialized execution**
+- [x] **Step 1: Write RED tests for server-serialized execution**
 
 ```python
 @pytest.mark.anyio
@@ -806,30 +822,32 @@ async def test_server_serialized_transition_never_replays_an_ambiguous_source_ca
         await coordinator.commit(approved.action_handle, _principal())
 
     assert provider.mutation_calls == 1
-    assert (await coordinator.status(approved.action_handle, _principal())).status == "outcome_unknown"
+    assert (
+        await coordinator.status(approved.action_handle, _principal())
+    ).status == "outcome_unknown"
 ```
 
-- [ ] **Step 2: Run runtime tests and verify unsupported strategy failure**
+- [x] **Step 2: Run runtime tests and verify unsupported strategy failure**
 
 Run: `uv run --frozen pytest -q tests/unit/runtime/actions/test_runtime_executor.py tests/unit/runtime/test_http_action_provider.py -k 'server_serialized'`
 
 Expected: Runtime rejects the compiled strategy as invalid.
 
-- [ ] **Step 3: Enforce each strategy without weakening identity or approval**
+- [x] **Step 3: Enforce each strategy without weakening identity or approval**
 
 For existing `concurrency.mode: required`, continue optimistic-token capture/injection. For `server_serialized_state_predicate`, validate preview status against `allowed_values`, inject no fake version, require approval, call the mutation once, and perform the declared status read after a definitive response. On timeout, disconnect, 401, or undecodable ambiguous response, store `outcome_unknown` and never automatically replay.
 
-- [ ] **Step 4: Preserve source authorization as final**
+- [x] **Step 4: Preserve source authorization as final**
 
 Do not add RBAC evaluation. Continue sending the current Principal source authentication on every read/mutation. Source 401/403/404 map to stable errors; only 401 marks the current Gateway session for reauthentication. No source permission response can expand DeploymentPolicy or effective scopes.
 
-- [ ] **Step 5: Run official SDK Action regression**
+- [x] **Step 5: Run official SDK Action regression**
 
 Run: `uv run --frozen pytest -q tests/unit/runtime/actions tests/unit/runtime/test_http_action_provider.py tests/integration/runtime/test_action_mcp_gateway.py tests/e2e/test_multi_user_http_gateway.py`
 
 Expected: all tests pass; A/B isolation, approval, one mutation, status, logout, and secret scans remain green.
 
-- [ ] **Step 6: Commit Runtime strategy support**
+- [x] **Step 6: Commit Runtime strategy support**
 
 ```bash
 git add packages/acc-runtime/src/acc_runtime/actions packages/acc-runtime/src/acc_runtime/providers/http.py tests/unit/runtime/actions tests/unit/runtime/test_http_action_provider.py tests/integration/runtime/test_action_mcp_gateway.py tests/e2e/test_multi_user_http_gateway.py
@@ -858,7 +876,7 @@ git commit -m "feat(runtime): 执行服务端状态保护的 Action"
 - Create: `skills/acc-engineer/references/examples/server-serialized-transition.yaml`
 - Modify: `tests/unit/skill/test_skill_structure.py`
 
-- [ ] **Step 1: Write RED Skill structure assertions**
+- [x] **Step 1: Write RED Skill structure assertions**
 
 ```python
 def test_skill_requires_domain_start_exception_and_end_confirmation() -> None:
@@ -873,17 +891,22 @@ def test_skill_ships_platform_neutral_action_templates() -> None:
     action = load_yaml(SKILL_ROOT / "templates/action-operation.yaml")
     assert action["kind"] == "action"
     assert set(action["http"]["safety"]) == {
-        "effect", "risk", "reversibility", "retry", "idempotency", "concurrency"
+        "effect",
+        "risk",
+        "reversibility",
+        "retry",
+        "idempotency",
+        "concurrency",
     }
 ```
 
-- [ ] **Step 2: Run Skill tests and verify missing templates/text**
+- [x] **Step 2: Run Skill tests and verify missing templates/text**
 
 Run: `uv run --frozen pytest -q tests/unit/skill/test_skill_structure.py`
 
 Expected: tests fail for missing domain and Action templates.
 
-- [ ] **Step 3: Rewrite the Skill phases around the domain wizard**
+- [x] **Step 3: Rewrite the Skill phases around the domain wizard**
 
 Required flow:
 
@@ -899,17 +922,17 @@ Required flow:
 
 The Skill must state that upstream JWT authorization is final, Scope only narrows, and Action approval confirms this execution rather than granting source permission.
 
-- [ ] **Step 4: Add complete platform-neutral templates**
+- [x] **Step 4: Add complete platform-neutral templates**
 
 Templates must use neutral IDs such as `orders.cancel`, conspicuous non-secret sentinel Evidence values that fail validation until replaced, and both optimistic-token and server-serialized examples. They must not contain any project path, permission string, or entity from an existing integration.
 
-- [ ] **Step 5: Validate Skill and templates**
+- [x] **Step 5: Validate Skill and templates**
 
 Run: `uv run --frozen pytest -q tests/unit/skill && uv run --frozen python /Users/chou/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/acc-engineer`
 
 Expected: all Skill tests pass and quick validation prints `Skill is valid!`.
 
-- [ ] **Step 6: Commit the domain wizard Skill**
+- [x] **Step 6: Commit the domain wizard Skill**
 
 ```bash
 git add skills/acc-engineer tests/unit/skill/test_skill_structure.py
@@ -925,7 +948,7 @@ git commit -m "feat(skill): 按业务领域引导能力确认"
 - Test: `tests/unit/compiler/test_domain_impact.py`
 - Test: `tests/unit/core/test_domain_cli.py`
 
-- [ ] **Step 1: Write RED impact tests**
+- [x] **Step 1: Write RED impact tests**
 
 ```python
 def test_changed_evidence_marks_only_dependent_domains_stale() -> None:
@@ -948,31 +971,31 @@ def test_security_change_produces_fail_closed_change_request() -> None:
     assert request.affected_capability_ids == ["orders.cancel"]
 ```
 
-- [ ] **Step 2: Run impact tests and verify missing module**
+- [x] **Step 2: Run impact tests and verify missing module**
 
 Run: `uv run --frozen pytest -q tests/unit/compiler/test_domain_impact.py`
 
 Expected: collection fails because `acc_core.domains.impact` is missing.
 
-- [ ] **Step 3: Implement evidence-to-candidate-to-domain graph traversal**
+- [x] **Step 3: Implement evidence-to-candidate-to-domain graph traversal**
 
 The pure analyzer accepts changed Evidence IDs or digests; it does not run Git. Traverse exact candidate claims, domain dependencies, Capability/Operation Evidence, and Interaction claims. Security-relevant changes include identity binding, context isolation, effect, risk, authorization boundary, conflict control, idempotency, approval, and outcome resolution.
 
-- [ ] **Step 4: Emit deterministic DomainChangeRequest documents**
+- [x] **Step 4: Emit deterministic DomainChangeRequest documents**
 
 Requests contain old decision revision, affected candidate/capability IDs, changed evidence, security classification, recommended next status, and exact impact. Security changes set `deployment_effect=disable_affected_capabilities`; descriptive-only changes set `deployment_effect=audit_warning`.
 
-- [ ] **Step 5: Connect `acc domains impact` to JSON input**
+- [x] **Step 5: Connect `acc domains impact` to JSON input**
 
 The command reads a bounded JSON file containing changed Evidence IDs/digests and prints impact plus a canonical proposed change request. `--write` atomically writes under `domain-change-requests/`; it never invokes Git or an LLM.
 
-- [ ] **Step 6: Run impact and CLI regression**
+- [x] **Step 6: Run impact and CLI regression**
 
 Run: `uv run --frozen pytest -q tests/unit/compiler/test_domain_impact.py tests/unit/core/test_domain_cli.py tests/unit/core/test_project_domain_validation.py`
 
 Expected: all tests pass.
 
-- [ ] **Step 7: Commit incremental impact support**
+- [x] **Step 7: Commit incremental impact support**
 
 ```bash
 git add packages/acc-core/src/acc_core/domains packages/acc-core/src/acc_core/cli/domains.py tests/unit/compiler/test_domain_impact.py tests/unit/core/test_domain_cli.py tests/unit/core/test_project_domain_validation.py
@@ -991,7 +1014,7 @@ git commit -m "feat(core): 追踪领域证据变更影响"
 - Create: `tests/fixtures/domains/mobile/`
 - Create: `tests/e2e/test_domain_guided_projects.py`
 
-- [ ] **Step 1: Write the parameterized RED E2E test**
+- [x] **Step 1: Write the parameterized RED E2E test**
 
 ```python
 @pytest.mark.parametrize(
@@ -1021,27 +1044,27 @@ def test_domain_fixture_validates_compiles_and_reports_independent_axes(
     assert expected_fact in load_expected_facts(root)
 ```
 
-- [ ] **Step 2: Run E2E and verify fixtures are absent**
+- [x] **Step 2: Run E2E and verify fixtures are absent**
 
 Run: `uv run --frozen pytest -q tests/e2e/test_domain_guided_projects.py`
 
 Expected: seven failures because fixture projects do not exist.
 
-- [ ] **Step 3: Create complete current-format fixture projects**
+- [x] **Step 3: Create complete current-format fixture projects**
 
 Each fixture contains Project, ScopeInventory, DomainMap, Candidate Ledger, DomainDecision, Operations, Capabilities, SourceContracts, CapabilityQuality, Policies, Evals, Evidence, and expected facts. Permission fixture must prove source JWT final authorization without ACC RBAC. Finance and content fixtures exercise the two supported conflict strategies. Mobile includes a client-only candidate with no fabricated route.
 
-- [ ] **Step 4: Add malicious negative fixtures**
+- [x] **Step 4: Add malicious negative fixtures**
 
 Cover AI-reported eligible Action with missing claims, source permission incorrectly promoted to ACC grant, candidate hidden as ineligible, stale completed decision, cross-domain dependency cycle, and project-specific strategy enum injection. Assert stable Core diagnostics and no compiled Pack.
 
-- [ ] **Step 5: Run E2E, compiler, Skill, Runtime, and Pack regression**
+- [x] **Step 5: Run E2E, compiler, Skill, Runtime, and Pack regression**
 
 Run: `uv run --frozen pytest -q tests/e2e/test_domain_guided_projects.py tests/unit/compiler tests/unit/skill tests/unit/runtime tests/integration/pack`
 
 Expected: all tests pass.
 
-- [ ] **Step 6: Commit cross-industry acceptance**
+- [x] **Step 6: Commit cross-industry acceptance**
 
 ```bash
 git add tests/fixtures/domains tests/e2e/test_domain_guided_projects.py
@@ -1058,21 +1081,21 @@ git commit -m "test(domains): 验证跨行业领域向导合同"
 - Modify: `docs/architecture/adr/007-versioned-quality-and-action-safety.md`
 - Test: `tests/unit/skill/test_skill_structure.py`
 
-- [ ] **Step 1: Write RED documentation assertions**
+- [x] **Step 1: Write RED documentation assertions**
 
 Assert public docs contain: business-goal selection instead of route selection; source JWT final authorization; ACC Scope only narrows; unknown candidates cannot disappear as ineligible; domain decisions are versioned; Action Coverage is independent; Runtime has no LLM.
 
-- [ ] **Step 2: Run documentation tests and verify missing public wording**
+- [x] **Step 2: Run documentation tests and verify missing public wording**
 
 Run: `uv run --frozen pytest -q tests/unit/skill/test_skill_structure.py -k 'domain or authorization'`
 
 Expected: new assertions fail until docs are updated.
 
-- [ ] **Step 3: Update public architecture and progress truthfully**
+- [x] **Step 3: Update public architecture and progress truthfully**
 
 ADR 008 records the domain-wizard decision and AI/Core boundary. ADR 006 clarifies typed candidate evidence. ADR 007 records expanded Action strategies and source authorization finality. README shows the global-scan/domain-loop flow and verification levels. Do not claim production AI scanning or source-connected Action verification unless those exact paths passed.
 
-- [ ] **Step 4: Regenerate schemas twice and compare**
+- [x] **Step 4: Regenerate schemas twice and compare**
 
 Run:
 
@@ -1087,7 +1110,7 @@ diff -ru schemas "$first"
 
 Expected: both diffs are empty.
 
-- [ ] **Step 5: Run full release gates**
+- [x] **Step 5: Run full release gates**
 
 Run:
 
@@ -1102,11 +1125,11 @@ git diff --check
 
 Expected: all commands exit 0; only explicitly documented pre-existing warnings may remain.
 
-- [ ] **Step 6: Perform deterministic Pack checks for one Read-only and two Action fixtures**
+- [x] **Step 6: Perform deterministic Pack checks for one Read-only and two Action fixtures**
 
 Build each selected fixture twice inside its project `build/` directory, compare SHA-256, inspect archive members, and scan for JWT-like values, Bearer values, private keys, raw user confirmations, and unredacted Evidence contents. Expected: each pair is byte-identical and secret scans return zero.
 
-- [ ] **Step 7: Commit documentation and release evidence**
+- [x] **Step 7: Commit documentation and release evidence**
 
 ```bash
 git add README.md docs schemas tests/unit/skill/test_skill_structure.py
@@ -1115,14 +1138,14 @@ git commit -m "docs(domains): 交付领域向导能力发现流程"
 
 ## Final acceptance checklist
 
-- [ ] Every discovered route/interaction candidate is classified, explicitly unclassified, or blocked; none disappears through a generic ineligible reason.
-- [ ] The user confirms one domain policy, then only exception questions, then one versioned domain decision.
-- [ ] User decisions reference business goals/candidate IDs, never raw route selection.
-- [ ] Source JWT and source APIs remain the final user/resource authorization authority.
-- [ ] ACC Scope, DeploymentPolicy, and Action approval only narrow authority.
-- [ ] Existing optimistic-token Actions remain valid.
-- [ ] Server-serialized state transitions are accepted only with implementation/test claims, preview/status reads, retry never, state idempotency, and approval.
-- [ ] Coverage reports independent domain and Action axes without score or usable.
-- [ ] Evidence drift creates explicit stale decisions and change requests.
-- [ ] Cross-industry fixtures contain no project-specific branches in production code.
-- [ ] Full tests, Ruff, mypy, schema reproducibility, deterministic Packs, and secret scans pass.
+- [x] Every discovered route/interaction candidate is classified, explicitly unclassified, or blocked; none disappears through a generic ineligible reason.
+- [x] The user confirms one domain policy, then only exception questions, then one versioned domain decision.
+- [x] User decisions reference business goals/candidate IDs, never raw route selection.
+- [x] Source JWT and source APIs remain the final user/resource authorization authority.
+- [x] ACC Scope, DeploymentPolicy, and Action approval only narrow authority.
+- [x] Existing optimistic-token Actions remain valid.
+- [x] Server-serialized state transitions are accepted only with implementation/test claims, preview/status reads, retry never, state idempotency, and approval.
+- [x] Coverage reports independent domain and Action axes without score or usable.
+- [x] Evidence drift creates explicit stale decisions and change requests.
+- [x] Cross-industry fixtures contain no project-specific branches in production code.
+- [x] Full tests, Ruff, mypy, schema reproducibility, deterministic Packs, and secret scans pass.
