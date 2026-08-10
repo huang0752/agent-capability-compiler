@@ -12,6 +12,7 @@ from pydantic import TypeAdapter, ValidationError
 from acc_core.contracts import SourceContract
 from acc_core.contracts.fidelity import analyze_operation_schema_fidelity
 from acc_core.diagnostics import Diagnostic
+from acc_core.interactions import CapabilityInteractionContract, UIInteractionInventory
 from acc_core.io import ProjectIOError, load_project_object
 from acc_core.models import (
     ActionOperationV2,
@@ -40,12 +41,17 @@ class ValidationReport:
     operations: dict[str, Operation] = field(default_factory=dict)
     operation_paths: dict[str, str] = field(default_factory=dict)
     capabilities: dict[str, Capability] = field(default_factory=dict)
+    capability_paths: dict[str, str] = field(default_factory=dict)
     source_contracts: dict[str, SourceContract] = field(default_factory=dict)
     source_contract_paths: dict[str, str] = field(default_factory=dict)
     capability_quality: dict[str, CapabilityQuality] = field(default_factory=dict)
     capability_quality_paths: dict[str, str] = field(default_factory=dict)
     policies: dict[str, Policy] = field(default_factory=dict)
     evals: dict[str, Eval] = field(default_factory=dict)
+    ui_interaction_inventory: UIInteractionInventory | None = None
+    ui_interaction_inventory_path: str | None = None
+    interaction_contracts: dict[str, CapabilityInteractionContract] = field(default_factory=dict)
+    interaction_contract_paths: dict[str, str] = field(default_factory=dict)
     diagnostics: list[Diagnostic] = field(default_factory=list)
 
     @property
@@ -534,6 +540,104 @@ def _validate_auth_contract(report: ValidationReport) -> None:
         )
 
 
+def _validate_interaction_sidecar_closure(report: ValidationReport) -> None:
+    """Require exact Capability and interaction closure for a declared UI denominator."""
+
+    inventory = report.ui_interaction_inventory
+    contracts = report.interaction_contracts
+    if inventory is None:
+        if contracts:
+            first_id = sorted(contracts)[0]
+            report.diagnostics.append(
+                Diagnostic(
+                    code="ACC_UI_INTERACTION_INVENTORY_MISSING",
+                    severity="error",
+                    message="InteractionContracts require ui-interaction-inventory.yaml.",
+                    path=report.interaction_contract_paths.get(first_id),
+                    pointer=None,
+                )
+            )
+        return
+
+    if inventory.scope.mode == "none":
+        for capability_id in sorted(contracts):
+            report.diagnostics.append(
+                Diagnostic(
+                    code="ACC_UI_INTERACTION_CONTRACT_ORPHAN",
+                    severity="error",
+                    message="A mode=none UI inventory cannot have InteractionContracts.",
+                    path=report.interaction_contract_paths.get(capability_id),
+                    pointer="/capability_id",
+                )
+            )
+        return
+
+    for capability_id in sorted(set(report.capabilities) - set(contracts)):
+        report.diagnostics.append(
+            Diagnostic(
+                code="ACC_UI_INTERACTION_CONTRACT_MISSING",
+                severity="error",
+                message=(
+                    "A discovered or complete UI inventory requires one "
+                    "InteractionContract per Capability."
+                ),
+                path=report.capability_paths.get(capability_id),
+                pointer=None,
+            )
+        )
+    for capability_id in sorted(set(contracts) - set(report.capabilities)):
+        report.diagnostics.append(
+            Diagnostic(
+                code="ACC_UI_INTERACTION_CONTRACT_ORPHAN",
+                severity="error",
+                message="InteractionContract must reference an existing Capability.",
+                path=report.interaction_contract_paths.get(capability_id),
+                pointer="/capability_id",
+            )
+        )
+
+    known_interactions = {interaction.id for interaction in inventory.interactions}
+    classified: set[str] = set()
+    for capability_id, contract in sorted(contracts.items()):
+        contract_path = report.interaction_contract_paths.get(capability_id)
+        for index, interaction_id in enumerate(contract.interaction_ids):
+            if interaction_id not in known_interactions:
+                report.diagnostics.append(
+                    Diagnostic(
+                        code="ACC_UI_INTERACTION_REFERENCE_UNKNOWN",
+                        severity="error",
+                        message="InteractionContract references an unknown UI interaction.",
+                        path=contract_path,
+                        pointer=f"/interaction_ids/{index}",
+                    )
+                )
+                continue
+            classified.add(interaction_id)
+        for index, omission in enumerate(contract.omissions):
+            if omission.interaction_id not in known_interactions:
+                report.diagnostics.append(
+                    Diagnostic(
+                        code="ACC_UI_INTERACTION_REFERENCE_UNKNOWN",
+                        severity="error",
+                        message="InteractionContract omits an unknown UI interaction.",
+                        path=contract_path,
+                        pointer=f"/omissions/{index}/interaction_id",
+                    )
+                )
+                continue
+            classified.add(omission.interaction_id)
+    for _interaction_id in sorted(known_interactions - classified):
+        report.diagnostics.append(
+            Diagnostic(
+                code="ACC_UI_INTERACTION_UNCLASSIFIED",
+                severity="error",
+                message="Every discovered UI interaction must be adopted or explicitly omitted.",
+                path=report.ui_interaction_inventory_path,
+                pointer=None,
+            )
+        )
+
+
 def validate_project(project_root: str | Path = ".") -> ValidationReport:
     """Validate all Milestone 1 documents under ``project_root``."""
 
@@ -556,6 +660,7 @@ def validate_project(project_root: str | Path = ".") -> ValidationReport:
         identifier_field="id",
         duplicate_code="ACC_CAPABILITY_ID_DUPLICATE",
         diagnostics=report.diagnostics,
+        relative_paths=report.capability_paths,
     )
     report.source_contracts = _load_adapter_collection(
         root,
@@ -575,7 +680,27 @@ def validate_project(project_root: str | Path = ".") -> ValidationReport:
         diagnostics=report.diagnostics,
         relative_paths=report.capability_quality_paths,
     )
+    inventory_path = "ui-interaction-inventory.yaml"
+    if (root / inventory_path).exists() or (root / inventory_path).is_symlink():
+        report.ui_interaction_inventory = _load_model(
+            root,
+            inventory_path,
+            UIInteractionInventory,
+            report.diagnostics,
+        )
+        if report.ui_interaction_inventory is not None:
+            report.ui_interaction_inventory_path = inventory_path
+    report.interaction_contracts = _load_adapter_collection(
+        root,
+        "interaction-contracts",
+        TypeAdapter(CapabilityInteractionContract),
+        identifier_field="capability_id",
+        duplicate_code="ACC_UI_INTERACTION_CONTRACT_DUPLICATE",
+        diagnostics=report.diagnostics,
+        relative_paths=report.interaction_contract_paths,
+    )
     _validate_v2_sidecar_closure(report)
+    _validate_interaction_sidecar_closure(report)
     report.policies = _load_collection(
         root,
         "policies",

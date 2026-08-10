@@ -229,6 +229,7 @@ def _init_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope]:
         "capability-quality",
         "evals",
         "evidence",
+        "interaction-contracts",
         "operations",
         "policies",
         "source-contracts",

@@ -1,0 +1,1533 @@
+{
+  "$defs": {
+    "AllExpression": {
+      "additionalProperties": false,
+      "description": "Require every nested safe expression to hold.",
+      "properties": {
+        "operands": {
+          "items": {
+            "$ref": "#/$defs/ConditionExpression"
+          },
+          "minItems": 1,
+          "title": "Operands",
+          "type": "array"
+        },
+        "operator": {
+          "const": "all",
+          "title": "Operator",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operator",
+        "operands"
+      ],
+      "title": "AllExpression",
+      "type": "object"
+    },
+    "AnyExpression": {
+      "additionalProperties": false,
+      "description": "Require at least one nested safe expression to hold.",
+      "properties": {
+        "operands": {
+          "items": {
+            "$ref": "#/$defs/ConditionExpression"
+          },
+          "minItems": 1,
+          "title": "Operands",
+          "type": "array"
+        },
+        "operator": {
+          "const": "any",
+          "title": "Operator",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operator",
+        "operands"
+      ],
+      "title": "AnyExpression",
+      "type": "object"
+    },
+    "ComparisonExpression": {
+      "additionalProperties": false,
+      "description": "Compare two safe operands without executing source code.",
+      "properties": {
+        "left": {
+          "$ref": "#/$defs/ConditionOperand"
+        },
+        "operator": {
+          "enum": [
+            "eq",
+            "ne",
+            "in"
+          ],
+          "title": "Operator",
+          "type": "string"
+        },
+        "right": {
+          "$ref": "#/$defs/ConditionOperand"
+        }
+      },
+      "required": [
+        "operator",
+        "left",
+        "right"
+      ],
+      "title": "ComparisonExpression",
+      "type": "object"
+    },
+    "ConditionExpression": {
+      "discriminator": {
+        "mapping": {
+          "all": "#/$defs/AllExpression",
+          "any": "#/$defs/AnyExpression",
+          "eq": "#/$defs/ComparisonExpression",
+          "in": "#/$defs/ComparisonExpression",
+          "ne": "#/$defs/ComparisonExpression",
+          "not": "#/$defs/NotExpression",
+          "present": "#/$defs/PresentExpression"
+        },
+        "propertyName": "operator"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/AllExpression"
+        },
+        {
+          "$ref": "#/$defs/AnyExpression"
+        },
+        {
+          "$ref": "#/$defs/NotExpression"
+        },
+        {
+          "$ref": "#/$defs/ComparisonExpression"
+        },
+        {
+          "$ref": "#/$defs/PresentExpression"
+        }
+      ]
+    },
+    "ConditionOperand": {
+      "discriminator": {
+        "mapping": {
+          "literal": "#/$defs/LiteralOperand",
+          "reference": "#/$defs/ReferenceOperand"
+        },
+        "propertyName": "kind"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ReferenceOperand"
+        },
+        {
+          "$ref": "#/$defs/LiteralOperand"
+        }
+      ]
+    },
+    "Evidence": {
+      "additionalProperties": false,
+      "description": "A digest-bound locator supporting current evidence forms.",
+      "properties": {
+        "digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Digest",
+          "type": "string"
+        },
+        "json_pointer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Json Pointer"
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "source_file",
+                "json_document",
+                "openapi",
+                "openapi_operation",
+                "content",
+                "content_summary"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Kind"
+        },
+        "line_end": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Line End"
+        },
+        "line_start": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Line Start"
+        },
+        "locator": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Locator"
+        },
+        "openapi_operation": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Openapi Operation"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Path"
+        },
+        "source_id": {
+          "minLength": 1,
+          "title": "Source Id",
+          "type": "string"
+        },
+        "summary": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Summary"
+        }
+      },
+      "required": [
+        "source_id",
+        "digest"
+      ],
+      "title": "Evidence",
+      "type": "object"
+    },
+    "InputBinding": {
+      "additionalProperties": false,
+      "description": "Map one consumer input to an evidenced client-side source.",
+      "properties": {
+        "cardinality": {
+          "enum": [
+            "one",
+            "optional",
+            "many"
+          ],
+          "title": "Cardinality",
+          "type": "string"
+        },
+        "evidence": {
+          "$ref": "#/$defs/Evidence"
+        },
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "literal_value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JsonValue"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "mapping": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InputMapping"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "source_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Id"
+        },
+        "source_kind": {
+          "enum": [
+            "user_input",
+            "route_parameter",
+            "selected_record",
+            "prior_response",
+            "trusted_context",
+            "literal",
+            "computed",
+            "user_preference"
+          ],
+          "title": "Source Kind",
+          "type": "string"
+        },
+        "source_pointer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Pointer"
+        },
+        "target_pointer": {
+          "title": "Target Pointer",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "source_kind",
+        "target_pointer",
+        "cardinality",
+        "evidence"
+      ],
+      "title": "InputBinding",
+      "type": "object"
+    },
+    "InputMapping": {
+      "additionalProperties": false,
+      "description": "A bounded declarative value mapping recorded by discovery.",
+      "properties": {
+        "kind": {
+          "enum": [
+            "identity",
+            "date",
+            "datetime",
+            "enum",
+            "identifier",
+            "locale",
+            "null",
+            "number",
+            "text"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "mapping": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "propertyNames": {
+            "minLength": 1
+          },
+          "title": "Mapping",
+          "type": "object"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "InputMapping",
+      "type": "object"
+    },
+    "InteractionCondition": {
+      "additionalProperties": false,
+      "description": "Apply a bounded, platform-neutral condition to one semantic target.",
+      "properties": {
+        "evidence": {
+          "$ref": "#/$defs/Evidence"
+        },
+        "expression": {
+          "$ref": "#/$defs/ConditionExpression"
+        },
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "target": {
+          "enum": [
+            "visible",
+            "enabled",
+            "required",
+            "reset"
+          ],
+          "title": "Target",
+          "type": "string"
+        },
+        "target_pointer": {
+          "title": "Target Pointer",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "target",
+        "target_pointer",
+        "expression",
+        "evidence"
+      ],
+      "title": "InteractionCondition",
+      "type": "object"
+    },
+    "InteractionDefault": {
+      "additionalProperties": false,
+      "description": "An evidenced default including authority, precedence, and submission behavior.",
+      "properties": {
+        "authority": {
+          "enum": [
+            "contract",
+            "implementation",
+            "test",
+            "observation"
+          ],
+          "title": "Authority",
+          "type": "string"
+        },
+        "evidence": {
+          "$ref": "#/$defs/Evidence"
+        },
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "override_policy": {
+          "enum": [
+            "caller_allowed",
+            "runtime_only",
+            "forbidden"
+          ],
+          "title": "Override Policy",
+          "type": "string"
+        },
+        "precedence": {
+          "enum": [
+            "caller_over_default",
+            "default_over_caller",
+            "source_default"
+          ],
+          "title": "Precedence",
+          "type": "string"
+        },
+        "source_kind": {
+          "enum": [
+            "literal",
+            "source_response",
+            "trusted_context",
+            "user_preference",
+            "computed"
+          ],
+          "title": "Source Kind",
+          "type": "string"
+        },
+        "source_reference": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Reference"
+        },
+        "submission": {
+          "enum": [
+            "omit",
+            "send",
+            "send_if_changed"
+          ],
+          "title": "Submission",
+          "type": "string"
+        },
+        "target_pointer": {
+          "title": "Target Pointer",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JsonValue"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "target_pointer",
+        "source_kind",
+        "authority",
+        "precedence",
+        "submission",
+        "override_policy",
+        "evidence"
+      ],
+      "title": "InteractionDefault",
+      "type": "object"
+    },
+    "InteractionEvidenceClaim": {
+      "additionalProperties": false,
+      "description": "Bind one inventory claim to immutable source evidence.",
+      "properties": {
+        "authority": {
+          "enum": [
+            "contract",
+            "implementation",
+            "test",
+            "observation"
+          ],
+          "title": "Authority",
+          "type": "string"
+        },
+        "evidence": {
+          "$ref": "#/$defs/Evidence"
+        },
+        "evidence_pointer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Evidence Pointer"
+        },
+        "target_pointer": {
+          "title": "Target Pointer",
+          "type": "string"
+        }
+      },
+      "required": [
+        "target_pointer",
+        "evidence",
+        "authority"
+      ],
+      "title": "InteractionEvidenceClaim",
+      "type": "object"
+    },
+    "InteractionScope": {
+      "additionalProperties": false,
+      "description": "Declare whether the selected client-surface denominator is absent or known.",
+      "properties": {
+        "evidence_sources": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Evidence Sources",
+          "type": "array"
+        },
+        "mode": {
+          "enum": [
+            "none",
+            "discovered",
+            "complete"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "rationale": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rationale"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "title": "InteractionScope",
+      "type": "object"
+    },
+    "InteractionState": {
+      "additionalProperties": false,
+      "description": "One semantic client state available to headless verification.",
+      "properties": {
+        "allowed_next_events": {
+          "items": {
+            "$ref": "#/$defs/InteractionTriggerKind"
+          },
+          "title": "Allowed Next Events",
+          "type": "array"
+        },
+        "entry_condition_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Entry Condition Id"
+        },
+        "evidence": {
+          "$ref": "#/$defs/Evidence"
+        },
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "initial",
+            "loading",
+            "ready",
+            "empty",
+            "no_results",
+            "forbidden",
+            "source_error",
+            "stale"
+          ],
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "allowed_next_events",
+        "evidence"
+      ],
+      "title": "InteractionState",
+      "type": "object"
+    },
+    "InteractionSummary": {
+      "additionalProperties": false,
+      "description": "Deterministic counters derived from the interaction inventory.",
+      "properties": {
+        "interactions": {
+          "minimum": 0,
+          "title": "Interactions",
+          "type": "integer"
+        },
+        "surfaces": {
+          "minimum": 0,
+          "title": "Surfaces",
+          "type": "integer"
+        },
+        "unresolved": {
+          "minimum": 0,
+          "title": "Unresolved",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "surfaces",
+        "interactions",
+        "unresolved"
+      ],
+      "title": "InteractionSummary",
+      "type": "object"
+    },
+    "InteractionTrigger": {
+      "additionalProperties": false,
+      "description": "A framework-independent event that begins one interaction.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/InteractionTriggerKind"
+        },
+        "source_pointer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Pointer"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "InteractionTrigger",
+      "type": "object"
+    },
+    "InteractionTriggerKind": {
+      "enum": [
+        "screen_load",
+        "submit",
+        "change",
+        "select",
+        "confirm",
+        "refresh",
+        "paginate",
+        "sort",
+        "navigate",
+        "system_event"
+      ],
+      "type": "string"
+    },
+    "JsonValue": {},
+    "LiteralOperand": {
+      "additionalProperties": false,
+      "description": "Use one inert JSON-compatible literal in a condition.",
+      "properties": {
+        "kind": {
+          "const": "literal",
+          "title": "Kind",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/JsonValue"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "title": "LiteralOperand",
+      "type": "object"
+    },
+    "NotExpression": {
+      "additionalProperties": false,
+      "description": "Negate one nested safe expression.",
+      "properties": {
+        "operand": {
+          "$ref": "#/$defs/ConditionExpression"
+        },
+        "operator": {
+          "const": "not",
+          "title": "Operator",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operator",
+        "operand"
+      ],
+      "title": "NotExpression",
+      "type": "object"
+    },
+    "OptionCache": {
+      "additionalProperties": false,
+      "description": "Cache policy without assuming a client framework or storage implementation.",
+      "properties": {
+        "max_age_seconds": {
+          "anyOf": [
+            {
+              "maximum": 86400,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Age Seconds"
+        },
+        "mode": {
+          "enum": [
+            "none",
+            "interaction",
+            "session"
+          ],
+          "title": "Mode",
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "title": "OptionCache",
+      "type": "object"
+    },
+    "OptionPagination": {
+      "additionalProperties": false,
+      "description": "Pagination semantics for an option producer.",
+      "properties": {
+        "mode": {
+          "enum": [
+            "none",
+            "offset",
+            "cursor",
+            "page"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "request_pointer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Request Pointer"
+        },
+        "response_pointer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Response Pointer"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "title": "OptionPagination",
+      "type": "object"
+    },
+    "OptionSearch": {
+      "additionalProperties": false,
+      "description": "Search behavior for an option producer.",
+      "properties": {
+        "mode": {
+          "enum": [
+            "none",
+            "client",
+            "server"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "query_pointer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Query Pointer"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "title": "OptionSearch",
+      "type": "object"
+    },
+    "OptionSource": {
+      "additionalProperties": false,
+      "description": "Describe how a consumer input obtains selectable values.",
+      "properties": {
+        "cache": {
+          "$ref": "#/$defs/OptionCache"
+        },
+        "cascade_dependencies": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Cascade Dependencies",
+          "type": "array"
+        },
+        "disabled_pointer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Disabled Pointer"
+        },
+        "empty_behavior": {
+          "enum": [
+            "empty_options",
+            "preserve_selection",
+            "clear_selection"
+          ],
+          "title": "Empty Behavior",
+          "type": "string"
+        },
+        "error_behavior": {
+          "enum": [
+            "fail_closed",
+            "empty_options",
+            "preserve_previous"
+          ],
+          "title": "Error Behavior",
+          "type": "string"
+        },
+        "evidence": {
+          "$ref": "#/$defs/Evidence"
+        },
+        "freshness": {
+          "enum": [
+            "request",
+            "interaction",
+            "session",
+            "source_defined"
+          ],
+          "title": "Freshness",
+          "type": "string"
+        },
+        "group_pointer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Group Pointer"
+        },
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "items_pointer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Items Pointer"
+        },
+        "label_pointer": {
+          "title": "Label Pointer",
+          "type": "string"
+        },
+        "pagination": {
+          "$ref": "#/$defs/OptionPagination"
+        },
+        "producer_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Producer Id"
+        },
+        "request_bindings": {
+          "items": {
+            "$ref": "#/$defs/InputBinding"
+          },
+          "title": "Request Bindings",
+          "type": "array"
+        },
+        "search": {
+          "$ref": "#/$defs/OptionSearch"
+        },
+        "source_kind": {
+          "enum": [
+            "static",
+            "capability",
+            "operation"
+          ],
+          "title": "Source Kind",
+          "type": "string"
+        },
+        "static_options": {
+          "items": {
+            "$ref": "#/$defs/StaticOption"
+          },
+          "title": "Static Options",
+          "type": "array"
+        },
+        "target_pointer": {
+          "title": "Target Pointer",
+          "type": "string"
+        },
+        "value_pointer": {
+          "title": "Value Pointer",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "target_pointer",
+        "source_kind",
+        "request_bindings",
+        "value_pointer",
+        "label_pointer",
+        "search",
+        "pagination",
+        "cache",
+        "freshness",
+        "empty_behavior",
+        "error_behavior",
+        "evidence"
+      ],
+      "title": "OptionSource",
+      "type": "object"
+    },
+    "PresentExpression": {
+      "additionalProperties": false,
+      "description": "Test whether one safe operand is present.",
+      "properties": {
+        "operand": {
+          "$ref": "#/$defs/ConditionOperand"
+        },
+        "operator": {
+          "const": "present",
+          "title": "Operator",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operator",
+        "operand"
+      ],
+      "title": "PresentExpression",
+      "type": "object"
+    },
+    "ReferenceOperand": {
+      "additionalProperties": false,
+      "description": "Read one declared value by an absolute JSON Pointer.",
+      "properties": {
+        "kind": {
+          "const": "reference",
+          "title": "Kind",
+          "type": "string"
+        },
+        "pointer": {
+          "title": "Pointer",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "pointer"
+      ],
+      "title": "ReferenceOperand",
+      "type": "object"
+    },
+    "RelatedDataBinding": {
+      "additionalProperties": false,
+      "description": "Bind producer output to a consumer or semantic view target.",
+      "properties": {
+        "cardinality": {
+          "enum": [
+            "one",
+            "optional",
+            "many"
+          ],
+          "title": "Cardinality",
+          "type": "string"
+        },
+        "evidence": {
+          "$ref": "#/$defs/Evidence"
+        },
+        "failure_isolation": {
+          "enum": [
+            "fail_fast",
+            "independent"
+          ],
+          "title": "Failure Isolation",
+          "type": "string"
+        },
+        "freshness": {
+          "enum": [
+            "request",
+            "interaction",
+            "session",
+            "source_defined"
+          ],
+          "title": "Freshness",
+          "type": "string"
+        },
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "identity_pointer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Identity Pointer"
+        },
+        "ordering": {
+          "enum": [
+            "source",
+            "explicit",
+            "none"
+          ],
+          "title": "Ordering",
+          "type": "string"
+        },
+        "output_pointer": {
+          "title": "Output Pointer",
+          "type": "string"
+        },
+        "producer_id": {
+          "minLength": 1,
+          "title": "Producer Id",
+          "type": "string"
+        },
+        "producer_kind": {
+          "enum": [
+            "capability",
+            "operation"
+          ],
+          "title": "Producer Kind",
+          "type": "string"
+        },
+        "target_pointer": {
+          "title": "Target Pointer",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "producer_kind",
+        "producer_id",
+        "output_pointer",
+        "target_pointer",
+        "cardinality",
+        "ordering",
+        "freshness",
+        "failure_isolation",
+        "evidence"
+      ],
+      "title": "RelatedDataBinding",
+      "type": "object"
+    },
+    "ResultConsumption": {
+      "additionalProperties": false,
+      "description": "Describe a business presentation role without rendering instructions.",
+      "properties": {
+        "evidence": {
+          "$ref": "#/$defs/Evidence"
+        },
+        "field_pointers": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Field Pointers",
+          "type": "array"
+        },
+        "formatting_class": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Formatting Class"
+        },
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "ordering": {
+          "enum": [
+            "source",
+            "explicit",
+            "none"
+          ],
+          "title": "Ordering",
+          "type": "string"
+        },
+        "pagination": {
+          "enum": [
+            "none",
+            "client",
+            "server"
+          ],
+          "title": "Pagination",
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "table",
+            "detail",
+            "summary",
+            "status",
+            "option",
+            "navigation",
+            "download_link"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "source_pointer": {
+          "title": "Source Pointer",
+          "type": "string"
+        },
+        "state_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "State Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "role",
+        "source_pointer",
+        "field_pointers",
+        "ordering",
+        "pagination",
+        "evidence"
+      ],
+      "title": "ResultConsumption",
+      "type": "object"
+    },
+    "StaticOption": {
+      "additionalProperties": false,
+      "description": "One static option preserving JSON value identity and a human label.",
+      "properties": {
+        "disabled": {
+          "default": false,
+          "title": "Disabled",
+          "type": "boolean"
+        },
+        "group": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Group"
+        },
+        "label": {
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/JsonValue"
+        }
+      },
+      "required": [
+        "value",
+        "label"
+      ],
+      "title": "StaticOption",
+      "type": "object"
+    },
+    "UIInteraction": {
+      "additionalProperties": false,
+      "description": "One business-relevant source-client transition or data consumption path.",
+      "properties": {
+        "business_intent": {
+          "minLength": 1,
+          "title": "Business Intent",
+          "type": "string"
+        },
+        "call_order": {
+          "enum": [
+            "sequential",
+            "parallel",
+            "independent"
+          ],
+          "title": "Call Order",
+          "type": "string"
+        },
+        "conditions": {
+          "items": {
+            "$ref": "#/$defs/InteractionCondition"
+          },
+          "title": "Conditions",
+          "type": "array"
+        },
+        "defaults": {
+          "items": {
+            "$ref": "#/$defs/InteractionDefault"
+          },
+          "title": "Defaults",
+          "type": "array"
+        },
+        "evidence_claims": {
+          "items": {
+            "$ref": "#/$defs/InteractionEvidenceClaim"
+          },
+          "title": "Evidence Claims",
+          "type": "array"
+        },
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "input_bindings": {
+          "items": {
+            "$ref": "#/$defs/InputBinding"
+          },
+          "title": "Input Bindings",
+          "type": "array"
+        },
+        "option_sources": {
+          "items": {
+            "$ref": "#/$defs/OptionSource"
+          },
+          "title": "Option Sources",
+          "type": "array"
+        },
+        "related_data": {
+          "items": {
+            "$ref": "#/$defs/RelatedDataBinding"
+          },
+          "title": "Related Data",
+          "type": "array"
+        },
+        "result_consumption": {
+          "items": {
+            "$ref": "#/$defs/ResultConsumption"
+          },
+          "title": "Result Consumption",
+          "type": "array"
+        },
+        "route_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Route Ids",
+          "type": "array"
+        },
+        "states": {
+          "items": {
+            "$ref": "#/$defs/InteractionState"
+          },
+          "title": "States",
+          "type": "array"
+        },
+        "surface_id": {
+          "minLength": 1,
+          "title": "Surface Id",
+          "type": "string"
+        },
+        "trigger": {
+          "$ref": "#/$defs/InteractionTrigger"
+        },
+        "unknowns": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Unknowns",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "surface_id",
+        "business_intent",
+        "trigger",
+        "route_ids",
+        "call_order",
+        "input_bindings",
+        "defaults",
+        "option_sources",
+        "conditions",
+        "related_data",
+        "result_consumption",
+        "states",
+        "evidence_claims",
+        "unknowns"
+      ],
+      "title": "UIInteraction",
+      "type": "object"
+    },
+    "UISurface": {
+      "additionalProperties": false,
+      "description": "One semantic user-visible or client-visible business entry point.",
+      "properties": {
+        "business_purpose": {
+          "minLength": 1,
+          "title": "Business Purpose",
+          "type": "string"
+        },
+        "evidence_sources": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Evidence Sources",
+          "type": "array"
+        },
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "page",
+            "dialog",
+            "panel",
+            "mobile_screen",
+            "command",
+            "embedded_flow"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "route_or_entry": {
+          "minLength": 1,
+          "title": "Route Or Entry",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "route_or_entry",
+        "business_purpose",
+        "evidence_sources"
+      ],
+      "title": "UISurface",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Evidence-backed denominator of source client surfaces and interactions.",
+  "properties": {
+    "interactions": {
+      "items": {
+        "$ref": "#/$defs/UIInteraction"
+      },
+      "title": "Interactions",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "2",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "#/$defs/InteractionScope"
+    },
+    "summary": {
+      "$ref": "#/$defs/InteractionSummary"
+    },
+    "surfaces": {
+      "items": {
+        "$ref": "#/$defs/UISurface"
+      },
+      "title": "Surfaces",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "scope",
+    "surfaces",
+    "interactions",
+    "summary"
+  ],
+  "title": "UIInteractionInventory",
+  "type": "object"
+}

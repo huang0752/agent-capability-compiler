@@ -255,6 +255,14 @@
           "title": "Id",
           "type": "string"
         },
+        "interaction_ids": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Interaction Ids",
+          "type": "array"
+        },
         "kind": {
           "enum": [
             "read",

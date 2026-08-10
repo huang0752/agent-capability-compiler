@@ -8,6 +8,7 @@ from pathlib import Path
 from pydantic import BaseModel, TypeAdapter
 
 from acc_core.contracts import SourceContract
+from acc_core.interactions import CapabilityInteractionContract, UIInteractionInventory
 from acc_core.models import (
     Capability,
     Eval,
@@ -25,11 +26,13 @@ MODEL_SCHEMAS: dict[str, type[BaseModel] | TypeAdapter[object]] = {
     "capability-quality": CapabilityQuality,
     "eval": Eval,
     "evidence": Evidence,
+    "interaction-contract": CapabilityInteractionContract,
     "operation": TypeAdapter(Operation),
     "policy": Policy,
     "project": Project,
     "scope-inventory": ScopeInventory,
     "source-contract": SourceContract,
+    "ui-interaction-inventory": UIInteractionInventory,
 }
 
 

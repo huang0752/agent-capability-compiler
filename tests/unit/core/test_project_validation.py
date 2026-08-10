@@ -165,6 +165,105 @@ def make_valid_project(root: Path) -> Path:
     return project
 
 
+def _interaction_evidence() -> dict[str, object]:
+    return {
+        "source_id": "customer-page",
+        "kind": "source_file",
+        "path": "frontend/customers.ts",
+        "line_start": 1,
+        "line_end": 10,
+        "digest": f"sha256:{'b' * 64}",
+    }
+
+
+def _write_ui_inventory(project: Path, *, mode: str = "discovered") -> None:
+    document: dict[str, object]
+    if mode == "none":
+        document = {
+            "schema_version": "2",
+            "scope": {
+                "mode": "none",
+                "evidence_sources": ["frontend-tree"],
+                "rationale": "The source has no applicable interactive client surface.",
+            },
+            "surfaces": [],
+            "interactions": [],
+            "summary": {"surfaces": 0, "interactions": 0, "unresolved": 0},
+        }
+    else:
+        document = {
+            "schema_version": "2",
+            "scope": {"mode": mode, "evidence_sources": ["frontend-tree"]},
+            "surfaces": [
+                {
+                    "id": "customers",
+                    "kind": "page",
+                    "route_or_entry": "/customers",
+                    "business_purpose": "Inspect customers",
+                    "evidence_sources": ["customer-page"],
+                }
+            ],
+            "interactions": [
+                {
+                    "id": "customers.initial-load",
+                    "surface_id": "customers",
+                    "business_intent": "Load one selected customer",
+                    "trigger": {"kind": "screen_load"},
+                    "route_ids": ["GET /customers/{customer_id}"],
+                    "call_order": "sequential",
+                    "input_bindings": [],
+                    "defaults": [],
+                    "option_sources": [],
+                    "conditions": [],
+                    "related_data": [],
+                    "result_consumption": [],
+                    "states": [],
+                    "evidence_claims": [],
+                    "unknowns": [],
+                }
+            ],
+            "summary": {"surfaces": 1, "interactions": 1, "unresolved": 0},
+        }
+    _write_yaml(project / "ui-interaction-inventory.yaml", document)
+
+
+def _write_interaction_contract(
+    project: Path,
+    *,
+    filename: str = "get_customer.yaml",
+    capability_id: str = "get_customer",
+    interaction_ids: list[str] | None = None,
+    omitted_interaction_ids: list[str] | None = None,
+) -> None:
+    _write_yaml(
+        project / "interaction-contracts" / filename,
+        {
+            "schema_version": "2",
+            "capability_id": capability_id,
+            "interaction_ids": (
+                ["customers.initial-load"] if interaction_ids is None else interaction_ids
+            ),
+            "public_input_bindings": [],
+            "trusted_input_bindings": [],
+            "defaults": [],
+            "option_sources": [],
+            "conditions": [],
+            "related_data": [],
+            "result_consumption": [],
+            "required_scenarios": ["customers.initial-load.success"],
+            "omissions": [
+                {
+                    "interaction_id": interaction_id,
+                    "justification": "The capability intentionally omits this client flow.",
+                    "authority": "implementation",
+                    "evidence": _interaction_evidence(),
+                }
+                for interaction_id in (omitted_interaction_ids or [])
+            ],
+        },
+    )
+
+
 def test_valid_project_loads_all_contracts(tmp_path: Path) -> None:
     project = make_valid_project(tmp_path)
 
@@ -180,6 +279,129 @@ def test_valid_project_loads_all_contracts(tmp_path: Path) -> None:
     assert set(report.capability_quality) == {"get_customer"}
     assert [item.code for item in report.diagnostics] == ["ACC_CAPABILITY_OUTPUT_BOUND_UNKNOWN"]
     assert report.diagnostics[0].severity == "warning"
+
+
+def test_none_interaction_scope_loads_without_capability_contracts(tmp_path: Path) -> None:
+    project = make_valid_project(tmp_path)
+    _write_ui_inventory(project, mode="none")
+
+    report = validate_project(project)
+
+    assert report.ui_interaction_inventory is not None
+    assert report.ui_interaction_inventory.scope.mode == "none"
+    assert report.ui_interaction_inventory_path == "ui-interaction-inventory.yaml"
+    assert report.interaction_contracts == {}
+    assert not any(
+        item.code.startswith("ACC_UI_INTERACTION_CONTRACT") for item in report.diagnostics
+    )
+
+
+@pytest.mark.parametrize("mode", ["discovered", "complete"])
+def test_frontend_scope_requires_one_contract_per_capability(tmp_path: Path, mode: str) -> None:
+    project = make_valid_project(tmp_path)
+    _write_ui_inventory(project, mode=mode)
+
+    report = validate_project(project)
+
+    missing = [
+        item for item in report.diagnostics if item.code == "ACC_UI_INTERACTION_CONTRACT_MISSING"
+    ]
+    assert len(missing) == 1
+    assert missing[0].path == "capabilities/get_customer.yaml"
+
+
+def test_frontend_scope_loads_typed_contract_and_exact_paths(tmp_path: Path) -> None:
+    project = make_valid_project(tmp_path)
+    _write_ui_inventory(project)
+    _write_interaction_contract(project)
+
+    report = validate_project(project)
+
+    assert report.ui_interaction_inventory is not None
+    assert list(report.interaction_contracts) == ["get_customer"]
+    assert report.interaction_contracts["get_customer"].interaction_ids == [
+        "customers.initial-load"
+    ]
+    assert report.interaction_contract_paths == {
+        "get_customer": "interaction-contracts/get_customer.yaml"
+    }
+    assert not any(item.code.startswith("ACC_UI_") for item in report.diagnostics)
+
+
+def test_frontend_scope_rejects_orphan_and_duplicate_capability_contracts(tmp_path: Path) -> None:
+    project = make_valid_project(tmp_path)
+    _write_ui_inventory(project)
+    _write_interaction_contract(project, filename="a.yaml", capability_id="unknown")
+    _write_interaction_contract(project, filename="b.yaml", capability_id="unknown")
+
+    report = validate_project(project)
+
+    codes = [item.code for item in report.diagnostics]
+    assert "ACC_UI_INTERACTION_CONTRACT_DUPLICATE" in codes
+    assert "ACC_UI_INTERACTION_CONTRACT_ORPHAN" in codes
+
+
+def test_frontend_scope_rejects_unknown_and_unclassified_interactions(tmp_path: Path) -> None:
+    project = make_valid_project(tmp_path)
+    _write_ui_inventory(project)
+    _write_interaction_contract(project, interaction_ids=["customers.unknown"])
+
+    report = validate_project(project)
+
+    codes = {item.code for item in report.diagnostics}
+    assert "ACC_UI_INTERACTION_REFERENCE_UNKNOWN" in codes
+    assert "ACC_UI_INTERACTION_UNCLASSIFIED" in codes
+
+
+def test_frontend_scope_accepts_evidence_backed_explicit_omission(tmp_path: Path) -> None:
+    project = make_valid_project(tmp_path)
+    _write_ui_inventory(project)
+    _write_interaction_contract(
+        project,
+        interaction_ids=[],
+        omitted_interaction_ids=["customers.initial-load"],
+    )
+
+    report = validate_project(project)
+
+    assert [item.code for item in report.diagnostics if item.code.startswith("ACC_UI_")] == []
+
+
+def test_frontend_scope_allows_one_capability_to_adopt_what_another_omits(
+    tmp_path: Path,
+) -> None:
+    project = make_valid_project(tmp_path)
+    _write_ui_inventory(project)
+    capability_path = project / "capabilities" / "get_customer.yaml"
+    capability = yaml.safe_load(capability_path.read_text(encoding="utf-8"))
+    capability.update(
+        id="list_customers",
+        title="List customer context",
+        description="List customer context through the shared source operation.",
+        evals=["list-customers-normal"],
+    )
+    _write_yaml(project / "capabilities" / "list_customers.yaml", capability)
+    eval_path = project / "evals" / "get-customer-normal.yaml"
+    eval_document = yaml.safe_load(eval_path.read_text(encoding="utf-8"))
+    eval_document.update(id="list-customers-normal", capability="list_customers")
+    _write_yaml(project / "evals" / "list-customers-normal.yaml", eval_document)
+    quality_path = project / "capability-quality" / "get_customer.yaml"
+    quality = yaml.safe_load(quality_path.read_text(encoding="utf-8"))
+    quality["capability_id"] = "list_customers"
+    _write_yaml(project / "capability-quality" / "list_customers.yaml", quality)
+    _write_interaction_contract(project, filename="get_customer.yaml")
+    _write_interaction_contract(
+        project,
+        filename="list_customers.yaml",
+        capability_id="list_customers",
+        interaction_ids=[],
+        omitted_interaction_ids=["customers.initial-load"],
+    )
+
+    report = validate_project(project)
+
+    assert set(report.capabilities) == {"get_customer", "list_customers"}, report.diagnostics
+    assert [item.code for item in report.diagnostics if item.code.startswith("ACC_UI_")] == []
 
 
 def _set_provider_auth(project: Path, auth: dict[str, object]) -> None:

@@ -33,6 +33,8 @@ EXPORTED_SCHEMAS = {
     "project.schema.json",
     "scope-inventory.schema.json",
     "source-contract.schema.json",
+    "interaction-contract.schema.json",
+    "ui-interaction-inventory.schema.json",
 }
 PROJECT_DIRECTORIES = {
     "capabilities",
@@ -42,6 +44,7 @@ PROJECT_DIRECTORIES = {
     "operations",
     "policies",
     "source-contracts",
+    "interaction-contracts",
 }
 
 
@@ -1159,6 +1162,7 @@ def test_init_creates_minimal_project_and_never_overwrites(tmp_path: Path) -> No
     assert project_document["quality"] == {"profile": "standard"}
     assert project_document["provider"]["auth"] == {"kind": "none"}
     assert {entry.name for entry in project.iterdir() if entry.is_dir()} >= PROJECT_DIRECTORIES
+    assert not (project / "ui-interaction-inventory.yaml").exists()
 
     original = (project / "project.yaml").read_text(encoding="utf-8")
     protected_content = f"{original}\n# this existing project must not be overwritten\n"
@@ -1240,6 +1244,14 @@ def test_schema_exports_all_models_as_draft_2020_12(tmp_path: Path) -> None:
         (output / "scope-inventory.schema.json").read_text(encoding="utf-8")
     )
     assert scope_inventory_schema["properties"]["schema_version"]["const"] == "2"
+    ui_inventory_schema = json.loads(
+        (output / "ui-interaction-inventory.schema.json").read_text(encoding="utf-8")
+    )
+    assert ui_inventory_schema["properties"]["schema_version"]["const"] == "2"
+    interaction_contract_schema = json.loads(
+        (output / "interaction-contract.schema.json").read_text(encoding="utf-8")
+    )
+    assert interaction_contract_schema["properties"]["schema_version"]["const"] == "2"
 
 
 def test_validate_accepts_an_evidence_bound_project(tmp_path: Path) -> None:
