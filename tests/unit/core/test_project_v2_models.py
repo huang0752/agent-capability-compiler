@@ -60,6 +60,7 @@ def test_schema_exports_use_only_canonical_current_names() -> None:
         "capability-quality",
         "domain-change-request",
         "domain-decision",
+        "domain-evidence-change-set",
         "domain-map",
         "eval",
         "evidence",

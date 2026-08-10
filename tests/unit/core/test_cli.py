@@ -39,6 +39,7 @@ EXPORTED_SCHEMAS = {
     "capability-candidates.schema.json",
     "domain-decision.schema.json",
     "domain-change-request.schema.json",
+    "domain-evidence-change-set.schema.json",
 }
 PROJECT_DIRECTORIES = {
     "capabilities",
@@ -1286,9 +1287,15 @@ def test_schema_exports_all_models_as_draft_2020_12(tmp_path: Path) -> None:
         "capability-candidates.schema.json",
         "domain-decision.schema.json",
         "domain-change-request.schema.json",
+        "domain-evidence-change-set.schema.json",
     ):
         domain_schema = json.loads((output / filename).read_text(encoding="utf-8"))
         assert domain_schema["properties"]["schema_version"]["const"] == "2"
+    change_input_schema = json.loads(
+        (output / "domain-evidence-change-set.schema.json").read_text(encoding="utf-8")
+    )
+    assert change_input_schema["properties"]["changed_evidence"]["minItems"] == 1
+    assert change_input_schema["properties"]["changed_evidence"]["maxItems"] == 1000
     interaction_contract_schema = json.loads(
         (output / "interaction-contract.schema.json").read_text(encoding="utf-8")
     )

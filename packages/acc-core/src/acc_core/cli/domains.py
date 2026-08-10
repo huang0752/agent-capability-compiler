@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -10,13 +13,18 @@ from pydantic import ValidationError
 from acc_core.diagnostics import Diagnostic
 from acc_core.domains import (
     CapabilityCandidate,
+    DomainChangeRequest,
     DomainDecision,
     DomainReadiness,
+    EvidenceChangeSet,
     analyze_candidate_readiness,
     analyze_domain_readiness,
+    analyze_project_domain_impact,
+    build_change_request,
     domain_decision_digest,
 )
-from acc_core.io import ProjectIOError, load_project_object
+from acc_core.io import ProjectIOError, load_project_object, resolve_project_path
+from acc_core.quality.output_size import canonical_json_bytes
 from acc_core.validation import (
     ValidationReport,
     validate_project,
@@ -190,9 +198,7 @@ def _decision_for_domain(report: ValidationReport, domain_id: str) -> DomainDeci
     return decisions[-1] if decisions else None
 
 
-def show_domain(
-    project: Path, domain_id: str
-) -> tuple[dict[str, Any] | None, list[Diagnostic]]:
+def show_domain(project: Path, domain_id: str) -> tuple[dict[str, Any] | None, list[Diagnostic]]:
     """Show one bounded domain summary without evidence contents or free-form gap text."""
 
     report, diagnostics = _domain_report(project)
@@ -219,9 +225,7 @@ def show_domain(
                 pointer="/domains",
             )
         ]
-    candidates = {
-        item.id: item for item in report.capability_candidate_ledger.candidates
-    }
+    candidates = {item.id: item for item in report.capability_candidate_ledger.candidates}
     candidate_summaries: list[dict[str, Any]] = []
     for candidate_id in domain.candidate_ids:
         candidate = candidates.get(candidate_id)
@@ -286,9 +290,7 @@ def check_domain_review(
                 pointer="/domain_id",
             )
         ]
-    candidates = {
-        item.id: item for item in report.capability_candidate_ledger.candidates
-    }
+    candidates = {item.id: item for item in report.capability_candidate_ledger.candidates}
     route_ids = {
         route_id
         for item in report.capability_candidate_ledger.candidates
@@ -339,50 +341,151 @@ def check_domain_review(
     return {"domain_id": decision.domain_id, "revision": decision.revision, "valid": True}, []
 
 
-def impact_domain_change(
-    project: Path, request_id: str
-) -> tuple[dict[str, Any] | None, list[Diagnostic]]:
-    """Return a bounded impact report from a typed change request without writing state."""
+def _active_domain_decision(report: ValidationReport, domain_id: str) -> DomainDecision | None:
+    assert report.domain_map is not None
+    domain = next(item for item in report.domain_map.domains if item.id == domain_id)
+    reference = domain.active_decision_ref
+    if reference is None:
+        return None
+    decision = report.domain_decisions.get((reference.domain_id, reference.revision))
+    if decision is None or domain_decision_digest(decision) != reference.decision_digest:
+        return None
+    return decision
 
-    report = validate_project(project)
-    request = report.domain_change_requests.get(request_id)
-    if request is None:
-        return None, [
-            _diagnostic(
-                "ACC_DOMAIN_CHANGE_UNKNOWN",
-                "Requested domain change does not exist.",
-                path="domain-change-requests",
-                pointer=None,
-            )
-        ]
+
+def _write_change_requests(project: Path, requests: list[DomainChangeRequest]) -> list[str]:
+    directory = resolve_project_path(project, "domain-change-requests")
+    directory.mkdir(mode=0o755, exist_ok=True)
+    written: list[str] = []
+    for request in requests:
+        request_id = request.id
+        file_id = hashlib.sha256(request_id.encode()).hexdigest()
+        relative_path = f"domain-change-requests/{file_id}.json"
+        target = resolve_project_path(project, relative_path)
+        payload = canonical_json_bytes(request.model_dump(mode="json")) + b"\n"
+        if target.exists():
+            if target.read_bytes() != payload:
+                raise OSError("existing change request does not match canonical content")
+            written.append(relative_path)
+            continue
+
+        temporary_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                dir=directory,
+                prefix=".acc-domain-change-",
+                delete=False,
+            ) as temporary:
+                temporary.write(payload)
+                temporary.flush()
+                os.fsync(temporary.fileno())
+                temporary_path = Path(temporary.name)
+            try:
+                os.link(temporary_path, target)
+            except FileExistsError:
+                if target.read_bytes() != payload:
+                    raise OSError(
+                        "concurrent change request does not match canonical content"
+                    ) from None
+        finally:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
+        written.append(relative_path)
+    return written
+
+
+def analyze_domain_changes(
+    project: Path,
+    change_path: str,
+    *,
+    write: bool = False,
+) -> tuple[dict[str, Any] | None, list[Diagnostic]]:
+    """Analyze a bounded Evidence delta against the full validated Project graph."""
+
+    report, diagnostics = _domain_report(project)
+    if diagnostics:
+        return None, diagnostics
     if not report.ok:
         return None, [
             _diagnostic(
                 "ACC_DOMAIN_IMPACT_PROJECT_INVALID",
-                "Domain impact requires a structurally closed Project and ChangeRequest.",
-                path=report.domain_change_request_paths.get(request_id),
+                "Domain impact requires a structurally valid typed Project graph.",
+                path=None,
                 pointer=None,
             )
         ]
+    try:
+        document = load_project_object(project, change_path)
+        change_set = EvidenceChangeSet.model_validate(document)
+    except ProjectIOError as exc:
+        return None, [_diagnostic(exc.code, str(exc), path=change_path, pointer=None)]
+    except ValidationError:
+        return None, [
+            _diagnostic(
+                "ACC_DOMAIN_IMPACT_INPUT_INVALID",
+                "Changed Evidence input does not satisfy the bounded current contract.",
+                path=change_path,
+                pointer="/",
+            )
+        ]
+
+    try:
+        impact = analyze_project_domain_impact(
+            report=report,
+            changed_evidence=change_set.changed_evidence,
+        )
+        requests = []
+        for domain_impact in impact.domains:
+            previous = _active_domain_decision(report, domain_impact.domain_id)
+            if previous is None:
+                continue
+            requests.append(
+                build_change_request(
+                    impact=domain_impact,
+                    previous_decision=previous,
+                    changed_evidence=change_set.changed_evidence,
+                    created_at=change_set.observed_at,
+                )
+            )
+        written = _write_change_requests(project, requests) if write else []
+    except (OSError, ValueError):
+        return None, [
+            _diagnostic(
+                "ACC_DOMAIN_IMPACT_FAILED",
+                "Domain impact could not produce canonical change requests.",
+                path=change_path,
+                pointer=None,
+            )
+        ]
+
     return {
-        "id": request.id,
-        "domain_id": request.domain_id,
-        "status": request.status,
-        "impact_class": request.impact_class,
-        "deployment_effect": request.deployment_effect,
-        "recommended_domain_status": request.recommended_domain_status,
-        "affected_candidate_ids": request.affected_candidate_ids,
-        "affected_capability_ids": request.affected_capability_ids,
-        "changed_evidence": [
-            {"evidence_ref": item.evidence_ref, "change": item.change}
-            for item in request.changed_evidence
+        "evidence_graph_scope": impact.evidence_graph_scope,
+        "affected_domain_ids": list(impact.affected_domain_ids),
+        "stale_domain_ids": list(impact.stale_domain_ids),
+        "unaffected_domain_ids": list(impact.unaffected_domain_ids),
+        "unmatched_evidence_ids": list(impact.unmatched_evidence_ids),
+        "unmatched_evidence_digests": list(impact.unmatched_evidence_digests),
+        "domains": [
+            {
+                "domain_id": item.domain_id,
+                "direct": item.direct,
+                "upstream_domain_ids": list(item.upstream_domain_ids),
+                "affected_candidate_ids": list(item.affected_candidate_ids),
+                "affected_capability_ids": list(item.affected_capability_ids),
+                "impact_class": item.impact_class,
+                "security_axes": list(item.security_axes),
+            }
+            for item in impact.domains
         ],
+        "proposed_change_requests": [item.model_dump(mode="json") for item in requests],
+        "written_paths": written,
     }, []
 
 
 __all__ = [
+    "analyze_domain_changes",
     "check_domain_review",
-    "impact_domain_change",
     "show_domain",
     "status_domains",
 ]

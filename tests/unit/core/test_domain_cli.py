@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 from pathlib import Path
 from typing import cast
 
@@ -9,8 +10,8 @@ import pytest
 import yaml
 
 from acc_core.cli.domains import (
+    analyze_domain_changes,
     check_domain_review,
-    impact_domain_change,
     show_domain,
     status_domains,
 )
@@ -26,6 +27,11 @@ from acc_core.validation import validate_project
 def _write(path: Path, value: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(value, sort_keys=False), encoding="utf-8")
+
+
+def _write_json(path: Path, value: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value), encoding="utf-8")
 
 
 def _claims() -> dict[str, object]:
@@ -245,9 +251,7 @@ def test_status_and_show_fail_closed_on_invalid_project_baseline(tmp_path: Path)
     assert review_result is None
     assert [item.code for item in status_diagnostics] == ["ACC_DOMAIN_PROJECT_INVALID"]
     assert [item.code for item in show_diagnostics] == ["ACC_DOMAIN_PROJECT_INVALID"]
-    assert "ACC_DOMAIN_REVIEW_PROJECT_INVALID" in {
-        item.code for item in review_diagnostics
-    }
+    assert "ACC_DOMAIN_REVIEW_PROJECT_INVALID" in {item.code for item in review_diagnostics}
 
 
 def test_review_check_accepts_candidate_and_goal_but_rejects_route_ids(tmp_path: Path) -> None:
@@ -269,9 +273,7 @@ def test_review_check_accepts_candidate_and_goal_but_rejects_route_ids(tmp_path:
     route_choice = copy.deepcopy(review)
     route_choice["candidate_dispositions"][0]["candidate_id"] = "route.alpha.search"  # type: ignore[index]
     route_choice["candidate_snapshot_ids"] = ["route.alpha.search"]
-    route_choice["candidate_snapshot_digest"] = aggregate_reference_digest(
-        ["route.alpha.search"]
-    )
+    route_choice["candidate_snapshot_digest"] = aggregate_reference_digest(["route.alpha.search"])
     _write(project / "review.yaml", route_choice)
     _result, diagnostics = check_domain_review(project, "review.yaml")
     assert [item.code for item in diagnostics] == ["ACC_DOMAIN_REVIEW_ROUTE_ID_FORBIDDEN"]
@@ -376,80 +378,6 @@ def test_review_missing_domain_candidate_fails_closed_without_crashing(tmp_path:
     } <= {item.code for item in report.diagnostics}
 
 
-def test_impact_reports_changed_references_without_digest_or_summary(tmp_path: Path) -> None:
-    project, ledger = _project(tmp_path)
-    decision = _review(ledger)
-    decision["status"] = "stale"
-    decision_digest = domain_decision_digest(decision)
-    domain_map = yaml.safe_load((project / "domain-map.yaml").read_text(encoding="utf-8"))
-    domain_map["domains"][0]["status"] = "stale"
-    domain_map["domains"][0]["dependency_domain_ids"] = []
-    domain_map["domains"][1]["dependency_domain_ids"] = []
-    domain_map["domains"][0]["active_decision_ref"] = {
-        "domain_id": "alpha",
-        "revision": 1,
-        "decision_digest": decision_digest,
-    }
-    domain_map["domains"][2]["status"] = "in_progress"
-    domain_map["domains"][2]["active_decision_ref"] = None
-    _write(project / "domain-map.yaml", domain_map)
-    _write(project / "domain-decisions" / "alpha.yaml", decision)
-    _write(
-        project / "evidence" / "alpha-source.yaml",
-        {
-            "source_id": "alpha-source",
-            "kind": "content_summary",
-            "summary": "Changed alpha source evidence.",
-            "digest": "sha256:" + "7" * 64,
-        },
-    )
-    request = {
-        "schema_version": "2",
-        "id": "alpha-change-1",
-        "domain_id": "alpha",
-        "status": "proposed",
-        "created_at": "2026-08-10T00:00:00Z",
-        "previous_decision": {
-            "domain_id": "alpha",
-            "revision": 1,
-            "decision_digest": decision_digest,
-        },
-        "affected_candidate_ids": ["alpha.search"],
-        "affected_capability_ids": [],
-        "changed_evidence": [
-            {
-                "evidence_ref": "alpha-source",
-                "change": "modified",
-                "old_digest": "sha256:" + "6" * 64,
-                "new_digest": "sha256:" + "7" * 64,
-            }
-        ],
-        "impact_class": "security_relevant",
-        "recommended_domain_status": "stale",
-        "recommended_decision_digest": "sha256:" + "8" * 64,
-        "deployment_effect": "disable_affected_capabilities",
-        "impact_summary": "PRIVATE-SOURCE-SUMMARY",
-        "confirmation": None,
-        "applied_decision_ref": None,
-    }
-    _write(project / "domain-change-requests" / "alpha-change.yaml", request)
-
-    result, diagnostics = impact_domain_change(project, "alpha-change-1")
-
-    assert diagnostics == []
-    assert result is not None
-    assert result["changed_evidence"] == [
-        {"evidence_ref": "alpha-source", "change": "modified"}
-    ]
-    assert "PRIVATE-SOURCE-SUMMARY" not in str(result)
-    assert "sha256:" not in str(result)
-
-    (project / "evidence" / "alpha-source.yaml").unlink()
-    result, diagnostics = impact_domain_change(project, "alpha-change-1")
-    assert result is None
-    assert [item.code for item in diagnostics] == ["ACC_DOMAIN_IMPACT_PROJECT_INVALID"]
-
-
 def test_domains_cli_emits_one_stable_json_envelope(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -471,12 +399,184 @@ def test_domains_review_cli_requires_explicit_check_mode(
     project, ledger = _project(tmp_path)
     _write(project / "review.yaml", _review(ledger))
 
-    exit_code = main(
-        ["domains", "review", "review.yaml", "--project", str(project), "--json"]
-    )
+    exit_code = main(["domains", "review", "review.yaml", "--project", str(project), "--json"])
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
 
     assert exit_code == 2
     assert payload["diagnostics"][0]["code"] == "ACC_CLI_USAGE"
     assert "--check" in payload["diagnostics"][0]["message"]
+
+
+def _incremental_impact_project(tmp_path: Path) -> Path:
+    project, ledger = _project(tmp_path)
+    candidates = cast(list[dict[str, object]], ledger["candidates"])
+    alpha = next(item for item in candidates if item["id"] == "alpha.search")
+    claims = cast(dict[str, object], alpha["claims"])
+    claims["schema"] = {"status": "proven", "evidence_refs": ["alpha-source"]}
+    _write(project / "capability-candidates.yaml", ledger)
+    _write(
+        project / "evidence" / "alpha-source.yaml",
+        {
+            "source_id": "alpha-source",
+            "kind": "content_summary",
+            "summary": "Bounded source contract evidence.",
+            "digest": "sha256:" + "6" * 64,
+        },
+    )
+    decision = _review(ledger)
+    decision["status"] = "stale"
+    decision["evidence_snapshot"] = [
+        {"evidence_ref": "alpha-source", "digest": "sha256:" + "6" * 64}
+    ]
+    decision["evidence_digest"] = aggregate_reference_digest(
+        cast(list[object], decision["evidence_snapshot"])
+    )
+    decision_digest = domain_decision_digest(decision)
+    domain_map = yaml.safe_load((project / "domain-map.yaml").read_text(encoding="utf-8"))
+    domain_map["domains"][0]["status"] = "stale"
+    domain_map["domains"][0]["active_decision_ref"] = {
+        "domain_id": "alpha",
+        "revision": 1,
+        "decision_digest": decision_digest,
+    }
+    _write(project / "domain-map.yaml", domain_map)
+    _write(project / "domain-decisions" / "alpha.yaml", decision)
+    _write_json(
+        project / "changes.json",
+        {
+            "schema_version": "2",
+            "observed_at": "2026-08-10T02:00:00Z",
+            "changed_evidence": [
+                {
+                    "evidence_ref": "alpha-source",
+                    "change": "modified",
+                    "old_digest": "sha256:" + "6" * 64,
+                    "new_digest": "sha256:" + "7" * 64,
+                }
+            ],
+        },
+    )
+    return project
+
+
+def test_domains_impact_analyzes_bounded_change_input_from_full_project_graph(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project = _incremental_impact_project(tmp_path)
+
+    exit_code = main(
+        [
+            "domains",
+            "impact",
+            str(project),
+            "--changed-evidence",
+            "changes.json",
+            "--json",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["result"]["evidence_graph_scope"] == "validated_project"
+    assert payload["result"]["stale_domain_ids"] == ["alpha"]
+    assert payload["result"]["unaffected_domain_ids"] == ["beta", "core"]
+    assert len(payload["result"]["proposed_change_requests"]) == 1
+    request = payload["result"]["proposed_change_requests"][0]
+    assert request["impact_class"] == "descriptive_only"
+    assert request["deployment_effect"] == "audit_warning"
+
+
+def test_domains_impact_write_is_atomic_and_idempotent(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project = _incremental_impact_project(tmp_path)
+    arguments = [
+        "domains",
+        "impact",
+        str(project),
+        "--changed-evidence",
+        "changes.json",
+        "--write",
+        "--json",
+    ]
+
+    assert main(arguments) == 0
+    first_payload = json.loads(capsys.readouterr().out)
+    written = list((project / "domain-change-requests").glob("*.json"))
+    assert len(written) == 1
+    first_bytes = written[0].read_bytes()
+
+    assert main(arguments) == 0
+    second_payload = json.loads(capsys.readouterr().out)
+    assert list((project / "domain-change-requests").glob("*.json")) == written
+    assert written[0].read_bytes() == first_bytes
+    assert second_payload["result"] == first_payload["result"]
+
+
+def test_domains_impact_rejects_unbounded_shape_without_echoing_input(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project = _incremental_impact_project(tmp_path)
+    _write_json(
+        project / "bad-change.json",
+        {
+            "schema_version": "2",
+            "observed_at": "2026-08-10T02:00:00Z",
+            "changed_evidence": [],
+            "private_token": "DO-NOT-ECHO-THIS",
+        },
+    )
+
+    exit_code = main(
+        [
+            "domains",
+            "impact",
+            str(project),
+            "--changed-evidence",
+            "bad-change.json",
+            "--json",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 3
+    assert "DO-NOT-ECHO-THIS" not in captured.out
+    assert json.loads(captured.out)["diagnostics"][0]["code"] == ("ACC_DOMAIN_IMPACT_INPUT_INVALID")
+
+
+def test_domains_impact_rejects_symlink_change_input(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project = _incremental_impact_project(tmp_path)
+    outside = tmp_path / "outside.json"
+    outside.write_text((project / "changes.json").read_text(encoding="utf-8"), encoding="utf-8")
+    os.symlink(outside, project / "linked-change.json")
+
+    exit_code = main(
+        [
+            "domains",
+            "impact",
+            str(project),
+            "--changed-evidence",
+            "linked-change.json",
+            "--json",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 3
+    assert payload["diagnostics"][0]["code"] == "ACC_IO_SYMLINK_REJECTED"
+
+
+def test_domains_impact_write_rejects_symlink_output_directory(tmp_path: Path) -> None:
+    project = _incremental_impact_project(tmp_path)
+    outside = tmp_path / "outside-requests"
+    outside.mkdir()
+    os.symlink(outside, project / "domain-change-requests")
+
+    result, diagnostics = analyze_domain_changes(project, "changes.json", write=True)
+
+    assert result is None
+    assert [item.code for item in diagnostics] == ["ACC_DOMAIN_IMPACT_PROJECT_INVALID"]
+    assert list(outside.iterdir()) == []

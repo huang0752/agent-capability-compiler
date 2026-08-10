@@ -13,6 +13,7 @@ from acc_core.domains import (
     DomainChangeRequest,
     DomainDecision,
     DomainMap,
+    EvidenceChangeSet,
 )
 from acc_core.interactions import CapabilityInteractionContract, UIInteractionInventory
 from acc_core.models import (
@@ -42,6 +43,7 @@ MODEL_SCHEMAS: dict[str, type[BaseModel] | TypeAdapter[object]] = {
     "domain-map": DomainMap,
     "capability-candidates": CapabilityCandidateLedger,
     "domain-decision": DomainDecision,
+    "domain-evidence-change-set": EvidenceChangeSet,
     "domain-change-request": DomainChangeRequest,
 }
 

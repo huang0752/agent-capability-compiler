@@ -10,6 +10,14 @@ from acc_core.domains.analyze import (
     analyze_candidate_readiness,
     analyze_domain_readiness,
 )
+from acc_core.domains.impact import (
+    DomainEvidenceImpact,
+    DomainImpactAnalysis,
+    EvidenceChangeSet,
+    analyze_domain_impact,
+    analyze_project_domain_impact,
+    build_change_request,
+)
 from acc_core.domains.models import (
     AuthorizationBoundaryClaim,
     CandidateClaims,
@@ -55,10 +63,13 @@ __all__ = [
     "DomainDecision",
     "DomainDecisionRef",
     "DomainEntry",
+    "DomainEvidenceImpact",
+    "DomainImpactAnalysis",
     "DomainMap",
     "DomainPolicy",
     "DomainReadiness",
     "DomainStatus",
+    "EvidenceChangeSet",
     "EvidenceSnapshotRef",
     "FactClaim",
     "FactClaimStatus",
@@ -69,7 +80,10 @@ __all__ = [
     "VerificationLevel",
     "aggregate_reference_digest",
     "analyze_candidate_readiness",
+    "analyze_domain_impact",
     "analyze_domain_readiness",
+    "analyze_project_domain_impact",
+    "build_change_request",
     "capability_candidate_ledger_digest",
     "domain_decision_digest",
 ]

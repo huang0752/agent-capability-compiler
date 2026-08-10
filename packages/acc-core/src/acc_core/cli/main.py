@@ -19,8 +19,8 @@ import yaml
 from pydantic import JsonValue, ValidationError
 
 from acc_core.cli.domains import (
+    analyze_domain_changes,
     check_domain_review,
-    impact_domain_change,
     show_domain,
     status_domains,
 )
@@ -117,10 +117,11 @@ def _parser() -> AccArgumentParser:
     _add_json_argument(domains_review_parser)
     domains_review_parser.set_defaults(handler=_domains_command)
     domains_impact_parser = domains_subparsers.add_parser(
-        "impact", help="show one domain evidence-change impact"
+        "impact", help="analyze bounded Evidence changes"
     )
-    domains_impact_parser.add_argument("request_id")
-    domains_impact_parser.add_argument("--project", default=".")
+    domains_impact_parser.add_argument("path", nargs="?", default=".")
+    domains_impact_parser.add_argument("--changed-evidence", required=True)
+    domains_impact_parser.add_argument("--write", action="store_true")
     _add_json_argument(domains_impact_parser)
     domains_impact_parser.set_defaults(handler=_domains_command)
 
@@ -520,8 +521,10 @@ def _domains_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope
             Path(str(arguments.project)).expanduser().resolve(), str(arguments.review_path)
         )
     else:
-        result, diagnostics = impact_domain_change(
-            Path(str(arguments.project)).expanduser().resolve(), str(arguments.request_id)
+        result, diagnostics = analyze_domain_changes(
+            Path(str(arguments.path)).expanduser().resolve(),
+            str(arguments.changed_evidence),
+            write=bool(arguments.write),
         )
     if result is None:
         return EXIT_INPUT, ResultEnvelope(

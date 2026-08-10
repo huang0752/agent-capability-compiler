@@ -698,8 +698,7 @@ def validate_proposed_domain_decision(
         if (
             evidence is None
             or evidence.digest != confirmation.source_text_digest
-            or snapshot.get(confirmation.source_evidence_ref)
-            != confirmation.source_text_digest
+            or snapshot.get(confirmation.source_evidence_ref) != confirmation.source_text_digest
         ):
             diagnostics.append(
                 Diagnostic(
@@ -1135,14 +1134,30 @@ def _validate_domain_sidecar_closure(
                     )
                 )
         for index, evidence in enumerate(request.changed_evidence):
-            expected_digest = evidence.new_digest or evidence.old_digest
-            _require_evidence(
-                report,
-                evidence.evidence_ref,
-                digest=expected_digest,
-                path=path,
-                pointer=f"/changed_evidence/{index}/evidence_ref",
-            )
+            registered = report.evidence_registry.get(evidence.evidence_ref)
+            pointer = f"/changed_evidence/{index}/evidence_ref"
+            if registered is None:
+                _require_evidence(
+                    report,
+                    evidence.evidence_ref,
+                    digest=None,
+                    path=path,
+                    pointer=pointer,
+                )
+            elif registered.digest not in {
+                digest
+                for digest in (evidence.old_digest, evidence.new_digest)
+                if digest is not None
+            }:
+                report.diagnostics.append(
+                    Diagnostic(
+                        code="ACC_DOMAIN_EVIDENCE_DIGEST_MISMATCH",
+                        severity="error",
+                        message=("Changed Evidence must bind an exact before or after digest."),
+                        path=path,
+                        pointer=pointer,
+                    )
+                )
         confirmation = request.confirmation
         if confirmation is not None:
             _require_evidence(
@@ -1231,15 +1246,15 @@ def _validate_domain_sidecar_closure(
                 if diagnostic.pointer is not None and diagnostic.pointer.startswith("/candidates/")
                 else decision_path
             )
-            pointer = diagnostic.pointer
+            readiness_pointer: str | None = diagnostic.pointer
             if (
                 readiness_decision is None
-                and pointer is not None
-                and pointer.startswith("/dependency_domain_ids/")
+                and readiness_pointer is not None
+                and readiness_pointer.startswith("/dependency_domain_ids/")
             ):
-                pointer = f"/domains/{domain_index}{pointer}"
+                readiness_pointer = f"/domains/{domain_index}{readiness_pointer}"
             report.diagnostics.append(
-                diagnostic.model_copy(update={"path": path, "pointer": pointer})
+                diagnostic.model_copy(update={"path": path, "pointer": readiness_pointer})
             )
 
 
