@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+from typing import Any, cast
 
 import pytest
+from pydantic import TypeAdapter
 
 from acc_core.interactions import (
     CapabilityInteractionContract,
     UIInteractionInventory,
 )
 from acc_core.interactions.compile import InteractionCompilationError, compile_interactions
+from acc_core.models import Capability, Policy
 from acc_core.validation import ValidationReport
 
 
@@ -33,6 +36,48 @@ def _evidence() -> dict[str, object]:
         "line_end": 10,
         "digest": f"sha256:{'b' * 64}",
     }
+
+
+def _policy(
+    policy_id: str,
+    *,
+    readable_fields: list[str],
+    denied_fields: list[str] | None = None,
+) -> Policy:
+    return Policy.model_validate(
+        {
+            "schema_version": "2",
+            "id": policy_id,
+            "required_scopes": [],
+            "tenant_mode": "none",
+            "readable_fields": readable_fields,
+            "denied_fields": denied_fields or [],
+            "redaction_rules": [],
+        }
+    )
+
+
+def _capability(
+    capability_id: str,
+    *,
+    policy_id: str,
+    input_schema: dict[str, object],
+    output_schema: dict[str, object],
+) -> Capability:
+    return TypeAdapter(Capability).validate_python(
+        {
+            "schema_version": "2",
+            "kind": "read",
+            "id": capability_id,
+            "title": capability_id,
+            "description": capability_id,
+            "input_schema": input_schema,
+            "output_schema": output_schema,
+            "workflow": [{"emit": {"value": None}}],
+            "policy": policy_id,
+            "evals": [f"{capability_id}.success"],
+        }
+    )
 
 
 def _inventory(*, mode: str = "discovered", with_states: bool = False) -> UIInteractionInventory:
@@ -126,7 +171,17 @@ def _inventory(*, mode: str = "discovered", with_states: bool = False) -> UIInte
                         if with_states
                         else []
                     ),
-                    "evidence_claims": [],
+                    "evidence_claims": (
+                        [
+                            {
+                                "target_pointer": "/interactions/0/states/0",
+                                "evidence": _evidence(),
+                                "authority": "implementation",
+                            }
+                        ]
+                        if with_states
+                        else []
+                    ),
                     "unknowns": [],
                 }
             ],
@@ -341,7 +396,9 @@ def test_compiler_emits_canonical_interaction_attestation_without_evidence_body(
     )
 
     attestation = compile_interactions(report)
-    wire = attestation.to_dict()
+    wire = cast(dict[str, Any], attestation.to_dict())
+    inventory = report.ui_interaction_inventory
+    assert inventory is not None
 
     assert set(wire) == {
         "schema_version",
@@ -363,9 +420,7 @@ def test_compiler_emits_canonical_interaction_attestation_without_evidence_body(
         "evidence_sha256": _canonical_digest(["frontend-tree"]),
         "interaction_ids": ["customers.initial-load"],
         "scope_mode": "discovered",
-        "sidecar_sha256": _canonical_digest(
-            report.ui_interaction_inventory.model_dump(mode="json", by_alias=True)
-        ),
+        "sidecar_sha256": _canonical_digest(inventory.model_dump(mode="json", by_alias=True)),
         "status": "declared",
         "summary": {"interactions": 1, "surfaces": 1, "unresolved": 0},
         "surface_ids": ["customers"],
@@ -451,7 +506,10 @@ def test_compiler_keeps_option_without_public_input_binding() -> None:
         )
     )
 
-    options = attestation.contracts["get_customer"]["option_sources"]
+    options = cast(
+        list[dict[str, Any]],
+        attestation.contracts["get_customer"]["option_sources"],
+    )
     assert options[0]["target_pointer"] == "/status"
 
 
@@ -612,7 +670,10 @@ def test_compiler_sanitizes_public_capability_option_request_binding() -> None:
         )
     )
 
-    option = attestation.contracts["get_customer"]["option_sources"][0]
+    option = cast(
+        list[dict[str, Any]],
+        attestation.contracts["get_customer"]["option_sources"],
+    )[0]
     assert option["request_bindings"] == [
         {
             "cardinality": "optional",
@@ -675,7 +736,7 @@ def test_compiler_public_manifest_excludes_trusted_and_non_public_defaults() -> 
         )
     )
 
-    compiled = attestation.contracts["get_customer"]
+    compiled = cast(dict[str, Any], attestation.contracts["get_customer"])
     assert "trusted_input_bindings" not in compiled
     assert compiled["defaults"] == [
         {
@@ -708,22 +769,213 @@ def test_compiler_inherits_only_safe_trigger_and_empty_error_semantics() -> None
         )
     )
 
-    inherited = attestation.contracts["get_customer"]["inherited_interactions"]
+    inherited = cast(
+        dict[str, Any],
+        attestation.contracts["get_customer"]["inherited_interactions"],
+    )
     assert inherited == {
         "customers.initial-load": {
             "call_order": "sequential",
-            "option_behaviors": [
+            "states": [
                 {
-                    "empty_behavior": "clear_selection",
-                    "error_behavior": "fail_closed",
-                    "id": "customer-status-options",
-                    "target_pointer": "/status",
+                    "allowed_next_events": ["refresh"],
+                    "id": "ready",
+                    "kind": "ready",
                 }
             ],
             "trigger": {"kind": "screen_load"},
         }
     }
     assert attestation.contracts["get_customer"]["result_consumption"] == []
+
+
+def test_compiler_rejects_state_without_matching_authoritative_evidence_claim() -> None:
+    document = _inventory(with_states=True).model_dump(
+        mode="json", by_alias=True, exclude_unset=True
+    )
+    document["interactions"][0]["states"][0]["evidence"] = {
+        **_evidence(),
+        "digest": "sha256:" + "d" * 64,
+    }
+    inventory = UIInteractionInventory.model_validate(document)
+
+    with pytest.raises(
+        InteractionCompilationError,
+        match="state evidence is not authoritatively claimed",
+    ) as caught:
+        compile_interactions(
+            ValidationReport(
+                ui_interaction_inventory=inventory,
+                interaction_contracts={"get_customer": _contract(state_id="ready")},
+            )
+        )
+
+    assert caught.value.code == "ACC_UI_INTERACTION_STATE_EVIDENCE_UNPROVEN"
+    assert "sha256:" + "d" * 64 not in repr(caught.value.__dict__)
+
+
+def test_compiler_publishes_policy_proven_presentation_and_sanitized_states() -> None:
+    capability = _capability(
+        "get_customer",
+        policy_id="customer-read",
+        input_schema={"type": "object"},
+        output_schema={
+            "type": "object",
+            "properties": {
+                "customer": {
+                    "type": "object",
+                    "properties": {"id": {"type": "string"}},
+                }
+            },
+        },
+    )
+    attestation = compile_interactions(
+        ValidationReport(
+            ui_interaction_inventory=_inventory(with_states=True),
+            interaction_contracts={"get_customer": _contract(state_id="ready")},
+            capabilities={"get_customer": capability},
+            policies={
+                "customer-read": _policy(
+                    "customer-read",
+                    readable_fields=["customer.id"],
+                )
+            },
+        )
+    )
+
+    compiled = cast(dict[str, Any], attestation.contracts["get_customer"])
+    assert compiled["result_consumption"] == [
+        {
+            "field_pointers": ["/id"],
+            "formatting_class": None,
+            "id": "customer-result",
+            "ordering": "none",
+            "pagination": "none",
+            "role": "detail",
+            "source_pointer": "/customer",
+            "state_ids": ["ready"],
+        }
+    ]
+    assert compiled["inherited_interactions"]["customers.initial-load"]["states"] == [
+        {
+            "allowed_next_events": ["refresh"],
+            "id": "ready",
+            "kind": "ready",
+        }
+    ]
+    serialized = json.dumps(compiled, ensure_ascii=False, sort_keys=True)
+    assert '"evidence"' not in serialized
+    assert "frontend/customers.ts" not in serialized
+
+
+def test_compiler_rejects_state_whose_entry_condition_is_not_public() -> None:
+    document = _inventory(with_states=True).model_dump(mode="json", by_alias=True)
+    interaction = document["interactions"][0]
+    interaction["conditions"] = [
+        {
+            "id": "SECRET_INTERNAL_CONDITION",
+            "target": "visible",
+            "target_pointer": "/locale",
+            "expression": {
+                "operator": "present",
+                "operand": {"kind": "reference", "pointer": "/locale"},
+            },
+            "evidence": _evidence(),
+        }
+    ]
+    interaction["states"][0]["entry_condition_id"] = "SECRET_INTERNAL_CONDITION"
+    inventory = UIInteractionInventory.model_validate(document)
+
+    with pytest.raises(
+        InteractionCompilationError,
+        match="state entry condition is not public",
+    ) as caught:
+        compile_interactions(
+            ValidationReport(
+                ui_interaction_inventory=inventory,
+                interaction_contracts={"get_customer": _contract(state_id="ready")},
+            )
+        )
+
+    assert caught.value.code == "ACC_UI_INTERACTION_STATE_CONDITION_UNPROVEN"
+    assert "SECRET_INTERNAL_CONDITION" not in repr(caught.value.__dict__)
+
+
+def test_compiler_publishes_only_policy_proven_capability_related_data() -> None:
+    document = _contract().model_dump(mode="json", by_alias=True, exclude_unset=True)
+    document["related_data"] = [
+        {
+            "id": "customer-owner",
+            "producer_kind": "capability",
+            "producer_id": "get_owner",
+            "output_pointer": "/owner/id",
+            "target_pointer": "/owner_id",
+            "cardinality": "one",
+            "ordering": "none",
+            "freshness": "request",
+            "failure_isolation": "independent",
+            "evidence": _evidence(),
+        }
+    ]
+    contract = CapabilityInteractionContract.model_validate(document)
+    consumer = _capability(
+        "get_customer",
+        policy_id="customer-read",
+        input_schema={
+            "type": "object",
+            "properties": {"owner_id": {"type": "string"}},
+        },
+        output_schema={"type": "object"},
+    )
+    producer = _capability(
+        "get_owner",
+        policy_id="owner-read",
+        input_schema={"type": "object"},
+        output_schema={
+            "type": "object",
+            "properties": {
+                "owner": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string"},
+                        "SECRET_INTERNAL_FIELD": {"type": "string"},
+                    },
+                }
+            },
+        },
+    )
+    attestation = compile_interactions(
+        ValidationReport(
+            ui_interaction_inventory=_inventory(),
+            interaction_contracts={"get_customer": contract},
+            capabilities={"get_customer": consumer, "get_owner": producer},
+            policies={
+                "customer-read": _policy("customer-read", readable_fields=[]),
+                "owner-read": _policy(
+                    "owner-read",
+                    readable_fields=["owner.id"],
+                    denied_fields=["owner.SECRET_INTERNAL_FIELD"],
+                ),
+            },
+        )
+    )
+
+    assert attestation.contracts["get_customer"]["related_data"] == [
+        {
+            "cardinality": "one",
+            "failure_isolation": "independent",
+            "freshness": "request",
+            "id": "customer-owner",
+            "output_pointer": "/owner/id",
+            "producer_id": "get_owner",
+            "producer_kind": "capability",
+            "target_pointer": "/owner_id",
+        }
+    ]
+    assert attestation.dependencies == (("get_owner", "get_customer"),)
+    serialized = json.dumps(attestation.to_dict(), ensure_ascii=False, sort_keys=True)
+    assert "SECRET_INTERNAL_FIELD" not in serialized
+    assert '"evidence"' not in serialized
 
 
 def test_compiler_inherited_details_do_not_expose_unproven_references() -> None:
@@ -733,23 +985,26 @@ def test_compiler_inherited_details_do_not_expose_unproven_references() -> None:
         "kind": "select",
         "source_pointer": "/SECRET_TRIGGER_POINTER",
     }
-    interaction["states"][0]["id"] = "SECRET_STATE_ID"
-    interaction["result_consumption"][0]["state_ids"] = ["SECRET_STATE_ID"]
+    interaction["states"][0]["id"] = "alternate-ready"
+    interaction["result_consumption"][0]["state_ids"] = ["alternate-ready"]
     inventory = UIInteractionInventory.model_validate(inventory_document)
 
     attestation = compile_interactions(
         ValidationReport(
             ui_interaction_inventory=inventory,
-            interaction_contracts={"get_customer": _contract(state_id="SECRET_STATE_ID")},
+            interaction_contracts={"get_customer": _contract(state_id="alternate-ready")},
         )
     )
 
-    inherited = attestation.contracts["get_customer"]["inherited_interactions"]
+    inherited = cast(
+        dict[str, Any],
+        attestation.contracts["get_customer"]["inherited_interactions"],
+    )
     assert inherited["customers.initial-load"]["trigger"] == {"kind": "select"}
     assert attestation.contracts["get_customer"]["result_consumption"] == []
     serialized = json.dumps(attestation.to_dict(), ensure_ascii=False, sort_keys=True)
     assert "SECRET_TRIGGER_POINTER" not in serialized
-    assert "SECRET_STATE_ID" not in serialized
+    assert '"id": "alternate-ready"' in serialized
 
 
 def test_compiler_related_data_fails_closed_without_public_classification() -> None:
@@ -838,6 +1093,6 @@ def test_none_scope_attests_evidence_without_fabricating_interactions() -> None:
     assert attestation.inventory["scope_mode"] == "none"
     assert attestation.inventory["interaction_ids"] == []
     assert attestation.inventory["surface_ids"] == []
-    assert len(attestation.inventory["evidence_sha256"]) == 64
+    assert len(cast(str, attestation.inventory["evidence_sha256"])) == 64
     assert attestation.contracts == {}
     assert attestation.dependencies == ()

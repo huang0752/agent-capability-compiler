@@ -767,6 +767,116 @@ def test_related_data_unknown_semantic_view_is_not_silently_proven() -> None:
     assert "ACC_UI_RELATED_DATA_DEPENDENCY_BROKEN" in {item.code for item in report.diagnostics}
 
 
+def test_capability_related_data_requires_policy_visible_producer_output() -> None:
+    documents = _valid_documents()
+    producer = _capability(
+        "get_owner",
+        output_schema={
+            "type": "object",
+            "properties": {
+                "owner": {
+                    "type": "object",
+                    "properties": {"id": {"type": "string"}},
+                }
+            },
+        },
+    )
+    consumer = _capability(
+        input_schema={
+            "type": "object",
+            "properties": {"owner_id": {"type": "string"}},
+        }
+    )
+    documents["capabilities"] = {
+        "get_customer": consumer,
+        "get_owner": producer,
+    }
+    related = RelatedDataBinding.model_validate(
+        {
+            "id": "owner-view",
+            "producer_kind": "capability",
+            "producer_id": "get_owner",
+            "output_pointer": "/owner/id",
+            "target_pointer": "/owner_id",
+            "cardinality": "one",
+            "ordering": "none",
+            "freshness": "request",
+            "failure_isolation": "independent",
+            "evidence": _evidence(),
+        }
+    )
+    contract = documents["contracts"]["get_customer"]
+    documents["contracts"] = {
+        "get_customer": contract.model_copy(update={"related_data": [related]})
+    }
+
+    report = analyze_interaction_fidelity(**documents)
+
+    assert "ACC_UI_RELATED_DATA_DEPENDENCY_BROKEN" in {item.code for item in report.diagnostics}
+
+
+def test_state_entry_condition_must_be_in_public_capability_contract() -> None:
+    documents = _valid_documents()
+    inventory_document = documents["ui_inventory"].model_dump(
+        mode="json", by_alias=True, exclude_unset=True
+    )
+    interaction = inventory_document["interactions"][0]
+    interaction["conditions"] = [
+        {
+            "id": "internal-condition",
+            "target": "visible",
+            "target_pointer": "/customer_id",
+            "expression": {
+                "operator": "present",
+                "operand": {"kind": "reference", "pointer": "/customer_id"},
+            },
+            "evidence": _evidence(),
+        }
+    ]
+    interaction["states"] = [
+        {
+            "id": "ready",
+            "kind": "ready",
+            "entry_condition_id": "internal-condition",
+            "allowed_next_events": ["refresh"],
+            "evidence": _evidence(),
+        }
+    ]
+    documents["ui_inventory"] = UIInteractionInventory.model_validate(inventory_document)
+
+    report = analyze_interaction_fidelity(**documents)
+
+    assert "ACC_UI_INTERACTION_STATE_CONDITION_UNPROVEN" in {
+        item.code for item in report.diagnostics
+    }
+
+
+def test_state_requires_matching_authoritative_evidence_claim() -> None:
+    documents = _valid_documents()
+    inventory_document = documents["ui_inventory"].model_dump(
+        mode="json", by_alias=True, exclude_unset=True
+    )
+    interaction = inventory_document["interactions"][0]
+    interaction["states"] = [
+        {
+            "id": "ready",
+            "kind": "ready",
+            "allowed_next_events": ["refresh"],
+            "evidence": {
+                **_evidence(),
+                "digest": "sha256:" + "d" * 64,
+            },
+        }
+    ]
+    documents["ui_inventory"] = UIInteractionInventory.model_validate(inventory_document)
+
+    report = analyze_interaction_fidelity(**documents)
+
+    assert "ACC_UI_INTERACTION_STATE_EVIDENCE_UNPROVEN" in {
+        item.code for item in report.diagnostics
+    }
+
+
 def test_presentation_checks_composed_leaves_not_array_container() -> None:
     documents = _valid_documents()
     output_schema = {

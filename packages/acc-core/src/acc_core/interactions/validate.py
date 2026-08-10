@@ -28,6 +28,8 @@ from acc_core.interactions.expressions import (
 from acc_core.interactions.models import (
     CapabilityInteractionContract,
     InteractionCondition,
+    RelatedDataBinding,
+    ResultConsumption,
     UIInteraction,
     UIInteractionInventory,
 )
@@ -185,10 +187,12 @@ def _diagnostic(
     )
 
 
-def _adopted_evidence(
+def authoritative_adopted_evidence(
     contract: CapabilityInteractionContract,
     interactions: Mapping[str, UIInteraction],
 ) -> tuple[Evidence, ...]:
+    """Return fact Evidence identities covered by authoritative adopted claims."""
+
     evidence: list[Evidence] = []
     inventory_positions = {
         interaction_id: index for index, interaction_id in enumerate(interactions)
@@ -358,6 +362,81 @@ def _policy_allows_pointer(policy: Policy, pointer: str) -> bool:
     return readable and not denied
 
 
+def public_condition_ids(
+    contract: CapabilityInteractionContract,
+) -> frozenset[str]:
+    """Return conditions whose complete input dependency surface is public."""
+
+    trusted_targets = {binding.target_pointer for binding in contract.trusted_input_bindings}
+    public_targets = {binding.target_pointer for binding in contract.public_input_bindings}
+    public_targets.update(default.target_pointer for default in contract.defaults)
+    public_targets.update(source.target_pointer for source in contract.option_sources)
+    public_targets.difference_update(trusted_targets)
+    return frozenset(
+        condition.id
+        for condition in contract.conditions
+        if condition.target_pointer in public_targets
+        and set(iter_condition_references(condition.expression)) <= public_targets
+    )
+
+
+def presentation_is_proven(
+    capability: Capability,
+    policy: Policy | None,
+    consumption: ResultConsumption,
+) -> bool:
+    """Prove that a presentation projection exists and is policy-visible."""
+
+    source_schema = _schema_at_data_pointer(capability.output_schema, consumption.source_pointer)
+    if source_schema is None or policy is None:
+        return False
+    pointers: list[str] = []
+    for field_pointer in consumption.field_pointers:
+        if (
+            _relative_schema(
+                source_schema,
+                field_pointer,
+                root_schema=capability.output_schema,
+            )
+            is None
+        ):
+            return False
+        pointers.append(f"{consumption.source_pointer.rstrip('/')}{field_pointer}")
+    if not consumption.field_pointers:
+        pointers.append(consumption.source_pointer)
+    return all(_policy_allows_pointer(policy, pointer) for pointer in pointers)
+
+
+def related_data_is_proven(
+    binding: RelatedDataBinding,
+    *,
+    consumer: Capability,
+    capabilities: Mapping[str, Capability],
+    policies: Mapping[str, Policy],
+) -> bool:
+    """Prove a public Capability-to-Capability related-data projection."""
+
+    if binding.producer_kind != "capability":
+        return False
+    producer = capabilities.get(binding.producer_id)
+    if producer is None:
+        return False
+    producer_policy = policies.get(producer.policy)
+    if producer_policy is None or not _policy_allows_pointer(
+        producer_policy, binding.output_pointer
+    ):
+        return False
+    output_schema = _schema_at_data_pointer(producer.output_schema, binding.output_pointer)
+    target_schema = _schema_at_data_pointer(consumer.input_schema, binding.target_pointer)
+    if target_schema is None:
+        target_schema = _schema_at_data_pointer(consumer.output_schema, binding.target_pointer)
+    return (
+        output_schema is not None
+        and target_schema is not None
+        and compare_operation_output(output_schema, target_schema).relation is SchemaRelation.PROVEN
+    )
+
+
 def _called_operation_ids(capability: Capability) -> frozenset[str]:
     workflows = (
         [capability.preview_workflow, capability.commit_workflow]
@@ -518,7 +597,8 @@ def analyze_interaction_fidelity(
             continue
         policy = policies.get(capability.policy)
         dependency_operation_ids = _called_operation_ids(capability)
-        adopted_evidence = _adopted_evidence(contract, interactions)
+        adopted_evidence = authoritative_adopted_evidence(contract, interactions)
+        compiled_condition_ids = public_condition_ids(contract)
 
         for offset, interaction_id in enumerate(contract.interaction_ids):
             if interaction_id not in interactions:
@@ -744,7 +824,17 @@ def analyze_interaction_fidelity(
                     )
                 ):
                     proven = False
-                dependency_edges.add((related.producer_id, capability_id))
+                if related.producer_kind == "capability":
+                    producer = capabilities.get(related.producer_id)
+                    producer_policy = (
+                        policies.get(producer.policy) if producer is not None else None
+                    )
+                    if producer_policy is None or not _policy_allows_pointer(
+                        producer_policy, related.output_pointer
+                    ):
+                        proven = False
+                if proven:
+                    dependency_edges.add((related.producer_id, capability_id))
             if not proven:
                 _diagnostic(
                     diagnostics,
@@ -755,30 +845,8 @@ def analyze_interaction_fidelity(
                 )
 
         for offset, consumption in enumerate(contract.result_consumption):
-            source_schema = _schema_at_data_pointer(
-                capability.output_schema, consumption.source_pointer
-            )
-            pointers: list[str] = []
-            for field_pointer in consumption.field_pointers:
-                if (
-                    source_schema is None
-                    or _relative_schema(
-                        source_schema,
-                        field_pointer,
-                        root_schema=capability.output_schema,
-                    )
-                    is None
-                ):
-                    source_schema = None
-                    break
-                pointers.append(f"{consumption.source_pointer.rstrip('/')}{field_pointer}")
-            if not consumption.field_pointers:
-                pointers.append(consumption.source_pointer)
-            if (
-                source_schema is None
-                or policy is None
-                or consumption.evidence not in adopted_evidence
-                or any(not _policy_allows_pointer(policy, pointer) for pointer in pointers)
+            if consumption.evidence not in adopted_evidence or not presentation_is_proven(
+                capability, policy, consumption
             ):
                 _diagnostic(
                     diagnostics,
@@ -786,6 +854,31 @@ def analyze_interaction_fidelity(
                     "Presentation fields must exist in policy-visible Capability output.",
                     path=path,
                     pointer=f"/result_consumption/{offset}",
+                )
+
+        for interaction_offset, interaction_id in enumerate(contract.interaction_ids):
+            adopted_interaction = interactions.get(interaction_id)
+            if adopted_interaction is None:
+                continue
+            if any(state.evidence not in adopted_evidence for state in adopted_interaction.states):
+                _diagnostic(
+                    diagnostics,
+                    "ACC_UI_INTERACTION_STATE_EVIDENCE_UNPROVEN",
+                    "State evidence must be covered by an authoritative adopted claim.",
+                    path=path,
+                    pointer=f"/interaction_ids/{interaction_offset}",
+                )
+            if any(
+                state.entry_condition_id is not None
+                and state.entry_condition_id not in compiled_condition_ids
+                for state in adopted_interaction.states
+            ):
+                _diagnostic(
+                    diagnostics,
+                    "ACC_UI_INTERACTION_STATE_CONDITION_UNPROVEN",
+                    "State entry condition must be part of the public Capability contract.",
+                    path=path,
+                    pointer=f"/interaction_ids/{interaction_offset}",
                 )
 
         if isinstance(capability, ActionCapabilityV2):
@@ -862,4 +955,11 @@ def analyze_interaction_fidelity(
     )
 
 
-__all__ = ["InteractionValidationReport", "analyze_interaction_fidelity"]
+__all__ = [
+    "InteractionValidationReport",
+    "analyze_interaction_fidelity",
+    "authoritative_adopted_evidence",
+    "presentation_is_proven",
+    "public_condition_ids",
+    "related_data_is_proven",
+]

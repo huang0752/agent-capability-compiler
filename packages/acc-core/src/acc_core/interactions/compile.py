@@ -18,29 +18,38 @@ from acc_core.interactions.models import (
     OptionSource,
     UIInteraction,
 )
-from acc_core.models import StrictModel
+from acc_core.interactions.validate import (
+    authoritative_adopted_evidence,
+    presentation_is_proven,
+    public_condition_ids,
+    related_data_is_proven,
+)
+from acc_core.models import Capability, Evidence, Policy, StrictModel
 from acc_core.validation.project import ValidationReport
 
 
 class InteractionCompilationError(ValueError):
     """A typed interaction contract cannot form a safe public manifest."""
 
-    code = "ACC_UI_INTERACTION_STATE_UNTRACED"
-
     def __init__(
         self,
         *,
         capability_id: str,
-        consumption_index: int,
-        missing_states: Sequence[str],
+        consumption_index: int = 0,
+        missing_states: Sequence[str] = (),
+        code: str = "ACC_UI_INTERACTION_STATE_UNTRACED",
+        message: str | None = None,
     ) -> None:
+        self.code = code
         self.capability_id = capability_id
         self.consumption_index = consumption_index
         self.missing_states = tuple(missing_states)
-        super().__init__(
-            "contract result state is not declared by an adopted interaction: "
-            + ", ".join(missing_states)
-        )
+        if message is None:
+            message = (
+                "contract result state is not declared by an adopted interaction: "
+                + ", ".join(missing_states)
+            )
+        super().__init__(message)
 
 
 def _normalize_json(value: Any) -> JsonValue:
@@ -164,22 +173,39 @@ def _public_option_source(
 
 def _inherited_interaction(
     interaction: UIInteraction,
-    public_targets: frozenset[str],
+    compiled_condition_ids: frozenset[str],
+    capability_id: str,
+    adopted_evidence: Sequence[Evidence],
 ) -> dict[str, JsonValue]:
-    return {
+    states: list[dict[str, JsonValue]] = []
+    for state in interaction.states:
+        if state.evidence not in adopted_evidence:
+            raise InteractionCompilationError(
+                capability_id=capability_id,
+                code="ACC_UI_INTERACTION_STATE_EVIDENCE_UNPROVEN",
+                message="state evidence is not authoritatively claimed",
+            )
+        compiled_state: dict[str, JsonValue] = {
+            "allowed_next_events": list(state.allowed_next_events),
+            "id": state.id,
+            "kind": state.kind,
+        }
+        if state.entry_condition_id is not None:
+            if state.entry_condition_id not in compiled_condition_ids:
+                raise InteractionCompilationError(
+                    capability_id=capability_id,
+                    code="ACC_UI_INTERACTION_STATE_CONDITION_UNPROVEN",
+                    message="state entry condition is not public",
+                )
+            compiled_state["entry_condition_id"] = state.entry_condition_id
+        states.append(compiled_state)
+    inherited: dict[str, JsonValue] = {
         "call_order": interaction.call_order,
-        "option_behaviors": [
-            {
-                "empty_behavior": source.empty_behavior,
-                "error_behavior": source.error_behavior,
-                "id": source.id,
-                "target_pointer": source.target_pointer,
-            }
-            for source in interaction.option_sources
-            if source.target_pointer in public_targets
-        ],
         "trigger": {"kind": interaction.trigger.kind},
     }
+    if states:
+        inherited["states"] = cast(JsonValue, states)
+    return inherited
 
 
 def _candidate_public_targets(
@@ -195,6 +221,8 @@ def _candidate_public_targets(
 def _compile_contract(
     contract: CapabilityInteractionContract,
     interactions: Mapping[str, UIInteraction],
+    capabilities: Mapping[str, Capability],
+    policies: Mapping[str, Policy],
 ) -> dict[str, JsonValue]:
     sidecar = contract.model_dump(mode="json", by_alias=True)
     public_targets = _candidate_public_targets(contract)
@@ -206,6 +234,7 @@ def _compile_contract(
         for interaction_id in contract.interaction_ids
         if interaction_id in interactions
     }
+    adopted_evidence = authoritative_adopted_evidence(contract, interactions)
     inherited_states = {
         state.id for interaction in adopted.values() for state in interaction.states
     }
@@ -230,6 +259,7 @@ def _compile_contract(
         if condition.target_pointer in public_targets
         and set(iter_condition_references(condition.expression)) <= public_targets
     ]
+    compiled_condition_ids = public_condition_ids(contract)
     option_sources = [
         compiled
         for source in contract.option_sources
@@ -241,13 +271,52 @@ def _compile_contract(
             "interaction_id": contract.action_lifecycle.interaction_id,
             "phases": ["prepare", "approve", "commit", "status"],
         }
+    capability = capabilities.get(contract.capability_id)
+    policy = policies.get(capability.policy) if capability is not None else None
+    result_consumption = (
+        [
+            consumption
+            for consumption in contract.result_consumption
+            if presentation_is_proven(capability, policy, consumption)
+        ]
+        if capability is not None
+        else []
+    )
+    related_data = (
+        [
+            {
+                "cardinality": related.cardinality,
+                "failure_isolation": related.failure_isolation,
+                "freshness": related.freshness,
+                "id": related.id,
+                "output_pointer": related.output_pointer,
+                "producer_id": related.producer_id,
+                "producer_kind": "capability",
+                "target_pointer": related.target_pointer,
+            }
+            for related in contract.related_data
+            if related_data_is_proven(
+                related,
+                consumer=capability,
+                capabilities=capabilities,
+                policies=policies,
+            )
+        ]
+        if capability is not None
+        else []
+    )
     return {
         "action_lifecycle": action_lifecycle,
         "capability_id": contract.capability_id,
         "conditions": _compiled_values(conditions),
         "defaults": cast(JsonValue, defaults),
         "inherited_interactions": {
-            interaction_id: _inherited_interaction(adopted[interaction_id], public_targets)
+            interaction_id: _inherited_interaction(
+                adopted[interaction_id],
+                compiled_condition_ids,
+                contract.capability_id,
+                adopted_evidence,
+            )
             for interaction_id in sorted(adopted)
         },
         "interaction_ids": list(contract.interaction_ids),
@@ -255,9 +324,9 @@ def _compile_contract(
         "option_sources": cast(JsonValue, option_sources),
         "overridden_interaction_ids": [item.interaction_id for item in contract.overrides],
         "public_input_bindings": _compiled_values(contract.public_input_bindings),
-        "related_data": [],
+        "related_data": cast(JsonValue, related_data),
         "required_scenarios": list(contract.required_scenarios),
-        "result_consumption": [],
+        "result_consumption": _compiled_values(result_consumption),
         "sidecar_sha256": _digest(sidecar),
     }
 
@@ -315,6 +384,8 @@ def compile_interactions(report: ValidationReport) -> CompiledInteractionAttesta
                 capability_id: _compile_contract(
                     report.interaction_contracts[capability_id],
                     interaction_map,
+                    report.capabilities,
+                    report.policies,
                 )
                 for capability_id in sorted(report.interaction_contracts)
             }
@@ -327,6 +398,14 @@ def compile_interactions(report: ValidationReport) -> CompiledInteractionAttesta
                     if source.producer_id is not None
                     and _option_source_is_public(source, public_targets)
                 )
+                related_items = compiled_contracts[capability_id]["related_data"]
+                if isinstance(related_items, list):
+                    for item in related_items:
+                        if not isinstance(item, dict):
+                            continue
+                        producer_id = item.get("producer_id")
+                        if isinstance(producer_id, str):
+                            dependency_set.add((producer_id, capability_id))
             dependencies = tuple(sorted(dependency_set))
 
     digest_payload = {
