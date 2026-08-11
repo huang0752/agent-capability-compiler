@@ -18,10 +18,31 @@ ROOT = Path(__file__).resolve().parents[3]
 SKILL = ROOT / "skills" / "acc-engineer"
 
 
+def _readme_mermaid_blocks() -> list[str]:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    return [section.split("```", maxsplit=1)[0] for section in readme.split("```mermaid\n")[1:]]
+
+
 def _yaml(path: Path) -> dict[str, Any]:
     value = yaml.safe_load(path.read_text(encoding="utf-8"))
     assert isinstance(value, dict)
     return value
+
+
+def test_readme_opens_with_an_end_to_end_mermaid_architecture() -> None:
+    blocks = _readme_mermaid_blocks()
+    assert blocks
+    overview = blocks[0]
+    for label in (
+        "已有系统（只读发现）",  # noqa: RUF001
+        "编译期：AI 辅助",  # noqa: RUF001
+        "ACC 确定性工具链",
+        "Capability Pack",
+        "运行期：无 LLM",  # noqa: RUF001
+        "源 API<br/>最终鉴权",
+    ):
+        assert label in overview
+    assert "```text\n已有系统源码" not in (ROOT / "README.md").read_text(encoding="utf-8")
 
 
 def test_skill_has_required_platform_neutral_structure_without_placeholders() -> None:

@@ -16,33 +16,51 @@ ACC 不修改已有业务系统，不要求业务系统嵌入 Agent SDK 或接�
 
 完整链路如下：
 
-```text
-已有系统源码 / OpenAPI / 前端交互 / 权限规则 / 测试（只读）
-                         │
-                         ▼
-              Codex / Claude Code 等宿主
-                         │ 加载 ACC Engineer Skill
-                         ▼
- DomainMap / Candidate Ledger / DomainDecision / Scope Inventory
- Evidence / SourceContract / CapabilityQuality / Operation / Capability
-                         │
-                         ▼
-          ACC Core：校验、编译、测试、确定性打包
-                         │
-                         ▼
-                  Capability Pack (.accpkg)
-                         │
-                         ▼
-              ACC Generic Runtime（无 LLM）
-                         │
-             ┌───────────┴───────────┐
-             │ MCP stdio             │ streamable_http
-             ▼                       ▼
-       本地单身份 Agent       可选多用户 Gateway
-                         │
-                         ▼
-             原系统 REST API / 独立 Adapter
+```mermaid
+flowchart LR
+  subgraph source["已有系统（只读发现）"]
+    SRC_BACKEND["后端源码 / OpenAPI"]
+    SRC_CLIENT["前端交互 / 默认值 / 关联数据"]
+    SRC_RULES["权限规则 / 测试"]
+  end
+
+  subgraph assisted["编译期：AI 辅助"]
+    AGENT["Coding Agent<br/>ACC Engineer Skill"]
+    WIZARD["领域向导<br/>DomainMap / Candidate Ledger"]
+    USER["用户确认<br/>业务目标与策略"]
+  end
+
+  subgraph deterministic["ACC 确定性工具链"]
+    CORE["Core 校验"]
+    BUILD["Compiler / Coverage / Eval"]
+    PACK["Capability Pack<br/>.accpkg"]
+  end
+
+  subgraph execution["运行期：无 LLM"]
+    CLIENT["MCP Client / Agent"]
+    RUNTIME["Generic Runtime / Gateway"]
+    PROVIDER["REST Provider"]
+  end
+
+  SOURCE_API["源 API<br/>最终鉴权"]
+
+  SRC_BACKEND --> AGENT
+  SRC_CLIENT --> AGENT
+  SRC_RULES --> AGENT
+  AGENT --> WIZARD
+  WIZARD --> USER
+  USER --> WIZARD
+  WIZARD --> CORE
+  CORE --> BUILD
+  BUILD --> PACK
+  CLIENT --> RUNTIME
+  PACK --> RUNTIME
+  RUNTIME --> PROVIDER
+  PROVIDER -->|"源 JWT / 受信上下文"| SOURCE_API
+  SOURCE_API -->|"响应"| PROVIDER
 ```
+
+Capability Pack 是 AI 辅助编译期与无 LLM 运行期之间仅包含数据的边界。用户确认表达业务目标和策略，但不能替代 Evidence、确定性校验或源 API 对每次请求的最终授权。
 
 ## AI 领域向导式能力发现
 
