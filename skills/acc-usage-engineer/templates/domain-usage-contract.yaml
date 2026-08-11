@@ -1,0 +1,232 @@
+# Example only: every digest placeholder deliberately fails strict validation.
+schema_version: "2"
+domain_id: generic-domain
+pack_digest: <replace-with-sha256>
+ir_digest: <replace-with-sha256>
+tool_schema_digest: <replace-with-sha256>
+test_report_digest: <replace-with-sha256>
+source_snapshot_digest: <replace-with-sha256>
+business_goals:
+  - id: find-and-inspect-record
+    description: Search for records and inspect one selected result.
+    evidence_claim_ids: [claim-business-goal]
+tool_routes:
+  - id: search-to-detail
+    business_goal_id: find-and-inspect-record
+    preconditions: [The user supplies a public search term.]
+    steps:
+      - id: search
+        capability_id: record-search
+        tool_name: record_search
+        depends_on_step_ids: []
+        binding_ids: [bind-search-term]
+        condition: null
+        retry: safe
+        action_phase: null
+      - id: detail
+        capability_id: record-detail
+        tool_name: record_detail
+        depends_on_step_ids: [search]
+        binding_ids: [bind-record-id]
+        condition: null
+        retry: safe
+        action_phase: null
+    error_branch_ids: [read-errors]
+    result_step_id: detail
+    result_pointer: ""
+    action_lifecycle_id: null
+  - id: conditional-change
+    business_goal_id: find-and-inspect-record
+    preconditions: [The requested change is within the accepted domain.]
+    steps:
+      - id: prepare
+        capability_id: record-change-prepare
+        tool_name: record_change_prepare
+        depends_on_step_ids: []
+        binding_ids: []
+        condition: null
+        retry: never
+        action_phase: prepare
+      - id: approve
+        capability_id: record-change-approve
+        tool_name: record_change_approve
+        depends_on_step_ids: [prepare]
+        binding_ids: [bind-prepare-to-approve]
+        condition: {op: eq, args: [{path: /public_input/high_risk}, true]}
+        retry: never
+        action_phase: approve
+      - id: commit
+        capability_id: record-change-commit
+        tool_name: record_change_commit
+        depends_on_step_ids: [prepare]
+        binding_ids: [bind-action-handle]
+        condition: null
+        retry: never
+        action_phase: commit
+      - id: status
+        capability_id: record-change-status
+        tool_name: record_change_status
+        depends_on_step_ids: [commit]
+        binding_ids: [bind-status-handle]
+        condition: null
+        retry: status_only
+        action_phase: status
+    error_branch_ids: [action-errors]
+    result_step_id: status
+    result_pointer: ""
+    action_lifecycle_id: conditional-approval
+input_bindings:
+  - id: bind-search-term
+    source_kind: public_input
+    source_step_id: null
+    consumer_step_id: search
+    source_pointer: /search_term
+    target_pointer: /query
+    mapping: null
+    value_kind: public_value
+  - id: bind-record-id
+    source_kind: prior_step_output
+    source_step_id: search
+    consumer_step_id: detail
+    source_pointer: /items/0/id
+    target_pointer: /record_id
+    mapping: null
+    value_kind: public_value
+  - id: bind-prepare-to-approve
+    source_kind: prior_step_output
+    source_step_id: prepare
+    consumer_step_id: approve
+    source_pointer: /action_handle
+    target_pointer: /action_handle
+    mapping: null
+    value_kind: action_handle
+  - id: bind-action-handle
+    source_kind: prior_step_output
+    source_step_id: prepare
+    consumer_step_id: commit
+    source_pointer: /action_handle
+    target_pointer: /action_handle
+    mapping: null
+    value_kind: action_handle
+  - id: bind-status-handle
+    source_kind: prior_step_output
+    source_step_id: commit
+    consumer_step_id: status
+    source_pointer: /status_handle
+    target_pointer: /status_handle
+    mapping: null
+    value_kind: status_handle
+defaults:
+  - id: default-page-size
+    capability_id: record-search
+    step_id: search
+    target_pointer: /page_size
+    source: literal
+    value: 20
+    reference_binding_id: null
+    precedence: 1
+    submission: when_missing
+    evidence_claim_ids: [claim-default]
+conditions:
+  - id: condition-detail-enabled
+    kind: enabled
+    scope: step
+    route_id: search-to-detail
+    step_id: detail
+    target_pointer: /record_id
+    expression: {op: exists, args: [{path: /steps/search/output/items/0/id}]}
+    evidence_claim_ids: [claim-condition]
+option_sources: []
+related_data:
+  - id: selected-record
+    producer_step_id: search
+    producer_pointer: /items/0/id
+    consumer_step_id: detail
+    target_pointer: /record_id
+    cardinality: optional
+    consistency: stale_check_required
+    evidence_claim_ids: [claim-related]
+result_consumption:
+  - id: return-detail
+    capability_id: record-detail
+    step_id: detail
+    kind: return
+    field_pointers: [/id, /display_name]
+    order: 1
+    evidence_claim_ids: [claim-result]
+error_handling:
+  - id: read-errors
+    outcomes: [empty, not_found, forbidden, timeout]
+    behavior: stop
+    description: Preserve the public source outcome without widening authority.
+    step_ids: [detail, search]
+    retry_policy: safe_read
+    evidence_claim_ids: [claim-errors]
+  - id: action-errors
+    outcomes: [conflict, outcome_unknown]
+    behavior: query_status
+    description: Query status; never repeat commit after an unknown outcome.
+    step_ids: [commit, status]
+    retry_policy: status_only
+    evidence_claim_ids: [claim-action-errors]
+action_lifecycles:
+  - id: conditional-approval
+    action_id: record-change
+    prepare_step_id: prepare
+    approve_action_handle_binding_id: bind-prepare-to-approve
+    commit_action_handle_binding_id: bind-action-handle
+    status_action_handle_binding_id: bind-status-handle
+    approval: conditional
+    approval_condition: {op: eq, args: [{path: /public_input/high_risk}, true]}
+    approve_step_id: approve
+    approval_handle_binding_id: null
+    commit_step_id: commit
+    status_step_id: status
+    outcome_unknown_behavior: query_status
+prohibited_behaviors:
+  - Never infer source permission from a client control.
+  - Never repeat commit after outcome_unknown.
+required_scenario_ids: [search-to-detail-happy]
+evidence_claims:
+  - id: claim-business-goal
+    statement: The client exposes search followed by record detail.
+    target: {target_kind: business_goal, target_id: find-and-inspect-record, field_pointer: /description}
+    authority: implementation
+    source_layer: client
+    evidence_refs: [{source_id: client:record-screen, digest: <replace-with-sha256>}]
+  - id: claim-default
+    statement: The client initializes a page size when none is supplied.
+    target: {target_kind: default, target_id: default-page-size, field_pointer: /value}
+    authority: implementation
+    source_layer: client
+    evidence_refs: [{source_id: client:record-screen, digest: <replace-with-sha256>}]
+  - id: claim-condition
+    statement: Detail is enabled only after one result is selected.
+    target: {target_kind: condition, target_id: condition-detail-enabled, field_pointer: /expression}
+    authority: implementation
+    source_layer: client
+    evidence_refs: [{source_id: client:record-screen, digest: <replace-with-sha256>}]
+  - id: claim-related
+    statement: The selected search result supplies the detail identifier.
+    target: {target_kind: related_data, target_id: selected-record, field_pointer: /producer_pointer}
+    authority: implementation
+    source_layer: client
+    evidence_refs: [{source_id: client:record-screen, digest: <replace-with-sha256>}]
+  - id: claim-result
+    statement: Detail returns only declared public fields.
+    target: {target_kind: result_consumption, target_id: return-detail, field_pointer: /field_pointers}
+    authority: contract
+    source_layer: mcp
+    evidence_refs: [{source_id: mcp:record-detail, digest: <replace-with-sha256>}]
+  - id: claim-errors
+    statement: Read failures preserve source outcomes.
+    target: {target_kind: error_branch, target_id: read-errors, field_pointer: /outcomes}
+    authority: test
+    source_layer: test
+    evidence_refs: [{source_id: test:record-read, digest: <replace-with-sha256>}]
+  - id: claim-action-errors
+    statement: Unknown mutation outcomes are resolved through status.
+    target: {target_kind: action_lifecycle, target_id: conditional-approval, field_pointer: /outcome_unknown_behavior}
+    authority: contract
+    source_layer: mcp
+    evidence_refs: [{source_id: mcp:record-change, digest: <replace-with-sha256>}]

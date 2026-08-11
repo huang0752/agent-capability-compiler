@@ -1,0 +1,16 @@
+# Example only: recompute both digests from the exact reviewed decision and source text.
+schema_version: "2"
+domain_id: generic-domain
+revision: 1
+disposition: accepted
+business_goal_ids: [find-and-inspect-record]
+included_route_ids: [conditional-change, search-to-detail]
+known_limitations:
+  - Real MCP mutation has not been executed.
+contract_digest: <replace-with-sha256>
+decision_digest: <replace-with-sha256>
+user_confirmation:
+  confirmed_by: reviewer
+  confirmed_at: "2026-08-11T00:00:00Z"
+  source_text_digest: <replace-with-sha256>
+  confirmed_decision_digest: <replace-with-sha256>

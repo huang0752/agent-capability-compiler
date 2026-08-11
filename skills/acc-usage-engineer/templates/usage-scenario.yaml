@@ -1,0 +1,12 @@
+# Example only: contract evidence must be digest-bound before use.
+schema_version: "2"
+scenario_id: search-to-detail-happy
+domain_id: generic-domain
+route_id: search-to-detail
+title: Search and inspect one public record
+kind: happy_path
+public_input_ids: [search_term]
+expected_outcomes: [detail_returned]
+prohibited_behaviors:
+  - Do not fabricate an identifier when search is empty.
+  - Do not infer source authorization from client visibility.

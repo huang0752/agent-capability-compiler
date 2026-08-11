@@ -1,27 +1,13 @@
-# 01 Preflight
+# 01 Preflight — B0
 
-## 输入
+## 输入与动作
 
-- `source_workspace`
-- `acc_project`
-- `usage_project`
-- `accepted_mcp_digest`
-- `domain_id`
+读取 `source_workspace`、`acc_project`、`usage_project`、`accepted_mcp_digest` 和目标 `domain_id`。验证三个真实目录无符号链接且三者必须互不重叠。源工程与 ACC 工程只读。
 
-## 动作
+在任何扫描源码动作前，安全读取固定的 `mcp-release-acceptance.yaml`，逐一核对 Pack、compiled IR、Tool Schema、测试报告和 accepted MCP digest；确认领域属于 accepted domains，并记录 source revision。
 
-1. 验证三个真实目录无符号链接，且三者必须互不重叠。
-2. 读取固定路径 `mcp-release-acceptance.yaml`，拒绝超限、敏感字段或非普通文件。
-3. 在任何扫描源码动作之前比较 accepted MCP digest，并确认领域已被接受。
+## 门禁与输出
 
-## 门禁
+B0 只输出固定 Release 身份、三根目录审计和领域候选。摘要漂移、接受记录无效、领域未接受或无法证明只读时立即停止；用户口头确认不能替代摘要证据。
 
-摘要必须精确相等；一次只能激活一个选定领域，且只能附带直接依赖。
-
-## 输出
-
-通过的根目录、固定 Release 摘要和领域边界。
-
-## 停止条件
-
-根目录重叠、路径不安全、接受记录无效、摘要漂移或领域未接受。
+B1 在依赖就绪领域中推荐下一个大类别，但不自动进入；B2 由用户选择处理、延后或不需要。

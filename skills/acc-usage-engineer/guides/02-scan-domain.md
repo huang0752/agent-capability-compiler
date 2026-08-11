@@ -1,27 +1,17 @@
-# 02 Scan Domain
+# 02 Scan Domain — B3
 
-## 输入
+## 范围
 
-- 已通过 Preflight 的三根目录；
-- 排序后的 `usage-scan-manifest.yaml`；
-- 一个领域源文件与 `frontend`、`backend`、`tests` 分类。
+只读扫描一个选定领域和清单中非递归的直接依赖。必须从源码二次确认，不可只看接口：
 
-## 动作
+- `client`：web/mobile/desktop/cli/automation/other 的页面、路由、状态、API client、默认值、显示/启用/重置条件、选项加载、关联导航与结果消费；
+- `service`：后端路由、Schema、Service、默认语义、错误、授权与 Action 生命周期；
+- `test`：组件、契约、Service 与端到端测试；
+- `mcp`：accepted MCP Capability、Tool Schema、Eval 和报告；
+- `runtime_observation`：必要且已脱敏的运行观测定位。
 
-1. 只扫描一个选定领域与清单中的直接依赖。
-2. 调用 `scripts/usage_evidence_capture.py` 捕获摘要、路径、大小和可选行范围。
-3. 将分类映射到 `usage-evidence/frontend`、`usage-evidence/backend` 或
-   `usage-evidence/tests`，原子写入定位元数据。
-4. 比较读取前后的源文件身份与元数据，保持源工程零写入。
+每份捕获写入同名 `usage-evidence/<source_layer>`，client 必须声明 `client_surface`。脚本输出只包含 Evidence core 与 `source_layer/domain_id/size_bytes/client_surface` audit allowlist；旧 frontend/backend/tests `classification` 输入必须拒绝。
 
-## 门禁
+## 安全与停止
 
-拒绝遍历、绝对输出、符号链接、Secret-like 路径、超限文件、源文件变化和分类目录逃逸。
-
-## 输出
-
-平台中立、无源码正文的 Usage Evidence JSON。
-
-## 停止条件
-
-任何安全诊断、分类不明、范围超出选定领域及直接依赖，或接受 Release 发生漂移。
+拒绝遍历、绝对输出、符号链接、Secret-like 路径、超限文件、payload、文件变化和分类目录逃逸。扫描前后比较源工作树，维持源工程零写入。证据冲突不猜测，标记 conflict；证据缺失标记 unknown。

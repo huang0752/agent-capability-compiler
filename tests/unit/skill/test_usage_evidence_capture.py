@@ -11,6 +11,8 @@ from typing import Any
 import pytest
 import yaml
 
+from acc_core.usage import validate_usage_project
+
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = ROOT / "skills" / "acc-usage-engineer" / "scripts" / "usage_evidence_capture.py"
 
@@ -70,8 +72,10 @@ def _common(source: Path, acc: Path, usage: Path) -> list[str]:
         "frontend/pages/finance.ts",
         "--source-id",
         "finance-page",
-        "--classification",
-        "frontend",
+        "--source-layer",
+        "client",
+        "--client-surface",
+        "web",
         "--output",
         "finance/page.json",
     ]
@@ -94,10 +98,10 @@ def test_capture_requires_accepted_release_and_writes_atomic_locator_only(tmp_pa
 
     assert completed.returncode == 0
     assert payload["ok"] is True
-    output = usage / "usage-evidence" / "frontend" / "finance" / "page.json"
+    output = usage / "usage-evidence" / "client" / "finance" / "page.json"
     raw = source_file.read_bytes()
     assert json.loads(output.read_text(encoding="utf-8")) == {
-        "classification": "frontend",
+        "client_surface": "web",
         "digest": f"sha256:{hashlib.sha256(raw).hexdigest()}",
         "domain_id": "finance",
         "kind": "source_file",
@@ -105,6 +109,7 @@ def test_capture_requires_accepted_release_and_writes_atomic_locator_only(tmp_pa
         "line_start": 1,
         "path": "frontend/pages/finance.ts",
         "size_bytes": len(raw),
+        "source_layer": "client",
         "source_id": "finance-page",
     }
     assert "private-source-value" not in completed.stdout
@@ -112,6 +117,8 @@ def test_capture_requires_accepted_release_and_writes_atomic_locator_only(tmp_pa
     assert not list(output.parent.glob(".acc-usage-evidence-*"))
     assert _tree_digest(source) == before
     assert list(acc.iterdir()) == []
+    report = validate_usage_project(usage)
+    assert not any(item.code.startswith("ACC_USAGE_EVIDENCE_") for item in report.diagnostics)
 
 
 def test_capture_rejects_unaccepted_digest_domain_and_overlapping_roots(tmp_path: Path) -> None:
@@ -169,18 +176,18 @@ def test_capture_rejects_traversal_symlink_secret_and_oversize(tmp_path: Path) -
     assert oversized_payload["diagnostics"][0]["code"] == "ACC_SKILL_FILE_TOO_LARGE"
 
 
-def test_capture_cannot_write_outside_fixed_classification_directory(tmp_path: Path) -> None:
+def test_capture_cannot_write_outside_fixed_source_layer_directory(tmp_path: Path) -> None:
     source, acc, usage, _ = _roots(tmp_path)
     outside = tmp_path / "outside"
     outside.mkdir()
     evidence = usage / "usage-evidence"
     evidence.mkdir()
-    (evidence / "frontend").symlink_to(outside, target_is_directory=True)
+    (evidence / "client").symlink_to(outside, target_is_directory=True)
     common = _common(source, acc, usage)
 
     linked, linked_payload = _run(*common)
     traversal = common.copy()
-    traversal[traversal.index("finance/page.json")] = "../backend/escape.json"
+    traversal[traversal.index("finance/page.json")] = "../service/escape.json"
     escaped, escaped_payload = _run(*traversal)
 
     assert linked.returncode == 3
@@ -214,3 +221,67 @@ def test_capture_detects_source_mutation_before_atomic_write(
     assert exit_code == 3
     assert payload["diagnostics"][0]["code"] == "ACC_SKILL_FILE_CHANGED"
     assert not list((usage / "usage-evidence").rglob("*.json"))
+
+
+@pytest.mark.parametrize(
+    ("source_layer", "client_surface"),
+    [
+        ("client", "mobile"),
+        ("service", None),
+        ("test", None),
+        ("mcp", None),
+        ("runtime_observation", None),
+    ],
+)
+def test_capture_supports_each_platform_neutral_source_layer(
+    tmp_path: Path, source_layer: str, client_surface: str | None
+) -> None:
+    source, acc, usage, _ = _roots(tmp_path)
+    arguments = _common(source, acc, usage)
+    layer_index = arguments.index("client")
+    arguments[layer_index] = source_layer
+    surface_flag = arguments.index("--client-surface")
+    del arguments[surface_flag : surface_flag + 2]
+    if client_surface is not None:
+        arguments.extend(("--client-surface", client_surface))
+
+    completed, payload = _run(*arguments)
+
+    assert completed.returncode == 0, payload
+    output = usage / "usage-evidence" / source_layer / "finance" / "page.json"
+    document = json.loads(output.read_text(encoding="utf-8"))
+    assert document["source_layer"] == source_layer
+    assert document.get("client_surface") == client_surface
+    assert set(document) <= {
+        "client_surface",
+        "digest",
+        "domain_id",
+        "kind",
+        "line_end",
+        "line_start",
+        "path",
+        "size_bytes",
+        "source_id",
+        "source_layer",
+    }
+
+
+def test_capture_rejects_legacy_classification_and_invalid_client_surface(tmp_path: Path) -> None:
+    source, acc, usage, _ = _roots(tmp_path)
+    common = _common(source, acc, usage)
+    legacy = [
+        value
+        for index, value in enumerate(common)
+        if index not in {common.index("--source-layer"), common.index("--source-layer") + 1}
+    ]
+    legacy.extend(("--classification", "frontend"))
+    legacy_result, legacy_payload = _run(*legacy)
+
+    service = common.copy()
+    service[service.index("client")] = "service"
+    service_result, service_payload = _run(*service)
+
+    assert legacy_result.returncode == 2
+    assert legacy_payload["diagnostics"][0]["code"] == "ACC_SKILL_USAGE"
+    assert service_result.returncode == 2
+    assert service_payload["diagnostics"][0]["code"] == "ACC_SKILL_USAGE"

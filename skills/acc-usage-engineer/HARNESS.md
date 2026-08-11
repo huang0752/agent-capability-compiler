@@ -1,33 +1,51 @@
 # ACC Usage Engineer Harness
 
-## 输入根目录
+## 调用合同
 
-调用方必须分别提供：
+调用方提供只读 `source_workspace`、只读 `acc_project` 和独立可写 `usage_project`。三者必须互不重叠且无符号链接。任何扫描源码动作前，B0 必须验证 `usage_project/mcp-release-acceptance.yaml`、`.accpkg`、compiled IR、Tool Schema 和测试报告摘要均匹配 accepted MCP digest。
 
-- `source_workspace`：被取证源码，只读；
-- `acc_project`：已发布 Capability/MCP 工程，只读；
-- `usage_project`：独立 Agent Usage 工程，是唯一写入根。
+只加载一个选定领域和 `usage-scan-manifest.yaml` 明列的直接依赖；不能递归扩展、兜底扫描全工程或把技术路由分类工作推给用户。
 
-三者必须互不重叠，任一路径段不得是符号链接。开始任何扫描源码动作前，必须先验证
-`usage_project/mcp-release-acceptance.yaml` 的 accepted MCP digest 与本次固定摘要相同，且
-`domain_id` 已在 `accepted_domain_ids` 中。
+## 证据合同
 
-## 领域边界
+`usage_evidence_capture.py` 只生成 `Evidence` core 字段和 loader audit allowlist：`source_layer`、`domain_id`、`size_bytes`、可选 `client_surface`。固定目录如下：
 
-只加载一个选定领域及 `usage-scan-manifest.yaml` 中显式列出的直接依赖。直接依赖不能递归扩展；
-未知领域、间接依赖和全工程兜底扫描均停止处理。
+- `usage-evidence/client`：web、mobile、desktop、cli、automation 或 other 客户端交互；
+- `usage-evidence/service`：路由、Schema、Service 和授权/生命周期实现；
+- `usage-evidence/test`：组件、契约、服务和端到端测试；
+- `usage-evidence/mcp`：accepted MCP Capability、Tool Schema 和报告；
+- `usage-evidence/runtime_observation`：经脱敏的真实观测定位，不含请求或响应 payload。
 
-## 分类与输出
+捕获只保存摘要、定位、摘要哈希、大小和可选行号。拒绝旧 `classification`、路径逃逸、符号链接、敏感文件名、超限文件和读取期间变化，且持续核验源工程零写入。
 
-每个来源先分类，再捕获：
+## 建模与提问
 
-- 前端：`usage-evidence/frontend`；
-- 后端：`usage-evidence/backend`；
-- 测试：`usage-evidence/tests`。
+AI 自动处理证据清晰且一致的 `business_goal`、`tool_route`、`input_binding`、`default`、`option_source`、`condition`、`related_data`、`result_consumption`、`error_branch` 和 `action_lifecycle`。仅将以下问题按领域集中成一组交给用户：
 
-捕获脚本只写摘要定位元数据并使用同目录临时文件原子替换。输出路径逃逸、符号链接、敏感文件名、
-超限文件、读取期间变化或源工程零写入检查失败，均返回机器可读诊断且不产生捕获物。
+- `scope`：处理、延后、排除，以及业务目标范围；
+- `conflict`：前后端冲突或两条同样合理的产品流程；
+- `high-risk`：高风险 Action 是否进入指南；
+- `real-test`：真实账号、数据、环境和 mutation 的明确授权边界。
 
-## 平台边界
+技术证据不闭合不得用用户确认替代，应 blocked 或退回管道 A。
 
-Usage Evidence 和后续结构化合同保持平台中立。宿主适配器只能消费核心产物，不能反向成为事实源。
+## 验证与权限
+
+验证保持六个独立轴，**不生成总分**、不生成 `usable=true`，也不互相升级：
+
+- `source_usage_traced`
+- `usage_contract_verified`
+- `headless_agent_verified`
+- `host_adapter_verified`
+- `real_mcp_verified`
+- `user_accepted`
+
+用户接受不能授予权限。source JWT 与 source API 对每次真实请求进行最终鉴权；401/403 保留源系统裁决，不扩大 Scope、不换高权账号。真实 mutation 默认禁止。
+
+## 停止与反馈分流
+
+- MCP 缺工具、Schema/Runtime/Action lifecycle 错误：生成管道 A MCP Change Request；
+- 工具选择、组合、结果消费或宿主投影错误：修正管道 B 合同或适配器；
+- digest 或源码 Evidence 漂移：停止发布，做领域影响分析；
+- accepted MCP、必需 Evidence、Headless 测试或用户接受不闭合：不得发布；
+- 完成交付清单后，在任何 Git stage、commit、push 或 PR 前停止，交由用户审阅。

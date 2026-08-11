@@ -20,7 +20,8 @@ import yaml
 DEFAULT_MAX_FILE_BYTES = 1_048_576
 MAX_FILE_BYTES = 100 * 1024 * 1024
 READ_CHUNK_BYTES = 64 * 1024
-CLASSIFICATIONS = frozenset({"frontend", "backend", "tests"})
+SOURCE_LAYERS = frozenset({"client", "service", "test", "mcp", "runtime_observation"})
+CLIENT_SURFACES = frozenset({"web", "mobile", "desktop", "cli", "automation", "other"})
 _SENSITIVE_TOKEN = re.compile(
     r"(^|[._-])(secret|secrets|token|credential|credentials|password|authorization)([._-]|$)",
     re.IGNORECASE,
@@ -92,7 +93,8 @@ def parser() -> JsonArgumentParser:
     value.add_argument("--domain-id", required=True)
     value.add_argument("--source", required=True)
     value.add_argument("--source-id", required=True)
-    value.add_argument("--classification", choices=sorted(CLASSIFICATIONS), required=True)
+    value.add_argument("--source-layer", choices=sorted(SOURCE_LAYERS), required=True)
+    value.add_argument("--client-surface", choices=sorted(CLIENT_SURFACES))
     value.add_argument("--output", required=True)
     value.add_argument("--line-start", type=int)
     value.add_argument("--line-end", type=int)
@@ -263,9 +265,9 @@ def validate_acceptance(
         )
 
 
-def safe_output_parent(usage_root: Path, classification: str, parent: Path) -> Path:
+def safe_output_parent(usage_root: Path, source_layer: str, parent: Path) -> Path:
     current = usage_root
-    for part in ("usage-evidence", classification, *parent.parts):
+    for part in ("usage-evidence", source_layer, *parent.parts):
         current /= part
         try:
             metadata = current.lstat()
@@ -343,6 +345,17 @@ def validate_line_range(raw: bytes, line_start: int | None, line_end: int | None
         raise SafeUsageError("ACC_SKILL_LINE_RANGE_INVALID", "line range exceeds source file")
 
 
+def validate_source_layer(source_layer: str, client_surface: str | None) -> None:
+    if source_layer == "client" and client_surface is None:
+        raise SafeUsageError(
+            "ACC_SKILL_USAGE", "client evidence requires an explicit --client-surface"
+        )
+    if source_layer != "client" and client_surface is not None:
+        raise SafeUsageError(
+            "ACC_SKILL_USAGE", "--client-surface is only valid for client evidence"
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     arguments = parser().parse_args(argv)
     try:
@@ -350,6 +363,7 @@ def main(argv: list[str] | None = None) -> int:
         acc_root = existing_directory(arguments.acc_project)
         usage_root = existing_directory(arguments.usage_project)
         ensure_disjoint(source_root, acc_root, usage_root)
+        validate_source_layer(arguments.source_layer, arguments.client_surface)
 
         acceptance = load_acceptance(usage_root, arguments.max_file_bytes)
         validate_acceptance(acceptance, arguments.accepted_mcp_digest, arguments.domain_id)
@@ -369,18 +383,20 @@ def main(argv: list[str] | None = None) -> int:
         )
         validate_line_range(raw, arguments.line_start, arguments.line_end)
         evidence: dict[str, object] = {
-            "classification": arguments.classification,
             "digest": f"sha256:{hashlib.sha256(raw).hexdigest()}",
             "domain_id": arguments.domain_id,
             "kind": "source_file",
             "path": source_relative.as_posix(),
             "size_bytes": len(raw),
+            "source_layer": arguments.source_layer,
             "source_id": arguments.source_id,
         }
+        if arguments.client_surface is not None:
+            evidence["client_surface"] = arguments.client_surface
         if arguments.line_start is not None:
             evidence["line_start"] = arguments.line_start
             evidence["line_end"] = arguments.line_end
-        parent = safe_output_parent(usage_root, arguments.classification, output_relative.parent)
+        parent = safe_output_parent(usage_root, arguments.source_layer, output_relative.parent)
         target = parent / output_relative.name
         # Recheck immediately before the only write performed by this command.
         current = (source_root / source_relative).stat(follow_symlinks=False)
@@ -397,7 +413,7 @@ def main(argv: list[str] | None = None) -> int:
             result={
                 "evidence": evidence,
                 "output": (
-                    Path("usage-evidence") / arguments.classification / output_relative
+                    Path("usage-evidence") / arguments.source_layer / output_relative
                 ).as_posix(),
             },
             diagnostics=[],
@@ -405,7 +421,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     except SafeUsageError as exc:
         emit(ok=False, result=None, diagnostics=[diagnostic(exc)])
-        return 2 if exc.code in {"ACC_SKILL_PATH_INVALID", "ACC_SKILL_LINE_RANGE_INVALID"} else 3
+        return (
+            2
+            if exc.code
+            in {"ACC_SKILL_PATH_INVALID", "ACC_SKILL_LINE_RANGE_INVALID", "ACC_SKILL_USAGE"}
+            else 3
+        )
 
 
 if __name__ == "__main__":
