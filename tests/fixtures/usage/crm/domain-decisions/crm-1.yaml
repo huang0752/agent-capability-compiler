@@ -1,0 +1,16 @@
+schema_version: '2'
+domain_id: crm
+revision: 1
+disposition: accepted
+business_goal_ids:
+- find-customer
+included_route_ids:
+- search-detail
+known_limitations: []
+contract_digest: sha256:bc914ddb381224295786174ff8e77c3d8ba18e3fbd7aeb35618718e4d0553002
+decision_digest: sha256:c8c930ca2e9bf1801fae221218c37041c433ade7367766fe233d3ba26ada8e92
+user_confirmation:
+  confirmed_by: crm-fixture-reviewer
+  confirmed_at: '2026-08-11T00:00:00Z'
+  source_text_digest: sha256:21133278f3aca595c65fea5c7753cf4dbf91606c940194c6646c4ae0d74fe75f
+  confirmed_decision_digest: sha256:c8c930ca2e9bf1801fae221218c37041c433ade7367766fe233d3ba26ada8e92

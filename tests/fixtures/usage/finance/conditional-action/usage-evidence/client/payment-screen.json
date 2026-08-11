@@ -1,0 +1,11 @@
+{
+  "source_id": "client:payment-screen",
+  "kind": "content_summary",
+  "locator": "fixture:finance:payment-screen",
+  "summary": "The payment client conditionally requests approval before commit.",
+  "digest": "sha256:4b956f0451ce779ae8e14430f8cbb5e09ae02b1cde64b4cd5eb200592722696d",
+  "domain_id": "finance",
+  "source_layer": "client",
+  "size_bytes": 65,
+  "client_surface": "web"
+}

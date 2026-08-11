@@ -1,0 +1,16 @@
+schema_version: '2'
+domain_id: cms
+revision: 1
+disposition: accepted
+business_goal_ids:
+- inspect-long-content
+included_route_ids:
+- content-detail
+known_limitations: []
+contract_digest: sha256:d091ddee405f5715308036e475c4387e1b1f9b4c5247c57ea8572a956abdfd87
+decision_digest: sha256:660a500093737afd8f6c0bf4bbc35c702e3446b7e3e13db4e268dc10b6435b68
+user_confirmation:
+  confirmed_by: cms-fixture-reviewer
+  confirmed_at: '2026-08-11T00:00:00Z'
+  source_text_digest: sha256:9a5599a55310aa4f755147eb69103ff38d6baba841afa4933ce909ea3beab2c4
+  confirmed_decision_digest: sha256:660a500093737afd8f6c0bf4bbc35c702e3446b7e3e13db4e268dc10b6435b68

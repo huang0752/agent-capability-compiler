@@ -1,0 +1,11 @@
+{
+  "source_id": "client:editor",
+  "kind": "content_summary",
+  "locator": "fixture:cms:editor",
+  "summary": "The editor displays the full article body without embedding request payloads.",
+  "digest": "sha256:b1d31c39a137809888558dc9c86c61433c10c2197e3b3278557a11b0e5186753",
+  "domain_id": "cms",
+  "source_layer": "client",
+  "size_bytes": 77,
+  "client_surface": "web"
+}

@@ -1,0 +1,11 @@
+schema_version: '2'
+scenario_id: monitoring-stale
+domain_id: monitoring
+route_id: status-refresh
+title: Monitoring Stale
+kind: stale_input
+public_input_ids: []
+expected_outcomes:
+- stale
+prohibited_behaviors:
+- Do not widen source authorization.

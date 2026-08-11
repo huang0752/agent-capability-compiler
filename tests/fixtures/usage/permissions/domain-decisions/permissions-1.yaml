@@ -1,0 +1,16 @@
+schema_version: '2'
+domain_id: permissions
+revision: 1
+disposition: accepted
+business_goal_ids:
+- inspect-effective-permissions
+included_route_ids:
+- permission-read
+known_limitations: []
+contract_digest: sha256:85efd05ba237fdba8f8ccc28433979c61269f792dcb2a0862b01d10838340a28
+decision_digest: sha256:d2318ccd61c5c87a54dd2901f1dca917e9ce82d6d785065c299184deadbdcb6a
+user_confirmation:
+  confirmed_by: permissions-fixture-reviewer
+  confirmed_at: '2026-08-11T00:00:00Z'
+  source_text_digest: sha256:5bc2b4d13d75fadc3d1f4a56aa2d24be71096938342072f48d33b35120097859
+  confirmed_decision_digest: sha256:d2318ccd61c5c87a54dd2901f1dca917e9ce82d6d785065c299184deadbdcb6a

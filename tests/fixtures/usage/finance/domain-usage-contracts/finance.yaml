@@ -1,0 +1,73 @@
+schema_version: '2'
+domain_id: finance
+pack_digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+ir_digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+tool_schema_digest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+test_report_digest: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+source_snapshot_digest: sha256:fe726b25191cb7c9aebe9f35ea644061ac4ed5ab873ae4388638f5cd46bb1759
+business_goals:
+- id: inspect-invoices
+  description: Inspect the current invoice list.
+  evidence_claim_ids:
+  - claim-goal
+tool_routes:
+- id: invoice-list
+  business_goal_id: inspect-invoices
+  preconditions: []
+  steps:
+  - id: list
+    capability_id: finance.invoice.list
+    tool_name: finance_invoice_list
+    depends_on_step_ids: []
+    binding_ids: []
+    condition: null
+    retry: safe
+    action_phase: null
+  error_branch_ids: []
+  result_step_id: list
+  result_pointer: /items
+  action_lifecycle_id: null
+input_bindings: []
+defaults: []
+conditions: []
+option_sources: []
+related_data: []
+result_consumption:
+- id: return-invoices
+  capability_id: finance.invoice.list
+  step_id: list
+  kind: return
+  field_pointers:
+  - /items
+  order: 1
+  evidence_claim_ids:
+  - claim-result
+error_handling: []
+action_lifecycles: []
+prohibited_behaviors:
+- Do not infer authorization beyond the source response.
+required_scenario_ids:
+- finance-list-happy
+evidence_claims:
+- id: claim-goal
+  statement: The finance client exposes invoice list inspection.
+  target:
+    target_kind: business_goal
+    target_id: inspect-invoices
+    field_pointer: /description
+  authority: observation
+  source_layer: client
+  evidence_refs:
+  - source_id: client:finance-screen
+    digest: sha256:4444444444444444444444444444444444444444444444444444444444444444
+- id: claim-result
+  statement: The MCP list result is returned to the caller.
+  target:
+    target_kind: result_consumption
+    target_id: return-invoices
+    field_pointer: /field_pointers
+  authority: contract
+  source_layer: mcp
+  evidence_refs:
+  - source_id: mcp:finance-invoice-list
+    digest: sha256:5555555555555555555555555555555555555555555555555555555555555555

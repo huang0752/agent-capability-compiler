@@ -1,0 +1,20 @@
+schema_version: '2'
+source_revision: fixture:permissions:current
+evidence_layers:
+- source_layer: client
+  status: provided
+  digest: sha256:ac46370dfa4c7f6de9d8b9397d38b2b2ff44887b95f494ad6a11bf51107e0d90
+  client_surface: web
+- source_layer: mcp
+  status: unknown
+  digest: null
+  client_surface: null
+- source_layer: service
+  status: unknown
+  digest: null
+  client_surface: null
+- source_layer: test
+  status: unknown
+  digest: null
+  client_surface: null
+captured_at: '2026-08-11T00:00:00Z'

@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "User acceptance of one exact MCP baseline for Usage analysis.",
+  "properties": {
+    "accepted_at": {
+      "maxLength": 40,
+      "minLength": 20,
+      "title": "Accepted At",
+      "type": "string"
+    },
+    "accepted_by": {
+      "maxLength": 512,
+      "minLength": 1,
+      "title": "Accepted By",
+      "type": "string"
+    },
+    "accepted_domain_ids": {
+      "items": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": "Accepted Domain Ids",
+      "type": "array"
+    },
+    "ir_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "title": "Ir Digest",
+      "type": "string"
+    },
+    "known_limitations": {
+      "items": {
+        "maxLength": 16384,
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": "Known Limitations",
+      "type": "array"
+    },
+    "pack_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "title": "Pack Digest",
+      "type": "string"
+    },
+    "release_id": {
+      "maxLength": 512,
+      "minLength": 1,
+      "title": "Release Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "2",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "test_report_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "title": "Test Report Digest",
+      "type": "string"
+    },
+    "tool_schema_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "title": "Tool Schema Digest",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "release_id",
+    "pack_digest",
+    "ir_digest",
+    "tool_schema_digest",
+    "accepted_domain_ids",
+    "test_report_digest",
+    "known_limitations",
+    "accepted_by",
+    "accepted_at"
+  ],
+  "title": "McpReleaseAcceptance",
+  "type": "object"
+}

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+import weakref
+from collections.abc import Callable, Mapping
 from contextlib import AsyncExitStack, suppress
 from dataclasses import dataclass
 from types import TracebackType
@@ -162,6 +163,22 @@ class McpStreamableHttpTestClient:
     ) -> types.CallToolResult:
         return await self._active_session().call_tool(name, dict(arguments or {}))
 
+    async def list_resources(self) -> types.ListResourcesResult:
+        return await self._active_session().list_resources()
+
+    async def read_resource(self, uri: Any) -> types.ReadResourceResult:
+        return await self._active_session().read_resource(uri)
+
+    async def list_prompts(self) -> types.ListPromptsResult:
+        return await self._active_session().list_prompts()
+
+    async def get_prompt(
+        self,
+        name: str,
+        arguments: Mapping[str, str] | None = None,
+    ) -> types.GetPromptResult:
+        return await self._active_session().get_prompt(name, dict(arguments or {}))
+
     def _active_session(self) -> ClientSession:
         if self._session is None:
             raise RuntimeError("MCP Streamable HTTP client is not connected")
@@ -197,6 +214,70 @@ def _task_is_cancelling() -> bool:
     except RuntimeError:  # pragma: no cover - non-asyncio anyio backend
         return True
     return task is None or task.cancelling() > 0
+
+
+def _install_live_transport_registry() -> Callable[
+    [McpStreamableHttpTestClient], tuple[int, int, int, str] | None
+]:
+    live: dict[
+        int,
+        tuple[
+            weakref.ReferenceType[McpStreamableHttpTestClient],
+            ClientSession,
+            AsyncExitStack,
+            int,
+        ],
+    ] = {}
+    generation = 0
+    original_enter = McpStreamableHttpTestClient.__aenter__
+    original_exit = McpStreamableHttpTestClient.__aexit__
+
+    async def enter(client: McpStreamableHttpTestClient) -> McpStreamableHttpTestClient:
+        nonlocal generation
+        result = await original_enter(client)
+        session = client._session
+        stack = client._stack
+        assert session is not None and stack is not None
+        generation += 1
+        identity = id(client)
+
+        def discard(_reference: object) -> None:
+            live.pop(identity, None)
+
+        live[identity] = (weakref.ref(client, discard), session, stack, generation)
+        return result
+
+    async def exit(
+        client: McpStreamableHttpTestClient,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        live.pop(id(client), None)
+        try:
+            await original_exit(client, exc_type, exc_value, traceback)
+        finally:
+            live.pop(id(client), None)
+
+    def inspect(client: McpStreamableHttpTestClient) -> tuple[int, int, int, str] | None:
+        record = live.get(id(client))
+        if (
+            record is None
+            or record[0]() is not client
+            or client._session is not record[1]
+            or client._stack is not record[2]
+            or client._state != "active"
+        ):
+            return None
+        return id(record[1]), id(record[2]), record[3], "streamable_http"
+
+    type.__setattr__(McpStreamableHttpTestClient, "__aenter__", enter)
+    type.__setattr__(McpStreamableHttpTestClient, "__aexit__", exit)
+    return inspect
+
+
+_inspect_live_transport = _install_live_transport_registry()
+del _install_live_transport_registry
 
 
 __all__ = ["McpStreamableHttpTestClient"]

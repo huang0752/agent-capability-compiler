@@ -1,0 +1,11 @@
+{
+  "source_id": "client:permission-view",
+  "kind": "content_summary",
+  "locator": "fixture:permissions:permission-view",
+  "summary": "The client displays effective permissions returned by the source API.",
+  "digest": "sha256:30a08d278273ed38adf1ca1e41508019ad7d555e3f4984696e6b30b49a13a98b",
+  "domain_id": "permissions",
+  "source_layer": "client",
+  "size_bytes": 69,
+  "client_surface": "web"
+}

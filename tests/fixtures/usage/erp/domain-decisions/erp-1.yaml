@@ -1,0 +1,16 @@
+schema_version: '2'
+domain_id: erp
+revision: 1
+disposition: accepted
+business_goal_ids:
+- inspect-record
+included_route_ids:
+- shared-id-detail
+known_limitations: []
+contract_digest: sha256:a3c394f717fb3c902cbfdcd89b791b911bf2c870870d40ebd6db2166dbabea30
+decision_digest: sha256:16e4dfbbcf1c1c5f0d920c558f9f0c00635dc9c91a297f769d3dc8566dadf545
+user_confirmation:
+  confirmed_by: erp-fixture-reviewer
+  confirmed_at: '2026-08-11T00:00:00Z'
+  source_text_digest: sha256:9bd1dc332ba383c50ea000deb187d07b1e00debeabb73438c5aec6715903903e
+  confirmed_decision_digest: sha256:16e4dfbbcf1c1c5f0d920c558f9f0c00635dc9c91a297f769d3dc8566dadf545

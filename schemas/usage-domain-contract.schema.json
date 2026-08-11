@@ -1,0 +1,1518 @@
+{
+  "$defs": {
+    "AllExpression": {
+      "additionalProperties": false,
+      "description": "Require every nested safe expression to hold.",
+      "properties": {
+        "operands": {
+          "items": {
+            "$ref": "#/$defs/ConditionExpression"
+          },
+          "minItems": 1,
+          "title": "Operands",
+          "type": "array"
+        },
+        "operator": {
+          "const": "all",
+          "title": "Operator",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operator",
+        "operands"
+      ],
+      "title": "AllExpression",
+      "type": "object"
+    },
+    "AnyExpression": {
+      "additionalProperties": false,
+      "description": "Require at least one nested safe expression to hold.",
+      "properties": {
+        "operands": {
+          "items": {
+            "$ref": "#/$defs/ConditionExpression"
+          },
+          "minItems": 1,
+          "title": "Operands",
+          "type": "array"
+        },
+        "operator": {
+          "const": "any",
+          "title": "Operator",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operator",
+        "operands"
+      ],
+      "title": "AnyExpression",
+      "type": "object"
+    },
+    "ComparisonExpression": {
+      "additionalProperties": false,
+      "description": "Compare two safe operands without executing source code.",
+      "properties": {
+        "left": {
+          "$ref": "#/$defs/ConditionOperand"
+        },
+        "operator": {
+          "enum": [
+            "eq",
+            "ne",
+            "in"
+          ],
+          "title": "Operator",
+          "type": "string"
+        },
+        "right": {
+          "$ref": "#/$defs/ConditionOperand"
+        }
+      },
+      "required": [
+        "operator",
+        "left",
+        "right"
+      ],
+      "title": "ComparisonExpression",
+      "type": "object"
+    },
+    "ConditionExpression": {
+      "discriminator": {
+        "mapping": {
+          "all": "#/$defs/AllExpression",
+          "any": "#/$defs/AnyExpression",
+          "eq": "#/$defs/ComparisonExpression",
+          "in": "#/$defs/ComparisonExpression",
+          "ne": "#/$defs/ComparisonExpression",
+          "not": "#/$defs/NotExpression",
+          "present": "#/$defs/PresentExpression"
+        },
+        "propertyName": "operator"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/AllExpression"
+        },
+        {
+          "$ref": "#/$defs/AnyExpression"
+        },
+        {
+          "$ref": "#/$defs/NotExpression"
+        },
+        {
+          "$ref": "#/$defs/ComparisonExpression"
+        },
+        {
+          "$ref": "#/$defs/PresentExpression"
+        }
+      ]
+    },
+    "ConditionOperand": {
+      "discriminator": {
+        "mapping": {
+          "literal": "#/$defs/LiteralOperand",
+          "reference": "#/$defs/ReferenceOperand"
+        },
+        "propertyName": "kind"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ReferenceOperand"
+        },
+        {
+          "$ref": "#/$defs/LiteralOperand"
+        }
+      ]
+    },
+    "InputMapping": {
+      "additionalProperties": false,
+      "description": "A bounded declarative value mapping recorded by discovery.",
+      "properties": {
+        "kind": {
+          "enum": [
+            "identity",
+            "date",
+            "datetime",
+            "enum",
+            "identifier",
+            "locale",
+            "null",
+            "number",
+            "text"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "mapping": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "propertyNames": {
+            "minLength": 1
+          },
+          "title": "Mapping",
+          "type": "object"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "title": "InputMapping",
+      "type": "object"
+    },
+    "JsonValue": {},
+    "LiteralOperand": {
+      "additionalProperties": false,
+      "description": "Use one inert JSON-compatible literal in a condition.",
+      "properties": {
+        "kind": {
+          "const": "literal",
+          "title": "Kind",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/JsonValue"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "title": "LiteralOperand",
+      "type": "object"
+    },
+    "NotExpression": {
+      "additionalProperties": false,
+      "description": "Negate one nested safe expression.",
+      "properties": {
+        "operand": {
+          "$ref": "#/$defs/ConditionExpression"
+        },
+        "operator": {
+          "const": "not",
+          "title": "Operator",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operator",
+        "operand"
+      ],
+      "title": "NotExpression",
+      "type": "object"
+    },
+    "PresentExpression": {
+      "additionalProperties": false,
+      "description": "Test whether one safe operand is present.",
+      "properties": {
+        "operand": {
+          "$ref": "#/$defs/ConditionOperand"
+        },
+        "operator": {
+          "const": "present",
+          "title": "Operator",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operator",
+        "operand"
+      ],
+      "title": "PresentExpression",
+      "type": "object"
+    },
+    "ReferenceOperand": {
+      "additionalProperties": false,
+      "description": "Read one declared value by an absolute JSON Pointer.",
+      "properties": {
+        "kind": {
+          "const": "reference",
+          "title": "Kind",
+          "type": "string"
+        },
+        "pointer": {
+          "title": "Pointer",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "pointer"
+      ],
+      "title": "ReferenceOperand",
+      "type": "object"
+    },
+    "UsageActionLifecycle": {
+      "additionalProperties": false,
+      "description": "References for the runtime-owned prepare, approval, commit, and status phases.",
+      "properties": {
+        "action_id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Action Id",
+          "type": "string"
+        },
+        "approval": {
+          "enum": [
+            "never",
+            "always",
+            "conditional"
+          ],
+          "title": "Approval",
+          "type": "string"
+        },
+        "approval_condition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConditionExpression"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "approval_handle_binding_id": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Approval Handle Binding Id"
+        },
+        "approve_action_handle_binding_id": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Approve Action Handle Binding Id"
+        },
+        "approve_step_id": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Approve Step Id"
+        },
+        "commit_action_handle_binding_id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Commit Action Handle Binding Id",
+          "type": "string"
+        },
+        "commit_step_id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Commit Step Id",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "outcome_unknown_behavior": {
+          "const": "query_status",
+          "title": "Outcome Unknown Behavior",
+          "type": "string"
+        },
+        "prepare_step_id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Prepare Step Id",
+          "type": "string"
+        },
+        "status_action_handle_binding_id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Status Action Handle Binding Id",
+          "type": "string"
+        },
+        "status_step_id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Status Step Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "action_id",
+        "prepare_step_id",
+        "commit_action_handle_binding_id",
+        "status_action_handle_binding_id",
+        "approval",
+        "commit_step_id",
+        "status_step_id",
+        "outcome_unknown_behavior"
+      ],
+      "title": "UsageActionLifecycle",
+      "type": "object"
+    },
+    "UsageBusinessGoal": {
+      "additionalProperties": false,
+      "description": "Stable business goal adopted by one domain contract.",
+      "properties": {
+        "description": {
+          "maxLength": 16384,
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "evidence_claim_ids": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evidence Claim Ids",
+          "type": "array"
+        },
+        "id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "description",
+        "evidence_claim_ids"
+      ],
+      "title": "UsageBusinessGoal",
+      "type": "object"
+    },
+    "UsageConditionRef": {
+      "additionalProperties": false,
+      "description": "Evidence-bound inert condition scoped to a route or step.",
+      "properties": {
+        "evidence_claim_ids": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evidence Claim Ids",
+          "type": "array"
+        },
+        "expression": {
+          "$ref": "#/$defs/ConditionExpression"
+        },
+        "id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "visible",
+            "enabled",
+            "required",
+            "reset",
+            "execute"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "route_id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Route Id",
+          "type": "string"
+        },
+        "scope": {
+          "enum": [
+            "route",
+            "step"
+          ],
+          "title": "Scope",
+          "type": "string"
+        },
+        "step_id": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Step Id"
+        },
+        "target_pointer": {
+          "title": "Target Pointer",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "scope",
+        "route_id",
+        "step_id",
+        "target_pointer",
+        "expression",
+        "evidence_claim_ids"
+      ],
+      "title": "UsageConditionRef",
+      "type": "object"
+    },
+    "UsageDefaultRef": {
+      "additionalProperties": false,
+      "description": "Evidence-bound default applied to one declared tool input.",
+      "properties": {
+        "capability_id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Capability Id",
+          "type": "string"
+        },
+        "evidence_claim_ids": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evidence Claim Ids",
+          "type": "array"
+        },
+        "id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "precedence": {
+          "exclusiveMinimum": 0,
+          "title": "Precedence",
+          "type": "integer"
+        },
+        "reference_binding_id": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reference Binding Id"
+        },
+        "source": {
+          "enum": [
+            "literal",
+            "binding",
+            "source_default"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "step_id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Step Id",
+          "type": "string"
+        },
+        "submission": {
+          "enum": [
+            "always",
+            "when_missing",
+            "omit_when_absent"
+          ],
+          "title": "Submission",
+          "type": "string"
+        },
+        "target_pointer": {
+          "title": "Target Pointer",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JsonValue"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "capability_id",
+        "step_id",
+        "evidence_claim_ids",
+        "target_pointer",
+        "source",
+        "precedence",
+        "submission"
+      ],
+      "title": "UsageDefaultRef",
+      "type": "object"
+    },
+    "UsageErrorBranch": {
+      "additionalProperties": false,
+      "description": "Deterministic behavior for one or more normalized failure outcomes.",
+      "properties": {
+        "behavior": {
+          "enum": [
+            "stop",
+            "return_empty",
+            "retry",
+            "query_status"
+          ],
+          "title": "Behavior",
+          "type": "string"
+        },
+        "description": {
+          "maxLength": 16384,
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "evidence_claim_ids": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evidence Claim Ids",
+          "type": "array"
+        },
+        "id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "outcomes": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Outcomes",
+          "type": "array"
+        },
+        "retry_policy": {
+          "enum": [
+            "never",
+            "safe_read",
+            "idempotent",
+            "status_only"
+          ],
+          "title": "Retry Policy",
+          "type": "string"
+        },
+        "step_ids": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Step Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "outcomes",
+        "behavior",
+        "description",
+        "step_ids",
+        "retry_policy",
+        "evidence_claim_ids"
+      ],
+      "title": "UsageErrorBranch",
+      "type": "object"
+    },
+    "UsageEvidenceClaim": {
+      "additionalProperties": false,
+      "description": "One bounded statement backed by independently loaded Evidence identities.",
+      "properties": {
+        "authority": {
+          "enum": [
+            "contract",
+            "implementation",
+            "test",
+            "observation"
+          ],
+          "title": "Authority",
+          "type": "string"
+        },
+        "evidence_refs": {
+          "items": {
+            "$ref": "#/$defs/UsageEvidenceRef"
+          },
+          "minItems": 1,
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "source_layer": {
+          "enum": [
+            "client",
+            "service",
+            "test",
+            "mcp",
+            "runtime_observation"
+          ],
+          "title": "Source Layer",
+          "type": "string"
+        },
+        "statement": {
+          "maxLength": 16384,
+          "minLength": 1,
+          "title": "Statement",
+          "type": "string"
+        },
+        "target": {
+          "$ref": "#/$defs/UsageEvidenceTarget"
+        }
+      },
+      "required": [
+        "id",
+        "statement",
+        "target",
+        "authority",
+        "source_layer",
+        "evidence_refs"
+      ],
+      "title": "UsageEvidenceClaim",
+      "type": "object"
+    },
+    "UsageEvidenceRef": {
+      "additionalProperties": false,
+      "description": "Immutable identity of one independently loaded Evidence artifact.",
+      "properties": {
+        "digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Digest",
+          "type": "string"
+        },
+        "source_id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Source Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "digest"
+      ],
+      "title": "UsageEvidenceRef",
+      "type": "object"
+    },
+    "UsageEvidenceTarget": {
+      "additionalProperties": false,
+      "description": "Typed contract object and field targeted by one evidence claim.",
+      "properties": {
+        "field_pointer": {
+          "title": "Field Pointer",
+          "type": "string"
+        },
+        "target_id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Target Id",
+          "type": "string"
+        },
+        "target_kind": {
+          "enum": [
+            "business_goal",
+            "tool_route",
+            "input_binding",
+            "default",
+            "condition",
+            "option_source",
+            "related_data",
+            "result_consumption",
+            "error_branch",
+            "action_lifecycle"
+          ],
+          "title": "Target Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "target_kind",
+        "target_id",
+        "field_pointer"
+      ],
+      "title": "UsageEvidenceTarget",
+      "type": "object"
+    },
+    "UsageOptionItem": {
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "maxLength": 16384,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/JsonValue"
+        }
+      },
+      "required": [
+        "value",
+        "label"
+      ],
+      "title": "UsageOptionItem",
+      "type": "object"
+    },
+    "UsageOptionSourceRef": {
+      "additionalProperties": false,
+      "description": "Evidence-bound producer or static source for one consumer option input.",
+      "properties": {
+        "capability_id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Capability Id",
+          "type": "string"
+        },
+        "consumer_step_id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Consumer Step Id",
+          "type": "string"
+        },
+        "empty_behavior": {
+          "enum": [
+            "return_empty",
+            "stop"
+          ],
+          "title": "Empty Behavior",
+          "type": "string"
+        },
+        "error_behavior": {
+          "enum": [
+            "stop",
+            "retry"
+          ],
+          "title": "Error Behavior",
+          "type": "string"
+        },
+        "evidence_claim_ids": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evidence Claim Ids",
+          "type": "array"
+        },
+        "id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "items_pointer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Items Pointer"
+        },
+        "label_pointer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Label Pointer"
+        },
+        "paging": {
+          "enum": [
+            "unsupported",
+            "supported",
+            "required"
+          ],
+          "title": "Paging",
+          "type": "string"
+        },
+        "producer_step_id": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Producer Step Id"
+        },
+        "search": {
+          "enum": [
+            "unsupported",
+            "supported",
+            "required"
+          ],
+          "title": "Search",
+          "type": "string"
+        },
+        "source": {
+          "enum": [
+            "producer_step",
+            "static"
+          ],
+          "title": "Source",
+          "type": "string"
+        },
+        "static_items": {
+          "items": {
+            "$ref": "#/$defs/UsageOptionItem"
+          },
+          "title": "Static Items",
+          "type": "array"
+        },
+        "target_pointer": {
+          "title": "Target Pointer",
+          "type": "string"
+        },
+        "value_pointer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Value Pointer"
+        }
+      },
+      "required": [
+        "id",
+        "capability_id",
+        "consumer_step_id",
+        "target_pointer",
+        "source",
+        "static_items",
+        "search",
+        "paging",
+        "empty_behavior",
+        "error_behavior",
+        "evidence_claim_ids"
+      ],
+      "title": "UsageOptionSourceRef",
+      "type": "object"
+    },
+    "UsageRelatedDataRef": {
+      "additionalProperties": false,
+      "description": "Evidence-bound relationship between one producer and one consumer step.",
+      "properties": {
+        "cardinality": {
+          "enum": [
+            "one",
+            "optional",
+            "many"
+          ],
+          "title": "Cardinality",
+          "type": "string"
+        },
+        "consistency": {
+          "enum": [
+            "current",
+            "snapshot",
+            "stale_check_required"
+          ],
+          "title": "Consistency",
+          "type": "string"
+        },
+        "consumer_step_id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Consumer Step Id",
+          "type": "string"
+        },
+        "evidence_claim_ids": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evidence Claim Ids",
+          "type": "array"
+        },
+        "id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "producer_pointer": {
+          "title": "Producer Pointer",
+          "type": "string"
+        },
+        "producer_step_id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Producer Step Id",
+          "type": "string"
+        },
+        "target_pointer": {
+          "title": "Target Pointer",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "producer_step_id",
+        "producer_pointer",
+        "consumer_step_id",
+        "target_pointer",
+        "cardinality",
+        "consistency",
+        "evidence_claim_ids"
+      ],
+      "title": "UsageRelatedDataRef",
+      "type": "object"
+    },
+    "UsageResultConsumption": {
+      "additionalProperties": false,
+      "description": "Evidence-bound public consumption of declared result fields.",
+      "properties": {
+        "capability_id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Capability Id",
+          "type": "string"
+        },
+        "evidence_claim_ids": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evidence Claim Ids",
+          "type": "array"
+        },
+        "field_pointers": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Field Pointers",
+          "type": "array"
+        },
+        "id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "return",
+            "display",
+            "navigate",
+            "download",
+            "store_reference"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "order": {
+          "exclusiveMinimum": 0,
+          "title": "Order",
+          "type": "integer"
+        },
+        "step_id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Step Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "capability_id",
+        "step_id",
+        "evidence_claim_ids",
+        "kind",
+        "field_pointers",
+        "order"
+      ],
+      "title": "UsageResultConsumption",
+      "type": "object"
+    },
+    "UsageStepBinding": {
+      "additionalProperties": false,
+      "description": "Declaratively map one public or prior-step value into a tool input.",
+      "properties": {
+        "consumer_step_id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Consumer Step Id",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "mapping": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InputMapping"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "source_kind": {
+          "enum": [
+            "public_input",
+            "route_input",
+            "prior_step_output",
+            "trusted_context"
+          ],
+          "title": "Source Kind",
+          "type": "string"
+        },
+        "source_pointer": {
+          "title": "Source Pointer",
+          "type": "string"
+        },
+        "source_step_id": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Step Id"
+        },
+        "target_pointer": {
+          "title": "Target Pointer",
+          "type": "string"
+        },
+        "value_kind": {
+          "enum": [
+            "public_value",
+            "action_handle",
+            "approval_handle",
+            "status_handle"
+          ],
+          "title": "Value Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "source_kind",
+        "consumer_step_id",
+        "source_pointer",
+        "target_pointer",
+        "value_kind"
+      ],
+      "title": "UsageStepBinding",
+      "type": "object"
+    },
+    "UsageToolRoute": {
+      "additionalProperties": false,
+      "description": "One closed acyclic graph that achieves a bounded business goal.",
+      "properties": {
+        "action_lifecycle_id": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Action Lifecycle Id"
+        },
+        "business_goal_id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Business Goal Id",
+          "type": "string"
+        },
+        "error_branch_ids": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Error Branch Ids",
+          "type": "array"
+        },
+        "id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "preconditions": {
+          "items": {
+            "maxLength": 16384,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Preconditions",
+          "type": "array"
+        },
+        "result_pointer": {
+          "title": "Result Pointer",
+          "type": "string"
+        },
+        "result_step_id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Result Step Id",
+          "type": "string"
+        },
+        "steps": {
+          "items": {
+            "$ref": "#/$defs/UsageToolStep"
+          },
+          "minItems": 1,
+          "title": "Steps",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "business_goal_id",
+        "preconditions",
+        "steps",
+        "error_branch_ids",
+        "result_step_id",
+        "result_pointer"
+      ],
+      "title": "UsageToolRoute",
+      "type": "object"
+    },
+    "UsageToolStep": {
+      "additionalProperties": false,
+      "description": "One capability-backed tool call in a declarative route.",
+      "properties": {
+        "action_phase": {
+          "anyOf": [
+            {
+              "enum": [
+                "prepare",
+                "approve",
+                "commit",
+                "status"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Action Phase"
+        },
+        "binding_ids": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Binding Ids",
+          "type": "array"
+        },
+        "capability_id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Capability Id",
+          "type": "string"
+        },
+        "condition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConditionExpression"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "depends_on_step_ids": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Depends On Step Ids",
+          "type": "array"
+        },
+        "id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "retry": {
+          "enum": [
+            "never",
+            "safe",
+            "status_only"
+          ],
+          "title": "Retry",
+          "type": "string"
+        },
+        "tool_name": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Tool Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "capability_id",
+        "tool_name",
+        "depends_on_step_ids",
+        "binding_ids",
+        "retry"
+      ],
+      "title": "UsageToolStep",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Platform-neutral Usage facts and routes for exactly one business domain.",
+  "properties": {
+    "action_lifecycles": {
+      "items": {
+        "$ref": "#/$defs/UsageActionLifecycle"
+      },
+      "title": "Action Lifecycles",
+      "type": "array"
+    },
+    "business_goals": {
+      "items": {
+        "$ref": "#/$defs/UsageBusinessGoal"
+      },
+      "minItems": 1,
+      "title": "Business Goals",
+      "type": "array"
+    },
+    "conditions": {
+      "items": {
+        "$ref": "#/$defs/UsageConditionRef"
+      },
+      "title": "Conditions",
+      "type": "array"
+    },
+    "defaults": {
+      "items": {
+        "$ref": "#/$defs/UsageDefaultRef"
+      },
+      "title": "Defaults",
+      "type": "array"
+    },
+    "domain_id": {
+      "maxLength": 512,
+      "minLength": 1,
+      "title": "Domain Id",
+      "type": "string"
+    },
+    "error_handling": {
+      "items": {
+        "$ref": "#/$defs/UsageErrorBranch"
+      },
+      "title": "Error Handling",
+      "type": "array"
+    },
+    "evidence_claims": {
+      "items": {
+        "$ref": "#/$defs/UsageEvidenceClaim"
+      },
+      "minItems": 1,
+      "title": "Evidence Claims",
+      "type": "array"
+    },
+    "input_bindings": {
+      "items": {
+        "$ref": "#/$defs/UsageStepBinding"
+      },
+      "title": "Input Bindings",
+      "type": "array"
+    },
+    "ir_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "title": "Ir Digest",
+      "type": "string"
+    },
+    "option_sources": {
+      "items": {
+        "$ref": "#/$defs/UsageOptionSourceRef"
+      },
+      "title": "Option Sources",
+      "type": "array"
+    },
+    "pack_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "title": "Pack Digest",
+      "type": "string"
+    },
+    "prohibited_behaviors": {
+      "items": {
+        "maxLength": 16384,
+        "minLength": 1,
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Prohibited Behaviors",
+      "type": "array"
+    },
+    "related_data": {
+      "items": {
+        "$ref": "#/$defs/UsageRelatedDataRef"
+      },
+      "title": "Related Data",
+      "type": "array"
+    },
+    "required_scenario_ids": {
+      "items": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Required Scenario Ids",
+      "type": "array"
+    },
+    "result_consumption": {
+      "items": {
+        "$ref": "#/$defs/UsageResultConsumption"
+      },
+      "minItems": 1,
+      "title": "Result Consumption",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "2",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_snapshot_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "title": "Source Snapshot Digest",
+      "type": "string"
+    },
+    "test_report_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "title": "Test Report Digest",
+      "type": "string"
+    },
+    "tool_routes": {
+      "items": {
+        "$ref": "#/$defs/UsageToolRoute"
+      },
+      "minItems": 1,
+      "title": "Tool Routes",
+      "type": "array"
+    },
+    "tool_schema_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "title": "Tool Schema Digest",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "domain_id",
+    "pack_digest",
+    "ir_digest",
+    "tool_schema_digest",
+    "test_report_digest",
+    "source_snapshot_digest",
+    "business_goals",
+    "tool_routes",
+    "input_bindings",
+    "defaults",
+    "conditions",
+    "option_sources",
+    "related_data",
+    "result_consumption",
+    "error_handling",
+    "action_lifecycles",
+    "prohibited_behaviors",
+    "required_scenario_ids",
+    "evidence_claims"
+  ],
+  "title": "DomainUsageContract",
+  "type": "object"
+}

@@ -1,0 +1,10 @@
+{
+  "source_id": "mcp:finance-invoice-list",
+  "kind": "content",
+  "locator": "embedded-artifact:finance-invoice-list",
+  "summary": "The accepted MCP exposes the finance invoice list result.",
+  "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+  "domain_id": "finance",
+  "source_layer": "mcp",
+  "size_bytes": 80
+}

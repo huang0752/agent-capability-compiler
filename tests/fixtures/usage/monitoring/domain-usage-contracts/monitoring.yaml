@@ -1,0 +1,102 @@
+schema_version: '2'
+domain_id: monitoring
+pack_digest: sha256:be3c252911d9f0cf437e8476eed95a90a08a6c566fca98960eb2a9115b8c23c0
+ir_digest: sha256:b5d828a58d4c1a6382aa2c4913755380cd9d336896a1d924fcc2c65e41498077
+tool_schema_digest: sha256:a95c4be91652d92f5a71e032bad5d21ccf51300a9db0c467f59302830687d7d8
+test_report_digest: sha256:a38660ffdca16426ce5c55a2e5132211fa4f2b26ac864b93cbcb93a2b2ba9a01
+source_snapshot_digest: sha256:461d82e6e67b662c1be04fb7013f7c170f84f0de8ea05c75c2fc2f36a1254050
+business_goals:
+- id: refresh-status
+  description: Read monitoring status and explicitly refresh when the prior status
+    may be stale.
+  evidence_claim_ids:
+  - claim-goal
+tool_routes:
+- id: status-refresh
+  business_goal_id: refresh-status
+  preconditions: []
+  steps:
+  - id: read-status
+    capability_id: monitoring.status.read
+    tool_name: monitoring_status_read
+    depends_on_step_ids: []
+    binding_ids: []
+    condition: null
+    retry: safe
+    action_phase: null
+  - id: refresh-status
+    capability_id: monitoring.status.refresh
+    tool_name: monitoring_status_refresh
+    depends_on_step_ids:
+    - read-status
+    binding_ids:
+    - bind-monitor-id
+    condition: null
+    retry: safe
+    action_phase: null
+  error_branch_ids: []
+  result_step_id: refresh-status
+  result_pointer: /status
+  action_lifecycle_id: null
+input_bindings:
+- id: bind-monitor-id
+  source_kind: prior_step_output
+  source_step_id: read-status
+  consumer_step_id: refresh-status
+  source_pointer: /monitor_id
+  target_pointer: /monitor_id
+  mapping: null
+  value_kind: status_handle
+defaults: []
+conditions: []
+option_sources: []
+related_data:
+- id: stale-monitor-status
+  producer_step_id: read-status
+  producer_pointer: /monitor_id
+  consumer_step_id: refresh-status
+  target_pointer: /monitor_id
+  cardinality: one
+  consistency: stale_check_required
+  evidence_claim_ids:
+  - claim-result
+result_consumption:
+- id: monitoring-result
+  capability_id: monitoring.status.refresh
+  step_id: refresh-status
+  evidence_claim_ids:
+  - claim-result
+  kind: return
+  field_pointers:
+  - /status
+  order: 1
+error_handling: []
+action_lifecycles: []
+prohibited_behaviors:
+- Do not infer authorization beyond the source response.
+required_scenario_ids:
+- monitoring-happy
+- monitoring-stale
+evidence_claims:
+- id: claim-goal
+  statement: The monitoring client exposes this bounded business goal.
+  target:
+    target_kind: business_goal
+    target_id: refresh-status
+    field_pointer: /description
+  authority: observation
+  source_layer: client
+  evidence_refs:
+  - source_id: client:status-console
+    digest: sha256:882f35d73ba201520aa2ccff1f9cc3220856b81fa98ec8df3227f5f5fdf7de33
+- id: claim-result
+  statement: The client consumes the declared monitoring result fields.
+  target:
+    target_kind: result_consumption
+    target_id: monitoring-result
+    field_pointer: /field_pointers
+  authority: observation
+  source_layer: client
+  evidence_refs:
+  - source_id: client:status-console
+    digest: sha256:882f35d73ba201520aa2ccff1f9cc3220856b81fa98ec8df3227f5f5fdf7de33

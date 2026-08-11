@@ -1,0 +1,34 @@
+schema_version: '2'
+usage_release_id: finance-usage-1
+domain_id: finance
+mcp_release_id: finance-mcp-1
+pack_digest: sha256:4fd21460c84b0679de728689e156279b3331d766e4f6e6eba7b77fa4ef9ed008
+ir_digest: sha256:6722a7569d0063d93b6b8de1c9c382224dd49fb607682cb1e55db10d3d87ddbe
+tool_schema_digest: sha256:62d6ed2a88c13ce4d96cad396ae4729ba22932bd0e66dd208cf21c12e8b44638
+test_report_digest: sha256:5628147dd772ed34ca0a8d337bde59ea8c34575c5f0e8bcca2d52ef40b3de6f1
+source_snapshot_digest: sha256:8149c67ea305c729238e2cd33a510cfc51e9cdc4c9f8cfd4ccebff3c84dab965
+contract_digest: sha256:9210d38de35836e5dce3ee773482e1f3ede674adbc41ffa1807a9434362b9741
+decision_digest: sha256:63019bb0aec05a6b474e4da27e68f4cbb0a17d8222d581d30e146fc779c53b4c
+business_goal_ids:
+- create-payment
+route_ids:
+- conditional-payment-action
+scenario_ids:
+- finance-action-lifecycle
+capability_ids:
+- finance.payment.approve
+- finance.payment.commit
+- finance.payment.prepare
+- finance.payment.status
+verification:
+  source_usage_traced: true
+  usage_contract_verified: true
+  headless_agent_verified: true
+  host_adapter_verified: false
+  real_mcp_verified: false
+  user_accepted: true
+release_status: limited
+known_limitations:
+- Real MCP and host adapter verification have not been run.
+host_adapters: []
+released_at: '2026-08-11T00:00:00Z'

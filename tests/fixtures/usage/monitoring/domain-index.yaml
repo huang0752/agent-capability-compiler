@@ -1,0 +1,13 @@
+schema_version: '2'
+mcp_release_id: monitoring-mcp-1
+pack_digest: sha256:be3c252911d9f0cf437e8476eed95a90a08a6c566fca98960eb2a9115b8c23c0
+ir_digest: sha256:b5d828a58d4c1a6382aa2c4913755380cd9d336896a1d924fcc2c65e41498077
+tool_schema_digest: sha256:a95c4be91652d92f5a71e032bad5d21ccf51300a9db0c467f59302830687d7d8
+test_report_digest: sha256:a38660ffdca16426ce5c55a2e5132211fa4f2b26ac864b93cbcb93a2b2ba9a01
+source_snapshot_digest: sha256:461d82e6e67b662c1be04fb7013f7c170f84f0de8ea05c75c2fc2f36a1254050
+domains:
+- id: monitoring
+  dependency_domain_ids: []
+preferred_order:
+- monitoring
+published_releases: []

@@ -1,0 +1,17 @@
+schema_version: '2'
+domain_id: mobile
+revision: 1
+disposition: accepted
+business_goal_ids:
+- inspect-mobile-record
+included_route_ids:
+- mobile-detail
+known_limitations:
+- Only client interaction evidence is currently available.
+contract_digest: sha256:8921a22886c3bd70d24c9bed5e8094c70316d87ae64dbb2c7fd631b2c8fadb70
+decision_digest: sha256:1e16c4b69b989ab52df8e8564ce6fe9098f40c7b43c93fcc7771f4e1e4eefe2c
+user_confirmation:
+  confirmed_by: mobile-fixture-reviewer
+  confirmed_at: '2026-08-11T00:00:00Z'
+  source_text_digest: sha256:63be9ae1a9c6785e1f3a4b6175cb008ef8aca234cda53af4926550709da780db
+  confirmed_decision_digest: sha256:1e16c4b69b989ab52df8e8564ce6fe9098f40c7b43c93fcc7771f4e1e4eefe2c

@@ -1,0 +1,11 @@
+schema_version: '2'
+scenario_id: erp-happy
+domain_id: erp
+route_id: shared-id-detail
+title: Erp Happy
+kind: happy_path
+public_input_ids: []
+expected_outcomes:
+- success
+prohibited_behaviors:
+- Do not widen source authorization.

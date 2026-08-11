@@ -1,0 +1,13 @@
+schema_version: '2'
+mcp_release_id: permissions-mcp-1
+pack_digest: sha256:ed5ba6a98f56e08efc0ae2c5704d302cce878fbfa4f8d4d4daa2e87a5340dda8
+ir_digest: sha256:5ceff4cc5fd1c0579cb6a8c9ddaa78ecc8a9300878c11786dc15c2ebfc7a9fd5
+tool_schema_digest: sha256:f3f76eaf4981fe9937e327cd7078993f8fe9bfeb140fffe8d59c8971946ef5ba
+test_report_digest: sha256:b4ee4bec30c6ea9f6041acfc60086956075638e834fd15be192ee314fd55c2f8
+source_snapshot_digest: sha256:757b033283e6aef1834480490143186670e5b50e3ff734f41bc2c6039073fc85
+domains:
+- id: permissions
+  dependency_domain_ids: []
+preferred_order:
+- permissions
+published_releases: []

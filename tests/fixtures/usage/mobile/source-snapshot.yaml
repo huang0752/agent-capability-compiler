@@ -1,0 +1,20 @@
+schema_version: '2'
+source_revision: fixture:mobile:current
+evidence_layers:
+- source_layer: client
+  status: provided
+  digest: sha256:9ce6ffaf7860aac47cb659c54ecee17b06e94f9a57625f71122c243470298954
+  client_surface: mobile
+- source_layer: mcp
+  status: unknown
+  digest: null
+  client_surface: null
+- source_layer: service
+  status: unknown
+  digest: null
+  client_surface: null
+- source_layer: test
+  status: unknown
+  digest: null
+  client_surface: null
+captured_at: '2026-08-11T00:00:00Z'

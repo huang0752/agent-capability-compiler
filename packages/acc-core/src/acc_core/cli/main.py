@@ -25,6 +25,7 @@ from acc_core.cli.domains import (
     status_domains,
 )
 from acc_core.cli.scope_diagnostics import analyze_run_scope_configuration
+from acc_core.cli.usage import handle_usage_command
 from acc_core.compiler import compile_project
 from acc_core.compiler.diff import semantic_diff
 from acc_core.coverage import analyze_coverage
@@ -124,6 +125,79 @@ def _parser() -> AccArgumentParser:
     domains_impact_parser.add_argument("--write", action="store_true")
     _add_json_argument(domains_impact_parser)
     domains_impact_parser.set_defaults(handler=_domains_command)
+
+    usage_parser = subparsers.add_parser("usage", help="inspect Agent Usage workflow")
+    usage_subparsers = usage_parser.add_subparsers(dest="usage_command", required=True)
+    usage_init_parser = usage_subparsers.add_parser(
+        "init", help="initialize an independent Agent Usage project"
+    )
+    usage_init_parser.add_argument("path", nargs="?", default=".")
+    _add_json_argument(usage_init_parser)
+    usage_init_parser.set_defaults(handler=handle_usage_command)
+    usage_status_parser = usage_subparsers.add_parser(
+        "status", help="show deterministic Agent Usage domain readiness"
+    )
+    usage_status_parser.add_argument("path", nargs="?", default=".")
+    _add_json_argument(usage_status_parser)
+    usage_status_parser.set_defaults(handler=handle_usage_command)
+    usage_scan_parser = usage_subparsers.add_parser(
+        "scan", help="check bounded domain scan prerequisites"
+    )
+    usage_scan_parser.add_argument("--domain", required=True)
+    usage_scan_parser.add_argument("--project", default=".")
+    usage_scan_parser.add_argument("--check", action="store_true", required=True)
+    _add_json_argument(usage_scan_parser)
+    usage_scan_parser.set_defaults(handler=handle_usage_command)
+    usage_review_parser = usage_subparsers.add_parser(
+        "review", help="check one typed Agent Usage domain review"
+    )
+    usage_review_parser.add_argument("--domain", required=True)
+    usage_review_parser.add_argument("--project", default=".")
+    usage_review_parser.add_argument("--check", action="store_true", required=True)
+    _add_json_argument(usage_review_parser)
+    usage_review_parser.set_defaults(handler=handle_usage_command)
+    usage_build_parser = usage_subparsers.add_parser(
+        "build", help="build one verified released Agent Usage package"
+    )
+    usage_build_parser.add_argument("--domain", required=True)
+    usage_build_parser.add_argument("--project", default=".")
+    usage_build_parser.add_argument("--output", required=True)
+    _add_json_argument(usage_build_parser)
+    usage_build_parser.set_defaults(handler=handle_usage_command)
+    usage_test_parser = usage_subparsers.add_parser(
+        "test", help="check Agent Usage test readiness without inferring live evidence"
+    )
+    usage_test_parser.add_argument("--domain", required=True)
+    usage_test_parser.add_argument("--project", default=".")
+    usage_test_parser.add_argument("--check", action="store_true", required=True)
+    _add_json_argument(usage_test_parser)
+    usage_test_parser.set_defaults(handler=handle_usage_command)
+    usage_impact_parser = usage_subparsers.add_parser(
+        "impact", help="analyze one bounded Agent Usage change set"
+    )
+    usage_impact_parser.add_argument("change_set")
+    usage_impact_parser.add_argument("--project", default=".")
+    usage_impact_parser.add_argument("--output")
+    _add_json_argument(usage_impact_parser)
+    usage_impact_parser.set_defaults(handler=handle_usage_command)
+    usage_release_parser = usage_subparsers.add_parser(
+        "release", help="check every required Agent Usage release gate"
+    )
+    usage_release_parser.add_argument("--domain", required=True)
+    usage_release_parser.add_argument("--project", default=".")
+    usage_release_parser.add_argument("--check", action="store_true", required=True)
+    _add_json_argument(usage_release_parser)
+    usage_release_parser.set_defaults(handler=handle_usage_command)
+    usage_export_parser = usage_subparsers.add_parser(
+        "export", help="export a verified platform-neutral Agent Usage guide"
+    )
+    usage_export_parser.add_argument("--adapter", required=True)
+    usage_export_parser.add_argument("--domain", required=True)
+    usage_export_parser.add_argument("--package", required=True)
+    usage_export_parser.add_argument("--project", default=".")
+    usage_export_parser.add_argument("--output", required=True)
+    _add_json_argument(usage_export_parser)
+    usage_export_parser.set_defaults(handler=handle_usage_command)
 
     diff_parser = subparsers.add_parser("diff", help="compare two compiled JSON documents")
     diff_parser.add_argument("before")

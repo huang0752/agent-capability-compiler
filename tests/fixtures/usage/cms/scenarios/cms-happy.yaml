@@ -1,0 +1,11 @@
+schema_version: '2'
+scenario_id: cms-happy
+domain_id: cms
+route_id: content-detail
+title: Cms Happy
+kind: happy_path
+public_input_ids: []
+expected_outcomes:
+- success
+prohibited_behaviors:
+- Do not widen source authorization.

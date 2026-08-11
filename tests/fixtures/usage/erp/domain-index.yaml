@@ -1,0 +1,13 @@
+schema_version: '2'
+mcp_release_id: erp-mcp-1
+pack_digest: sha256:36150dfbb1bf6f6ec269164a0fb0cb8e2e5417ac123e956ed91bfd6afd1d1cc1
+ir_digest: sha256:0ec48ba0cc0bdf26762fb7d4e114fee7f0712768f001fe95fddeec1bca142c1e
+tool_schema_digest: sha256:80596952fa88dd658b8a3ad54faa448c98b603ef42bab761d95a447d763e500d
+test_report_digest: sha256:cdda22835baa83fa3c2a47e42266ed63c004dde2259c9ec6111d086d39b5a241
+source_snapshot_digest: sha256:b9c2824a4baf10ce1f1955ffa981ce703471ce98581df3653c11bb2d971da929
+domains:
+- id: erp
+  dependency_domain_ids: []
+preferred_order:
+- erp
+published_releases: []

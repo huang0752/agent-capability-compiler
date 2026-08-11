@@ -1,0 +1,13 @@
+schema_version: '2'
+mcp_release_id: mobile-mcp-1
+pack_digest: sha256:b7d44a719d12645e682094697464be5918a8591763e5609748283f1e4a882014
+ir_digest: sha256:819af2be5fdb6bb31e21ad820779edec185bb12de6d5e3a74afe7d2f227efedd
+tool_schema_digest: sha256:5f1705517b4bff77de2e2c72ab18740a833a996f1a05a9b20cfcbaf6de661865
+test_report_digest: sha256:5aa085ccb98d8f1a09af4bd8e2cc6e5971906c099c86318f11cc935c0c5d3d84
+source_snapshot_digest: sha256:2c90a1cc3157ce78c82e827318e9d1ece689e9ba53e502baa7e8aea4dcffe1f8
+domains:
+- id: mobile
+  dependency_domain_ids: []
+preferred_order:
+- mobile
+published_releases: []

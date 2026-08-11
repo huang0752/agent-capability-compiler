@@ -1,0 +1,11 @@
+schema_version: '2'
+scenario_id: crm-happy
+domain_id: crm
+route_id: search-detail
+title: Crm Happy
+kind: happy_path
+public_input_ids: []
+expected_outcomes:
+- success
+prohibited_behaviors:
+- Do not widen source authorization.

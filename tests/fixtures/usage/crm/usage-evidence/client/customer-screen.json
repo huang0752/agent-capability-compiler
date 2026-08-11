@@ -1,0 +1,11 @@
+{
+  "source_id": "client:customer-screen",
+  "kind": "content_summary",
+  "locator": "fixture:crm:customer-screen",
+  "summary": "Customer search results lead to one selected customer detail.",
+  "digest": "sha256:c5a8c805c2f75c1a358b2680cd6ae7293a0da10c18ed8c7504d4cfd8695916f5",
+  "domain_id": "crm",
+  "source_layer": "client",
+  "size_bytes": 61,
+  "client_surface": "web"
+}

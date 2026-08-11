@@ -1,0 +1,11 @@
+schema_version: '2'
+release_id: cms-mcp-1
+pack_digest: sha256:30f74ffc1ad925f4ef6e167acb7ccda09dfc1a77ce675feac8b54e2a5c26776f
+ir_digest: sha256:1f597c4f0e6f3ce460ab1e9f3f488713099ceebc40cfcb7d42f4fcaa821f9a48
+tool_schema_digest: sha256:3ed17a5a05de49e21ee864d69b12eca309daaab8591cb72a122232df2e15cef7
+accepted_domain_ids:
+- cms
+test_report_digest: sha256:c332bbc18673a529fb0a0d3346ad05d79756f5d48a4bfe97029678276ef417bc
+known_limitations: []
+accepted_by: cms-fixture-reviewer
+accepted_at: '2026-08-11T00:00:00Z'

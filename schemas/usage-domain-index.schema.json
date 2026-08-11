@@ -1,0 +1,133 @@
+{
+  "$defs": {
+    "UsageDomainEntry": {
+      "additionalProperties": false,
+      "description": "One Usage domain and only its explicit cross-domain dependencies.",
+      "properties": {
+        "dependency_domain_ids": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Dependency Domain Ids",
+          "type": "array"
+        },
+        "id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "dependency_domain_ids"
+      ],
+      "title": "UsageDomainEntry",
+      "type": "object"
+    },
+    "UsagePublishedReleaseRef": {
+      "additionalProperties": false,
+      "description": "The exact active Usage release selected for one published domain.",
+      "properties": {
+        "domain_id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Domain Id",
+          "type": "string"
+        },
+        "usage_release_id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Usage Release Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "domain_id",
+        "usage_release_id"
+      ],
+      "title": "UsagePublishedReleaseRef",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Top-level domain denominator and the subset released for Agent routing.",
+  "properties": {
+    "domains": {
+      "items": {
+        "$ref": "#/$defs/UsageDomainEntry"
+      },
+      "title": "Domains",
+      "type": "array"
+    },
+    "ir_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "title": "Ir Digest",
+      "type": "string"
+    },
+    "mcp_release_id": {
+      "maxLength": 512,
+      "minLength": 1,
+      "title": "Mcp Release Id",
+      "type": "string"
+    },
+    "pack_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "title": "Pack Digest",
+      "type": "string"
+    },
+    "preferred_order": {
+      "items": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": "Preferred Order",
+      "type": "array"
+    },
+    "published_releases": {
+      "items": {
+        "$ref": "#/$defs/UsagePublishedReleaseRef"
+      },
+      "title": "Published Releases",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "2",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_snapshot_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "title": "Source Snapshot Digest",
+      "type": "string"
+    },
+    "test_report_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "title": "Test Report Digest",
+      "type": "string"
+    },
+    "tool_schema_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "title": "Tool Schema Digest",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "mcp_release_id",
+    "pack_digest",
+    "ir_digest",
+    "tool_schema_digest",
+    "test_report_digest",
+    "source_snapshot_digest",
+    "domains",
+    "preferred_order",
+    "published_releases"
+  ],
+  "title": "DomainUsageIndex",
+  "type": "object"
+}

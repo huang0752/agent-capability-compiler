@@ -1,0 +1,13 @@
+schema_version: '2'
+mcp_release_id: crm-mcp-1
+pack_digest: sha256:73071e2f67a83271e4f2c4e7f5ad5c3beb48d3b3acb95846e8a040a7a989fa02
+ir_digest: sha256:a96a748ac7975dfeb3367e038d81e1325f745f59b43bb61b19dd29a065e50abc
+tool_schema_digest: sha256:e3f540660f9a69ee4c3cac740f9120e317eb17393be27f47cc4b175cf2080566
+test_report_digest: sha256:ff548ffee54ec93d4408dedff6a724fb461c2baf48457229d87de923ea516a0e
+source_snapshot_digest: sha256:7cde7677f7d0e967435446c272b643be7583e7d2a5d31e6e7d050ba9fa208c75
+domains:
+- id: crm
+  dependency_domain_ids: []
+preferred_order:
+- crm
+published_releases: []

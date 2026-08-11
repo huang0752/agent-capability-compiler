@@ -1,0 +1,31 @@
+schema_version: '2'
+usage_release_id: finance-usage-1
+domain_id: finance
+mcp_release_id: finance-mcp-1
+pack_digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+ir_digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+tool_schema_digest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+test_report_digest: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+source_snapshot_digest: sha256:fe726b25191cb7c9aebe9f35ea644061ac4ed5ab873ae4388638f5cd46bb1759
+contract_digest: sha256:9f1d827a45d70771b26a62df95044724b6bfefebe43f2c929f09bb56fd9dbda3
+decision_digest: sha256:43fa36400178acbbede65dd6ae2684a2bbd371b8d6a1e074dc4585d1dede1607
+business_goal_ids:
+- inspect-invoices
+route_ids:
+- invoice-list
+scenario_ids:
+- finance-list-happy
+capability_ids:
+- finance.invoice.list
+verification:
+  source_usage_traced: true
+  usage_contract_verified: true
+  headless_agent_verified: true
+  host_adapter_verified: true
+  real_mcp_verified: true
+  user_accepted: true
+release_status: released
+known_limitations: []
+host_adapters:
+- reference-host
+released_at: '2026-08-11T00:00:00Z'

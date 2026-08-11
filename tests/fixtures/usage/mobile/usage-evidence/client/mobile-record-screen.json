@@ -1,0 +1,11 @@
+{
+  "source_id": "client:mobile-record-screen",
+  "kind": "content_summary",
+  "locator": "fixture:mobile:mobile-record-screen",
+  "summary": "A mobile client exposes a record detail interaction; no runtime trace is available.",
+  "digest": "sha256:3f5ae7e34adeaba22f481abc840bf5e1f1e19dd0d2820f6f335835b4aabc3da7",
+  "domain_id": "mobile",
+  "source_layer": "client",
+  "size_bytes": 83,
+  "client_surface": "mobile"
+}

@@ -1,0 +1,107 @@
+{
+  "$defs": {
+    "UsageEvidenceLayer": {
+      "additionalProperties": false,
+      "description": "Availability of one platform-neutral source evidence layer.",
+      "properties": {
+        "client_surface": {
+          "anyOf": [
+            {
+              "enum": [
+                "web",
+                "mobile",
+                "desktop",
+                "cli",
+                "automation",
+                "other"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Client Surface"
+        },
+        "digest": {
+          "anyOf": [
+            {
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Digest"
+        },
+        "source_layer": {
+          "enum": [
+            "client",
+            "service",
+            "test",
+            "mcp",
+            "runtime_observation"
+          ],
+          "title": "Source Layer",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "provided",
+            "unknown",
+            "not_applicable"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_layer",
+        "status",
+        "digest",
+        "client_surface"
+      ],
+      "title": "UsageEvidenceLayer",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Digest-bound source materials read while reconstructing Usage semantics.",
+  "properties": {
+    "captured_at": {
+      "maxLength": 40,
+      "minLength": 20,
+      "title": "Captured At",
+      "type": "string"
+    },
+    "evidence_layers": {
+      "items": {
+        "$ref": "#/$defs/UsageEvidenceLayer"
+      },
+      "minItems": 1,
+      "title": "Evidence Layers",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "2",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_revision": {
+      "maxLength": 512,
+      "minLength": 1,
+      "title": "Source Revision",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "source_revision",
+    "evidence_layers",
+    "captured_at"
+  ],
+  "title": "SourceSnapshot",
+  "type": "object"
+}

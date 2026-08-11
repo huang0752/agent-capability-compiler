@@ -1,0 +1,11 @@
+schema_version: '2'
+release_id: crm-mcp-1
+pack_digest: sha256:73071e2f67a83271e4f2c4e7f5ad5c3beb48d3b3acb95846e8a040a7a989fa02
+ir_digest: sha256:a96a748ac7975dfeb3367e038d81e1325f745f59b43bb61b19dd29a065e50abc
+tool_schema_digest: sha256:e3f540660f9a69ee4c3cac740f9120e317eb17393be27f47cc4b175cf2080566
+accepted_domain_ids:
+- crm
+test_report_digest: sha256:ff548ffee54ec93d4408dedff6a724fb461c2baf48457229d87de923ea516a0e
+known_limitations: []
+accepted_by: crm-fixture-reviewer
+accepted_at: '2026-08-11T00:00:00Z'

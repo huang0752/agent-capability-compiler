@@ -1,0 +1,100 @@
+schema_version: '2'
+domain_id: erp
+pack_digest: sha256:36150dfbb1bf6f6ec269164a0fb0cb8e2e5417ac123e956ed91bfd6afd1d1cc1
+ir_digest: sha256:0ec48ba0cc0bdf26762fb7d4e114fee7f0712768f001fe95fddeec1bca142c1e
+tool_schema_digest: sha256:80596952fa88dd658b8a3ad54faa448c98b603ef42bab761d95a447d763e500d
+test_report_digest: sha256:cdda22835baa83fa3c2a47e42266ed63c004dde2259c9ec6111d086d39b5a241
+source_snapshot_digest: sha256:b9c2824a4baf10ce1f1955ffa981ce703471ce98581df3653c11bb2d971da929
+business_goals:
+- id: inspect-record
+  description: Resolve an ERP record and inspect details using one shared identifier.
+  evidence_claim_ids:
+  - claim-goal
+tool_routes:
+- id: shared-id-detail
+  business_goal_id: inspect-record
+  preconditions: []
+  steps:
+  - id: detail
+    capability_id: erp.record.detail
+    tool_name: erp_record_detail
+    depends_on_step_ids:
+    - lookup
+    binding_ids:
+    - bind-shared-record-id
+    condition: null
+    retry: safe
+    action_phase: null
+  - id: lookup
+    capability_id: erp.record.lookup
+    tool_name: erp_record_lookup
+    depends_on_step_ids: []
+    binding_ids: []
+    condition: null
+    retry: safe
+    action_phase: null
+  error_branch_ids: []
+  result_step_id: detail
+  result_pointer: /record
+  action_lifecycle_id: null
+input_bindings:
+- id: bind-shared-record-id
+  source_kind: prior_step_output
+  source_step_id: lookup
+  consumer_step_id: detail
+  source_pointer: /id
+  target_pointer: /record_id
+  mapping: null
+  value_kind: public_value
+defaults: []
+conditions: []
+option_sources: []
+related_data:
+- id: shared-record-id
+  producer_step_id: lookup
+  producer_pointer: /id
+  consumer_step_id: detail
+  target_pointer: /record_id
+  cardinality: one
+  consistency: current
+  evidence_claim_ids:
+  - claim-result
+result_consumption:
+- id: erp-result
+  capability_id: erp.record.detail
+  step_id: detail
+  evidence_claim_ids:
+  - claim-result
+  kind: return
+  field_pointers:
+  - /record
+  order: 1
+error_handling: []
+action_lifecycles: []
+prohibited_behaviors:
+- Do not infer authorization beyond the source response.
+required_scenario_ids:
+- erp-happy
+evidence_claims:
+- id: claim-goal
+  statement: The erp client exposes this bounded business goal.
+  target:
+    target_kind: business_goal
+    target_id: inspect-record
+    field_pointer: /description
+  authority: observation
+  source_layer: client
+  evidence_refs:
+  - source_id: client:record-workspace
+    digest: sha256:434ac7f515e629a537e2ab531e83fd6a11512ecdbdf6bc59f94b6a0372e75e11
+- id: claim-result
+  statement: The client consumes the declared erp result fields.
+  target:
+    target_kind: result_consumption
+    target_id: erp-result
+    field_pointer: /field_pointers
+  authority: observation
+  source_layer: client
+  evidence_refs:
+  - source_id: client:record-workspace
+    digest: sha256:434ac7f515e629a537e2ab531e83fd6a11512ecdbdf6bc59f94b6a0372e75e11

@@ -1,0 +1,39 @@
+{
+  "action_shortcuts": [],
+  "adapter_id": "reference-host",
+  "business_goal_ids": [
+    "inspect-invoices"
+  ],
+  "capability_ids": [
+    "finance.invoice.list"
+  ],
+  "contract_digest": "sha256:89fc506deac1f9041a0013d24fe84427d0f3fc342e31f11d209dea840c99f3c2",
+  "decision_digest": "sha256:c71906661dd7d3ee26cf84a618498f8a03e7f3444abe8a0464490fb1a08f6250",
+  "guide_digest": "sha256:fadd222f2ca708083bb5e7a4ba56bd74fadbe268c91293f36e79cbd17938aa73",
+  "known_limitations": [],
+  "package_digest": "8db7e7aa26527cb1e5efbe98575fcd1ace350795382b4ea7babde014101b3fb7",
+  "permissions": [],
+  "prohibited_behaviors": [
+    "Do not infer authorization beyond the source response."
+  ],
+  "projection_digest": "sha256:7d3804afc77df9d55a130c807428d5cafc2083cd32734d8aa3ba52fbfefbca46",
+  "required_features": [
+    "markdown-guide"
+  ],
+  "route_ids": [
+    "invoice-list"
+  ],
+  "tool_names": [
+    "finance.invoice.list"
+  ],
+  "tool_schema_digest": "sha256:84df295e8436ba50e3a7cac397a3be92850b6f419225900b19741ebf3ebfeb12",
+  "usage_release_id": "finance-usage-1",
+  "verification": {
+    "headless_agent_verified": true,
+    "host_adapter_verified": false,
+    "real_mcp_verified": true,
+    "source_usage_traced": true,
+    "usage_contract_verified": true,
+    "user_accepted": true
+  }
+}

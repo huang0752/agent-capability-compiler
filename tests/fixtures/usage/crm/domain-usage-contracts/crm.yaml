@@ -1,0 +1,100 @@
+schema_version: '2'
+domain_id: crm
+pack_digest: sha256:73071e2f67a83271e4f2c4e7f5ad5c3beb48d3b3acb95846e8a040a7a989fa02
+ir_digest: sha256:a96a748ac7975dfeb3367e038d81e1325f745f59b43bb61b19dd29a065e50abc
+tool_schema_digest: sha256:e3f540660f9a69ee4c3cac740f9120e317eb17393be27f47cc4b175cf2080566
+test_report_digest: sha256:ff548ffee54ec93d4408dedff6a724fb461c2baf48457229d87de923ea516a0e
+source_snapshot_digest: sha256:7cde7677f7d0e967435446c272b643be7583e7d2a5d31e6e7d050ba9fa208c75
+business_goals:
+- id: find-customer
+  description: Search for a customer and inspect the selected customer detail.
+  evidence_claim_ids:
+  - claim-goal
+tool_routes:
+- id: search-detail
+  business_goal_id: find-customer
+  preconditions: []
+  steps:
+  - id: detail
+    capability_id: crm.customer.detail
+    tool_name: crm_customer_detail
+    depends_on_step_ids:
+    - search
+    binding_ids:
+    - bind-customer-id
+    condition: null
+    retry: safe
+    action_phase: null
+  - id: search
+    capability_id: crm.customer.search
+    tool_name: crm_customer_search
+    depends_on_step_ids: []
+    binding_ids: []
+    condition: null
+    retry: safe
+    action_phase: null
+  error_branch_ids: []
+  result_step_id: detail
+  result_pointer: /customer
+  action_lifecycle_id: null
+input_bindings:
+- id: bind-customer-id
+  source_kind: prior_step_output
+  source_step_id: search
+  consumer_step_id: detail
+  source_pointer: /items/0/id
+  target_pointer: /customer_id
+  mapping: null
+  value_kind: public_value
+defaults: []
+conditions: []
+option_sources: []
+related_data:
+- id: selected-customer
+  producer_step_id: search
+  producer_pointer: /items/0/id
+  consumer_step_id: detail
+  target_pointer: /customer_id
+  cardinality: optional
+  consistency: stale_check_required
+  evidence_claim_ids:
+  - claim-result
+result_consumption:
+- id: crm-result
+  capability_id: crm.customer.detail
+  step_id: detail
+  evidence_claim_ids:
+  - claim-result
+  kind: return
+  field_pointers:
+  - /customer
+  order: 1
+error_handling: []
+action_lifecycles: []
+prohibited_behaviors:
+- Do not infer authorization beyond the source response.
+required_scenario_ids:
+- crm-happy
+evidence_claims:
+- id: claim-goal
+  statement: The crm client exposes this bounded business goal.
+  target:
+    target_kind: business_goal
+    target_id: find-customer
+    field_pointer: /description
+  authority: observation
+  source_layer: client
+  evidence_refs:
+  - source_id: client:customer-screen
+    digest: sha256:c5a8c805c2f75c1a358b2680cd6ae7293a0da10c18ed8c7504d4cfd8695916f5
+- id: claim-result
+  statement: The client consumes the declared crm result fields.
+  target:
+    target_kind: result_consumption
+    target_id: crm-result
+    field_pointer: /field_pointers
+  authority: observation
+  source_layer: client
+  evidence_refs:
+  - source_id: client:customer-screen
+    digest: sha256:c5a8c805c2f75c1a358b2680cd6ae7293a0da10c18ed8c7504d4cfd8695916f5

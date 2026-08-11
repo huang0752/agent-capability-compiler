@@ -1,0 +1,92 @@
+schema_version: '2'
+domain_id: cms
+pack_digest: sha256:30f74ffc1ad925f4ef6e167acb7ccda09dfc1a77ce675feac8b54e2a5c26776f
+ir_digest: sha256:1f597c4f0e6f3ce460ab1e9f3f488713099ceebc40cfcb7d42f4fcaa821f9a48
+tool_schema_digest: sha256:3ed17a5a05de49e21ee864d69b12eca309daaab8591cb72a122232df2e15cef7
+test_report_digest: sha256:c332bbc18673a529fb0a0d3346ad05d79756f5d48a4bfe97029678276ef417bc
+source_snapshot_digest: sha256:4165ade9292ca162ccf55eebedd13d63c6c2decc81f7d9b1c633337b50b1a278
+business_goals:
+- id: inspect-long-content
+  description: Inspect a long-form CMS document while preserving its complete textual
+    content and source-defined boundaries. Inspect a long-form CMS document while
+    preserving its complete textual content and source-defined boundaries. Inspect
+    a long-form CMS document while preserving its complete textual content and source-defined
+    boundaries. Inspect a long-form CMS document while preserving its complete textual
+    content and source-defined boundaries. Inspect a long-form CMS document while
+    preserving its complete textual content and source-defined boundaries. Inspect
+    a long-form CMS document while preserving its complete textual content and source-defined
+    boundaries. Inspect a long-form CMS document while preserving its complete textual
+    content and source-defined boundaries. Inspect a long-form CMS document while
+    preserving its complete textual content and source-defined boundaries. Inspect
+    a long-form CMS document while preserving its complete textual content and source-defined
+    boundaries. Inspect a long-form CMS document while preserving its complete textual
+    content and source-defined boundaries. Inspect a long-form CMS document while
+    preserving its complete textual content and source-defined boundaries. Inspect
+    a long-form CMS document while preserving its complete textual content and source-defined
+    boundaries. Inspect a long-form CMS document while preserving its complete textual
+    content and source-defined boundaries. Inspect a long-form CMS document while
+    preserving its complete textual content and source-defined boundaries.
+  evidence_claim_ids:
+  - claim-goal
+tool_routes:
+- id: content-detail
+  business_goal_id: inspect-long-content
+  preconditions: []
+  steps:
+  - id: content-detail
+    capability_id: cms.content.detail
+    tool_name: cms_content_detail
+    depends_on_step_ids: []
+    binding_ids: []
+    condition: null
+    retry: safe
+    action_phase: null
+  error_branch_ids: []
+  result_step_id: content-detail
+  result_pointer: /content
+  action_lifecycle_id: null
+input_bindings: []
+defaults: []
+conditions: []
+option_sources: []
+related_data: []
+result_consumption:
+- id: cms-result
+  capability_id: cms.content.detail
+  step_id: content-detail
+  evidence_claim_ids:
+  - claim-result
+  kind: return
+  field_pointers:
+  - /content
+  order: 1
+error_handling: []
+action_lifecycles: []
+prohibited_behaviors:
+- Do not truncate long text without an explicit output limit.
+- Do not embed request payloads or credentials in Usage artifacts.
+required_scenario_ids:
+- cms-happy
+evidence_claims:
+- id: claim-goal
+  statement: The cms client exposes this bounded business goal.
+  target:
+    target_kind: business_goal
+    target_id: inspect-long-content
+    field_pointer: /description
+  authority: observation
+  source_layer: client
+  evidence_refs:
+  - source_id: client:editor
+    digest: sha256:b1d31c39a137809888558dc9c86c61433c10c2197e3b3278557a11b0e5186753
+- id: claim-result
+  statement: The client consumes the declared cms result fields.
+  target:
+    target_kind: result_consumption
+    target_id: cms-result
+    field_pointer: /field_pointers
+  authority: observation
+  source_layer: client
+  evidence_refs:
+  - source_id: client:editor
+    digest: sha256:b1d31c39a137809888558dc9c86c61433c10c2197e3b3278557a11b0e5186753

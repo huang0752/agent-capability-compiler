@@ -1,0 +1,11 @@
+schema_version: '2'
+scenario_id: permissions-happy
+domain_id: permissions
+route_id: permission-read
+title: Permissions Happy
+kind: happy_path
+public_input_ids: []
+expected_outcomes:
+- success
+prohibited_behaviors:
+- Do not widen source authorization.

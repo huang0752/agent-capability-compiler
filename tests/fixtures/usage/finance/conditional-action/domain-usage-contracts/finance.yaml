@@ -1,0 +1,156 @@
+schema_version: '2'
+domain_id: finance
+pack_digest: sha256:4fd21460c84b0679de728689e156279b3331d766e4f6e6eba7b77fa4ef9ed008
+ir_digest: sha256:6722a7569d0063d93b6b8de1c9c382224dd49fb607682cb1e55db10d3d87ddbe
+tool_schema_digest: sha256:62d6ed2a88c13ce4d96cad396ae4729ba22932bd0e66dd208cf21c12e8b44638
+test_report_digest: sha256:5628147dd772ed34ca0a8d337bde59ea8c34575c5f0e8bcca2d52ef40b3de6f1
+source_snapshot_digest: sha256:8149c67ea305c729238e2cd33a510cfc51e9cdc4c9f8cfd4ccebff3c84dab965
+business_goals:
+- id: create-payment
+  description: Prepare a payment, obtain conditional approval, commit once, and query
+    status after uncertain outcomes.
+  evidence_claim_ids:
+  - claim-goal
+tool_routes:
+- id: conditional-payment-action
+  business_goal_id: create-payment
+  preconditions: []
+  steps:
+  - id: approve
+    capability_id: finance.payment.approve
+    tool_name: finance_payment_approve
+    depends_on_step_ids:
+    - prepare
+    binding_ids:
+    - bind-action-approve
+    - bind-approval
+    condition: null
+    retry: never
+    action_phase: approve
+  - id: commit
+    capability_id: finance.payment.commit
+    tool_name: finance_payment_commit
+    depends_on_step_ids:
+    - approve
+    - prepare
+    binding_ids:
+    - bind-action-commit
+    condition: null
+    retry: never
+    action_phase: commit
+  - id: prepare
+    capability_id: finance.payment.prepare
+    tool_name: finance_payment_prepare
+    depends_on_step_ids: []
+    binding_ids: []
+    condition: null
+    retry: never
+    action_phase: prepare
+  - id: status
+    capability_id: finance.payment.status
+    tool_name: finance_payment_status
+    depends_on_step_ids:
+    - prepare
+    binding_ids:
+    - bind-action-status
+    condition: null
+    retry: status_only
+    action_phase: status
+  error_branch_ids: []
+  result_step_id: status
+  result_pointer: /status
+  action_lifecycle_id: conditional-payment-approval
+input_bindings:
+- id: bind-action-approve
+  source_kind: prior_step_output
+  source_step_id: prepare
+  consumer_step_id: approve
+  source_pointer: /action_handle
+  target_pointer: /action_handle
+  mapping: null
+  value_kind: action_handle
+- id: bind-action-commit
+  source_kind: prior_step_output
+  source_step_id: prepare
+  consumer_step_id: commit
+  source_pointer: /action_handle
+  target_pointer: /action_handle
+  mapping: null
+  value_kind: action_handle
+- id: bind-action-status
+  source_kind: prior_step_output
+  source_step_id: prepare
+  consumer_step_id: status
+  source_pointer: /action_handle
+  target_pointer: /action_handle
+  mapping: null
+  value_kind: action_handle
+- id: bind-approval
+  source_kind: trusted_context
+  source_step_id: null
+  consumer_step_id: approve
+  source_pointer: /approval_handle
+  target_pointer: /approval_handle
+  mapping: null
+  value_kind: approval_handle
+defaults: []
+conditions: []
+option_sources: []
+related_data: []
+result_consumption:
+- id: finance-result
+  capability_id: finance.payment.status
+  step_id: status
+  evidence_claim_ids:
+  - claim-result
+  kind: return
+  field_pointers:
+  - /status
+  order: 1
+error_handling: []
+action_lifecycles:
+- id: conditional-payment-approval
+  action_id: finance.payment.create
+  prepare_step_id: prepare
+  approve_action_handle_binding_id: bind-action-approve
+  commit_action_handle_binding_id: bind-action-commit
+  status_action_handle_binding_id: bind-action-status
+  approval: conditional
+  approval_condition:
+    operator: present
+    operand:
+      kind: reference
+      pointer: /prepared/approval_handle
+  approve_step_id: approve
+  approval_handle_binding_id: bind-approval
+  commit_step_id: commit
+  status_step_id: status
+  outcome_unknown_behavior: query_status
+prohibited_behaviors:
+- Never bypass conditional approval.
+- Never repeat commit after outcome_unknown; query status instead.
+required_scenario_ids:
+- finance-action-lifecycle
+evidence_claims:
+- id: claim-goal
+  statement: The finance client exposes this bounded business goal.
+  target:
+    target_kind: business_goal
+    target_id: create-payment
+    field_pointer: /description
+  authority: observation
+  source_layer: client
+  evidence_refs:
+  - source_id: client:payment-screen
+    digest: sha256:4b956f0451ce779ae8e14430f8cbb5e09ae02b1cde64b4cd5eb200592722696d
+- id: claim-result
+  statement: The client consumes the declared finance result fields.
+  target:
+    target_kind: result_consumption
+    target_id: finance-result
+    field_pointer: /field_pointers
+  authority: observation
+  source_layer: client
+  evidence_refs:
+  - source_id: client:payment-screen
+    digest: sha256:4b956f0451ce779ae8e14430f8cbb5e09ae02b1cde64b4cd5eb200592722696d

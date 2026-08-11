@@ -1,0 +1,13 @@
+schema_version: '2'
+mcp_release_id: finance-mcp-1
+pack_digest: sha256:4fd21460c84b0679de728689e156279b3331d766e4f6e6eba7b77fa4ef9ed008
+ir_digest: sha256:6722a7569d0063d93b6b8de1c9c382224dd49fb607682cb1e55db10d3d87ddbe
+tool_schema_digest: sha256:62d6ed2a88c13ce4d96cad396ae4729ba22932bd0e66dd208cf21c12e8b44638
+test_report_digest: sha256:5628147dd772ed34ca0a8d337bde59ea8c34575c5f0e8bcca2d52ef40b3de6f1
+source_snapshot_digest: sha256:8149c67ea305c729238e2cd33a510cfc51e9cdc4c9f8cfd4ccebff3c84dab965
+domains:
+- id: finance
+  dependency_domain_ids: []
+preferred_order:
+- finance
+published_releases: []

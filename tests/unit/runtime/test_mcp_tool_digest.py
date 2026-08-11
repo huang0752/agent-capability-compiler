@@ -40,8 +40,7 @@ def test_listed_tools_sha256_preserves_the_gateway_wire_digest() -> None:
 def test_listed_tools_sha256_sorts_tools_and_ignores_presentation_metadata() -> None:
     tools = _tools()
     changed_presentation = [
-        tool.model_copy(update={"title": "changed", "description": "changed"})
-        for tool in tools
+        tool.model_copy(update={"title": "changed", "description": "changed"}) for tool in tools
     ]
 
     assert listed_tools_sha256(tools) == listed_tools_sha256(list(reversed(tools)))

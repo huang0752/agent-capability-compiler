@@ -26,6 +26,15 @@ from acc_core.models import (
 )
 from acc_core.quality import CapabilityQuality
 from acc_core.scope import ScopeInventory
+from acc_core.usage import (
+    AgentUsageProject,
+    AgentUsageRelease,
+    DomainUsageContract,
+    DomainUsageIndex,
+    McpReleaseAcceptance,
+    SourceSnapshot,
+    UsageScenario,
+)
 
 JSON_SCHEMA_DRAFT_2020_12 = "https://json-schema.org/draft/2020-12/schema"
 MODEL_SCHEMAS: dict[str, type[BaseModel] | TypeAdapter[object]] = {
@@ -45,6 +54,13 @@ MODEL_SCHEMAS: dict[str, type[BaseModel] | TypeAdapter[object]] = {
     "domain-decision": DomainDecision,
     "domain-evidence-change-set": EvidenceChangeSet,
     "domain-change-request": DomainChangeRequest,
+    "usage-domain-contract": DomainUsageContract,
+    "usage-domain-index": DomainUsageIndex,
+    "usage-mcp-release-acceptance": McpReleaseAcceptance,
+    "usage-project": AgentUsageProject,
+    "usage-release": AgentUsageRelease,
+    "usage-scenario": UsageScenario,
+    "usage-source-snapshot": SourceSnapshot,
 }
 
 

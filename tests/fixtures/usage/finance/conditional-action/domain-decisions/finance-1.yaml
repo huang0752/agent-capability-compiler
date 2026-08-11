@@ -1,0 +1,16 @@
+schema_version: '2'
+domain_id: finance
+revision: 1
+disposition: accepted
+business_goal_ids:
+- create-payment
+included_route_ids:
+- conditional-payment-action
+known_limitations: []
+contract_digest: sha256:9210d38de35836e5dce3ee773482e1f3ede674adbc41ffa1807a9434362b9741
+decision_digest: sha256:63019bb0aec05a6b474e4da27e68f4cbb0a17d8222d581d30e146fc779c53b4c
+user_confirmation:
+  confirmed_by: finance-fixture-reviewer
+  confirmed_at: '2026-08-11T00:00:00Z'
+  source_text_digest: sha256:aae47825eb843a70b6562ff10c65c19e7f26db2f98116fb3cbe082d5f7fed162
+  confirmed_decision_digest: sha256:63019bb0aec05a6b474e4da27e68f4cbb0a17d8222d581d30e146fc779c53b4c

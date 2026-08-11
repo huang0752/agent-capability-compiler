@@ -1,0 +1,11 @@
+schema_version: '2'
+scenario_id: finance-list-happy
+domain_id: finance
+route_id: invoice-list
+title: List current invoices
+kind: happy_path
+public_input_ids: []
+expected_outcomes:
+- success
+prohibited_behaviors:
+- Do not retry after an authorization denial.

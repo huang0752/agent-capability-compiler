@@ -40,6 +40,13 @@ EXPORTED_SCHEMAS = {
     "domain-decision.schema.json",
     "domain-change-request.schema.json",
     "domain-evidence-change-set.schema.json",
+    "usage-domain-contract.schema.json",
+    "usage-domain-index.schema.json",
+    "usage-mcp-release-acceptance.schema.json",
+    "usage-project.schema.json",
+    "usage-release.schema.json",
+    "usage-scenario.schema.json",
+    "usage-source-snapshot.schema.json",
 }
 PROJECT_DIRECTORIES = {
     "capabilities",

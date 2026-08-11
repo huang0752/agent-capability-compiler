@@ -1,0 +1,75 @@
+schema_version: '2'
+domain_id: permissions
+pack_digest: sha256:ed5ba6a98f56e08efc0ae2c5704d302cce878fbfa4f8d4d4daa2e87a5340dda8
+ir_digest: sha256:5ceff4cc5fd1c0579cb6a8c9ddaa78ecc8a9300878c11786dc15c2ebfc7a9fd5
+tool_schema_digest: sha256:f3f76eaf4981fe9937e327cd7078993f8fe9bfeb140fffe8d59c8971946ef5ba
+test_report_digest: sha256:b4ee4bec30c6ea9f6041acfc60086956075638e834fd15be192ee314fd55c2f8
+source_snapshot_digest: sha256:757b033283e6aef1834480490143186670e5b50e3ff734f41bc2c6039073fc85
+business_goals:
+- id: inspect-effective-permissions
+  description: Inspect permissions reported for the current source identity.
+  evidence_claim_ids:
+  - claim-goal
+tool_routes:
+- id: permission-read
+  business_goal_id: inspect-effective-permissions
+  preconditions: []
+  steps:
+  - id: permission-read
+    capability_id: permissions.effective.read
+    tool_name: permissions_effective_read
+    depends_on_step_ids: []
+    binding_ids: []
+    condition: null
+    retry: safe
+    action_phase: null
+  error_branch_ids: []
+  result_step_id: permission-read
+  result_pointer: /permissions
+  action_lifecycle_id: null
+input_bindings: []
+defaults: []
+conditions: []
+option_sources: []
+related_data: []
+result_consumption:
+- id: permissions-result
+  capability_id: permissions.effective.read
+  step_id: permission-read
+  evidence_claim_ids:
+  - claim-result
+  kind: return
+  field_pointers:
+  - /permissions
+  order: 1
+error_handling: []
+action_lifecycles: []
+prohibited_behaviors:
+- The source JWT and source API remain the final authority for every request.
+- ACC cannot grant a permission that the source system denies.
+- Do not infer permission from a visible client control.
+required_scenario_ids:
+- permissions-happy
+evidence_claims:
+- id: claim-goal
+  statement: The permissions client exposes this bounded business goal.
+  target:
+    target_kind: business_goal
+    target_id: inspect-effective-permissions
+    field_pointer: /description
+  authority: observation
+  source_layer: client
+  evidence_refs:
+  - source_id: client:permission-view
+    digest: sha256:30a08d278273ed38adf1ca1e41508019ad7d555e3f4984696e6b30b49a13a98b
+- id: claim-result
+  statement: The client consumes the declared permissions result fields.
+  target:
+    target_kind: result_consumption
+    target_id: permissions-result
+    field_pointer: /field_pointers
+  authority: observation
+  source_layer: client
+  evidence_refs:
+  - source_id: client:permission-view
+    digest: sha256:30a08d278273ed38adf1ca1e41508019ad7d555e3f4984696e6b30b49a13a98b

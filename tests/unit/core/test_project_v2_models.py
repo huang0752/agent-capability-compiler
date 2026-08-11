@@ -71,6 +71,13 @@ def test_schema_exports_use_only_canonical_current_names() -> None:
         "scope-inventory",
         "source-contract",
         "ui-interaction-inventory",
+        "usage-domain-contract",
+        "usage-domain-index",
+        "usage-mcp-release-acceptance",
+        "usage-project",
+        "usage-release",
+        "usage-scenario",
+        "usage-source-snapshot",
     }
     for name in (
         "capability",

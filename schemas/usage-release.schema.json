@@ -1,0 +1,206 @@
+{
+  "$defs": {
+    "UsageVerification": {
+      "additionalProperties": false,
+      "description": "Six independent facts; no field is derived from another field.",
+      "properties": {
+        "headless_agent_verified": {
+          "title": "Headless Agent Verified",
+          "type": "boolean"
+        },
+        "host_adapter_verified": {
+          "title": "Host Adapter Verified",
+          "type": "boolean"
+        },
+        "real_mcp_verified": {
+          "title": "Real Mcp Verified",
+          "type": "boolean"
+        },
+        "source_usage_traced": {
+          "title": "Source Usage Traced",
+          "type": "boolean"
+        },
+        "usage_contract_verified": {
+          "title": "Usage Contract Verified",
+          "type": "boolean"
+        },
+        "user_accepted": {
+          "title": "User Accepted",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "source_usage_traced",
+        "usage_contract_verified",
+        "headless_agent_verified",
+        "host_adapter_verified",
+        "real_mcp_verified",
+        "user_accepted"
+      ],
+      "title": "UsageVerification",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Published or limited Usage release for exactly one business domain.",
+  "properties": {
+    "business_goal_ids": {
+      "items": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Business Goal Ids",
+      "type": "array"
+    },
+    "capability_ids": {
+      "items": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Capability Ids",
+      "type": "array"
+    },
+    "contract_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "title": "Contract Digest",
+      "type": "string"
+    },
+    "decision_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "title": "Decision Digest",
+      "type": "string"
+    },
+    "domain_id": {
+      "maxLength": 512,
+      "minLength": 1,
+      "title": "Domain Id",
+      "type": "string"
+    },
+    "host_adapters": {
+      "items": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": "Host Adapters",
+      "type": "array"
+    },
+    "ir_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "title": "Ir Digest",
+      "type": "string"
+    },
+    "known_limitations": {
+      "items": {
+        "maxLength": 16384,
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": "Known Limitations",
+      "type": "array"
+    },
+    "mcp_release_id": {
+      "maxLength": 512,
+      "minLength": 1,
+      "title": "Mcp Release Id",
+      "type": "string"
+    },
+    "pack_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "title": "Pack Digest",
+      "type": "string"
+    },
+    "release_status": {
+      "enum": [
+        "limited",
+        "released"
+      ],
+      "title": "Release Status",
+      "type": "string"
+    },
+    "released_at": {
+      "maxLength": 40,
+      "minLength": 20,
+      "title": "Released At",
+      "type": "string"
+    },
+    "route_ids": {
+      "items": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Route Ids",
+      "type": "array"
+    },
+    "scenario_ids": {
+      "items": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Scenario Ids",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "2",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_snapshot_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "title": "Source Snapshot Digest",
+      "type": "string"
+    },
+    "test_report_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "title": "Test Report Digest",
+      "type": "string"
+    },
+    "tool_schema_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "title": "Tool Schema Digest",
+      "type": "string"
+    },
+    "usage_release_id": {
+      "maxLength": 512,
+      "minLength": 1,
+      "title": "Usage Release Id",
+      "type": "string"
+    },
+    "verification": {
+      "$ref": "#/$defs/UsageVerification"
+    }
+  },
+  "required": [
+    "schema_version",
+    "usage_release_id",
+    "domain_id",
+    "mcp_release_id",
+    "pack_digest",
+    "ir_digest",
+    "tool_schema_digest",
+    "test_report_digest",
+    "source_snapshot_digest",
+    "contract_digest",
+    "decision_digest",
+    "business_goal_ids",
+    "route_ids",
+    "scenario_ids",
+    "capability_ids",
+    "verification",
+    "release_status",
+    "known_limitations",
+    "host_adapters",
+    "released_at"
+  ],
+  "title": "AgentUsageRelease",
+  "type": "object"
+}

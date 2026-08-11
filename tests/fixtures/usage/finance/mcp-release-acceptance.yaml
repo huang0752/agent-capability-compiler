@@ -1,0 +1,11 @@
+schema_version: '2'
+release_id: finance-mcp-1
+pack_digest: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+ir_digest: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+tool_schema_digest: sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+accepted_domain_ids:
+- finance
+test_report_digest: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+known_limitations: []
+accepted_by: finance-reviewer
+accepted_at: '2026-08-11T00:00:00Z'

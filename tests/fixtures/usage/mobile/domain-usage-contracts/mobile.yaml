@@ -1,0 +1,73 @@
+schema_version: '2'
+domain_id: mobile
+pack_digest: sha256:b7d44a719d12645e682094697464be5918a8591763e5609748283f1e4a882014
+ir_digest: sha256:819af2be5fdb6bb31e21ad820779edec185bb12de6d5e3a74afe7d2f227efedd
+tool_schema_digest: sha256:5f1705517b4bff77de2e2c72ab18740a833a996f1a05a9b20cfcbaf6de661865
+test_report_digest: sha256:5aa085ccb98d8f1a09af4bd8e2cc6e5971906c099c86318f11cc935c0c5d3d84
+source_snapshot_digest: sha256:2c90a1cc3157ce78c82e827318e9d1ece689e9ba53e502baa7e8aea4dcffe1f8
+business_goals:
+- id: inspect-mobile-record
+  description: Inspect a record from the mobile client interaction.
+  evidence_claim_ids:
+  - claim-goal
+tool_routes:
+- id: mobile-detail
+  business_goal_id: inspect-mobile-record
+  preconditions: []
+  steps:
+  - id: mobile-detail
+    capability_id: mobile.record.detail
+    tool_name: mobile_record_detail
+    depends_on_step_ids: []
+    binding_ids: []
+    condition: null
+    retry: safe
+    action_phase: null
+  error_branch_ids: []
+  result_step_id: mobile-detail
+  result_pointer: /record
+  action_lifecycle_id: null
+input_bindings: []
+defaults: []
+conditions: []
+option_sources: []
+related_data: []
+result_consumption:
+- id: mobile-result
+  capability_id: mobile.record.detail
+  step_id: mobile-detail
+  evidence_claim_ids:
+  - claim-result
+  kind: return
+  field_pointers:
+  - /record
+  order: 1
+error_handling: []
+action_lifecycles: []
+prohibited_behaviors:
+- Do not claim MCP or host verification from client-only evidence.
+required_scenario_ids:
+- mobile-happy
+evidence_claims:
+- id: claim-goal
+  statement: The mobile client exposes this bounded business goal.
+  target:
+    target_kind: business_goal
+    target_id: inspect-mobile-record
+    field_pointer: /description
+  authority: observation
+  source_layer: client
+  evidence_refs:
+  - source_id: client:mobile-record-screen
+    digest: sha256:3f5ae7e34adeaba22f481abc840bf5e1f1e19dd0d2820f6f335835b4aabc3da7
+- id: claim-result
+  statement: The client consumes the declared mobile result fields.
+  target:
+    target_kind: result_consumption
+    target_id: mobile-result
+    field_pointer: /field_pointers
+  authority: observation
+  source_layer: client
+  evidence_refs:
+  - source_id: client:mobile-record-screen
+    digest: sha256:3f5ae7e34adeaba22f481abc840bf5e1f1e19dd0d2820f6f335835b4aabc3da7

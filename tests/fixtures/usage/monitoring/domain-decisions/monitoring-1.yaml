@@ -1,0 +1,16 @@
+schema_version: '2'
+domain_id: monitoring
+revision: 1
+disposition: accepted
+business_goal_ids:
+- refresh-status
+included_route_ids:
+- status-refresh
+known_limitations: []
+contract_digest: sha256:e0b2460b5f9ba6e26bcc6cd9558a62fd41c441616e6b01c6a1151f46378c9f8c
+decision_digest: sha256:3daf9637b67d17cccfeb4cbd4131ea6efea0f7a643cdfdb495d79dd42c241d52
+user_confirmation:
+  confirmed_by: monitoring-fixture-reviewer
+  confirmed_at: '2026-08-11T00:00:00Z'
+  source_text_digest: sha256:fa9dfed978c5759b4a5db4d9140574b8ec6905629118d1bf01877fc72c1f107e
+  confirmed_decision_digest: sha256:3daf9637b67d17cccfeb4cbd4131ea6efea0f7a643cdfdb495d79dd42c241d52

@@ -1,0 +1,11 @@
+{
+  "source_id": "client:record-workspace",
+  "kind": "content_summary",
+  "locator": "fixture:erp:record-workspace",
+  "summary": "ERP list and detail views share the same record identifier.",
+  "digest": "sha256:434ac7f515e629a537e2ab531e83fd6a11512ecdbdf6bc59f94b6a0372e75e11",
+  "domain_id": "erp",
+  "source_layer": "client",
+  "size_bytes": 59,
+  "client_surface": "desktop"
+}

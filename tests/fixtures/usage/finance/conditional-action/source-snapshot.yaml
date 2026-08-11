@@ -1,0 +1,20 @@
+schema_version: '2'
+source_revision: fixture:finance:current
+evidence_layers:
+- source_layer: client
+  status: provided
+  digest: sha256:063c0b8efce37719545338611df9986573289544efeb162421cac89a41b4580f
+  client_surface: web
+- source_layer: mcp
+  status: unknown
+  digest: null
+  client_surface: null
+- source_layer: service
+  status: unknown
+  digest: null
+  client_surface: null
+- source_layer: test
+  status: unknown
+  digest: null
+  client_surface: null
+captured_at: '2026-08-11T00:00:00Z'

@@ -1,0 +1,11 @@
+{
+  "source_id": "client:finance-screen",
+  "kind": "content",
+  "locator": "embedded-artifact:finance-screen",
+  "summary": "The finance client presents invoice list inspection.",
+  "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+  "domain_id": "finance",
+  "source_layer": "client",
+  "client_surface": "web",
+  "size_bytes": 120
+}

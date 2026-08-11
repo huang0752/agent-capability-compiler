@@ -1,0 +1,77 @@
+{
+  "$defs": {
+    "ProjectIdentity": {
+      "additionalProperties": false,
+      "description": "Stable identity of an ACC project.",
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "version": {
+          "minLength": 1,
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "title": "ProjectIdentity",
+      "type": "object"
+    },
+    "SourceWorkspace": {
+      "additionalProperties": false,
+      "description": "Source system location, which ACC always treats as read-only.",
+      "properties": {
+        "mode": {
+          "const": "read_only",
+          "title": "Mode",
+          "type": "string"
+        },
+        "path": {
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "mode"
+      ],
+      "title": "SourceWorkspace",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Identity and immutable read-only source boundary of one Usage project.",
+  "properties": {
+    "kind": {
+      "const": "agent_usage",
+      "title": "Kind",
+      "type": "string"
+    },
+    "project": {
+      "$ref": "#/$defs/ProjectIdentity"
+    },
+    "schema_version": {
+      "const": "2",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_workspace": {
+      "$ref": "#/$defs/SourceWorkspace"
+    }
+  },
+  "required": [
+    "schema_version",
+    "kind",
+    "project",
+    "source_workspace"
+  ],
+  "title": "AgentUsageProject",
+  "type": "object"
+}

@@ -1,0 +1,20 @@
+schema_version: '2'
+source_revision: git:finance-fixture
+evidence_layers:
+- source_layer: client
+  status: provided
+  digest: sha256:176bdcc71ea74c41f7bbc54da07401470812623491b2e94f77132c30a5aefab3
+  client_surface: web
+- source_layer: mcp
+  status: provided
+  digest: sha256:7489db6378594c4a5794a4bd8507b999fe163fb27022e85892ef82e989a2c834
+  client_surface: null
+- source_layer: service
+  status: unknown
+  digest: null
+  client_surface: null
+- source_layer: test
+  status: unknown
+  digest: null
+  client_surface: null
+captured_at: '2026-08-11T00:00:00Z'
