@@ -96,7 +96,7 @@ ACC **不**负责：
 - 在 Runtime 中动态生成代码、HTTP 请求或工作流；
 - 生产级 Action 审批 UI、durable Action Store、集中审计控制面，以及插件市场、Kubernetes、Helm、OCI、SOAP、gRPC、数据库 Adapter、消息队列、RPA 或浏览器录制。
 
-当前唯一格式为 `2`。稳定可执行入口支持证据绑定的 Read Operation、Capability Pack、MCP stdio 和多用户 `streamable_http` Gateway。经编译证明且被部署策略允许的 Action 会在 Gateway 中暴露为业务专属 `<capability_id>.prepare` 工具，并通过 `approve → commit → status` 完成受信生命周期；普通 `tools()`/`call()` 仍不能绕过该生命周期直接执行写操作。生产部署必须显式提供 durable Action Store、可信 ApprovalAuthority、审计 Sink 与 effect/risk/capability ceiling；ACC 不内置生产审批 UI 或持久化实现。Gateway 是 Generic Runtime 的可选运行时适配层：它负责 HTTP 身份、会话隔离和请求级 `PrincipalContext`，不是用户/租户管理平台、权限源或 SaaS 控制面。
+当前唯一格式为 `2`。稳定可执行入口支持证据绑定的 Read Operation、Capability Pack、MCP stdio 和多用户 `streamable_http` Gateway。经编译证明且被部署策略允许的 Action 会在 Gateway 中暴露为业务专属 `<capability_id>.prepare` 工具：`prepare` 生成受信预览，只有 proof 要求时才调用 `approve`，随后才能 `commit`；`status` 可独立查询生命周期状态。普通 `tools()`/`call()` 仍不能绕过该生命周期直接执行写操作。生产部署必须显式提供 durable Action Store、可信 ApprovalAuthority、审计 Sink 与 effect/risk/capability ceiling；ACC 不内置生产审批 UI 或持久化实现。Gateway 是 Generic Runtime 的可选运行时适配层：它负责 HTTP 身份、会话隔离和请求级 `PrincipalContext`，不是用户/租户管理平台、权限源或 SaaS 控制面。
 
 ## 架构
 
@@ -229,7 +229,7 @@ stdio 通过 `CapabilityMcpServer` 调用固定身份的 `GenericRuntime`；Gate
 1. Core 与 Runtime 不调用 LLM；AI 只在 Coding Agent 的编译期。
 2. Pack 不保存用户账号、密码、JWT 或可直接使用的 Authorization Header。
 3. 用户确认只表达业务目标与策略，不能替代 Evidence 或授予源权限。
-4. Read tool 不能绕过 `prepare → approve → commit → status` 执行 mutation。
+4. Read tool 不能绕过 Action 生命周期执行 mutation；Action 必须先 `prepare`，进入 `approved`（自动或按 proof 审批）后才能 `commit`，`status` 可独立查询。
 5. Fake/offline 验证不能升级为生产 `source_connected_verified`。
 
 其他核心原则：
@@ -238,7 +238,7 @@ stdio 通过 `CapabilityMcpServer` 调用固定身份的 `GenericRuntime`；Gate
 2. **AI 负责创造，ACC 负责约束**：分析和候选定义可以由 Agent 完成，最终有效性由确定性工具验证。
 3. **通用 Runtime**：每个系统只生成数据化的 Pack，不复制一套 Runtime 源码。
 4. **证据先于约束**：Evidence 通过 SourceContract provenance 支持 Operation Schema；观测样本不能证明业务上界。
-5. **默认拒绝写**：Action 只有同时通过 effect/risk、部署 allowlist、Scope、审批、幂等和并发门禁才可能执行。
+5. **默认拒绝写**：Action 只有同时通过 effect/risk、部署 allowlist、Scope、按 proof 要求的审批或自动 `approved` 状态、幂等和并发门禁才可能执行。
 6. **原系统源码只读**：所有生成物写入独立 ACC 项目；Engineer Skill 最终停在人工 Git Review 之前。
 
 详细设计决策见 `docs/architecture/adr/`。
@@ -496,11 +496,11 @@ CapabilityQuality 另外记录业务 intent、selector acquisition、producer Ca
 
 ### Action 状态机与当前边界
 
-Action 使用显式 `prepare → approve → commit → status` 状态机。Action Operation 必须声明 effect、risk、reversibility、retry、idempotency 和 concurrency；编译器证明 preview 只读、commit 的变更拓扑受限，并按风险推导审批要求。部署策略默认 `allowed_effects={read}`，Pack 声明不能自行扩大部署权限。
+Action 使用显式生命周期：`prepare` 生成并密封只读预览；proof 要求审批时调用 `approve`，否则 Store 自动进入 `approved`；随后才能 `commit`，而 `status` 可随时独立查询。Action Operation 必须声明 effect、risk、reversibility、retry、idempotency 和 concurrency；编译器证明 preview 只读、commit 的变更拓扑受限，并按风险推导审批要求。部署策略默认 `allowed_effects={read}`，Pack 声明不能自行扩大部署权限。
 
 当前合同支持两类证据化并发策略：乐观并发要求可信 token 与源请求 precondition；服务端状态谓词策略先通过声明的 Read Operation 检查允许状态，并与状态幂等、`retry: never` 和 `status_query` 结果解析成组使用。Runtime 只执行 compiler IR 中已证明且摘要绑定的策略；失败或歧义结果保持 `outcome_unknown`，不能由 Agent 宣称成功。
 
-当前仓库已经有严格的当前模型、证据绑定的 Action semantics、编译与 Runtime 双重证明、Pack/Loader 版本门禁、部署策略、Action Coordinator、secret-safe 审计合同和开发/测试内存 Store。普通 Generic Runtime 的 `tools()`/`call()` 仍会拒绝 Action；多用户 Gateway 只有在 Pack、部署 allowlist、可信 ApprovalAuthority、Store 与审计依赖均闭合时，才通过专用 `prepare → approve → commit → status` 工具暴露 Action。该路径目前由 Fake Source 离线验证，不是生产源 Action 已连接验证。内存 Store 明确不是 durable 实现；生产 Action 仍需要可信审批签发、durable Store、生产审计后端和 source-connected 隔离验收。不能通过允许任意 `POST` 绕过这些边界，Action approval 也不能替代源 JWT 对最终 REST 请求的鉴权。
+当前仓库已经有严格的当前模型、证据绑定的 Action semantics、编译与 Runtime 双重证明、Pack/Loader 版本门禁、部署策略、Action Coordinator、secret-safe 审计合同和开发/测试内存 Store。普通 Generic Runtime 的 `tools()`/`call()` 仍会拒绝 Action；多用户 Gateway 只有在 Pack、部署 allowlist、可信 ApprovalAuthority、Store 与审计依赖均闭合时，才暴露专用生命周期工具：业务 `prepare`、proof 要求时的 `approve`、`commit` 和可独立调用的 `status`。该路径目前由 Fake Source 离线验证，不是生产源 Action 已连接验证。内存 Store 明确不是 durable 实现；生产 Action 仍需要可信审批签发、durable Store、生产审计后端和 source-connected 隔离验收。不能通过允许任意 `POST` 绕过这些边界，Action approval 也不能替代源 JWT 对最终 REST 请求的鉴权。
 
 ### Scope callability 与 Coverage
 

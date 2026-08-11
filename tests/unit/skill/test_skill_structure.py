@@ -120,6 +120,18 @@ def test_readme_mermaid_source_has_stable_structure_smoke() -> None:
     assert "baogao" not in "\n".join(blocks).lower()
 
 
+def test_readme_does_not_describe_action_approval_or_status_as_fixed_steps() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    for stale_statement in (
+        "并通过 `approve → commit → status`",
+        "Read tool 不能绕过 `prepare → approve → commit → status`",
+        "Scope、审批、幂等和并发门禁",
+        "Action 使用显式 `prepare → approve → commit → status` 状态机",
+        "专用 `prepare → approve → commit → status` 工具",
+    ):
+        assert stale_statement not in readme
+
+
 def test_skill_has_required_platform_neutral_structure_without_placeholders() -> None:
     skill_text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
     assert skill_text.startswith("---\nname: acc-engineer\n")
