@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -43,6 +44,47 @@ def test_readme_opens_with_an_end_to_end_mermaid_architecture() -> None:
     ):
         assert label in overview
     assert "```text\n已有系统源码" not in (ROOT / "README.md").read_text(encoding="utf-8")
+
+
+def test_readme_has_compile_and_runtime_architecture_details() -> None:
+    blocks = _readme_mermaid_blocks()
+    assert len(blocks) == 3
+    compile_time, runtime = blocks[1:]
+    for label in (
+        "Evidence / Scope Inventory",
+        "DomainMap / Candidate Ledger",
+        "一次处理一个领域",
+        "DomainDecision",
+        "Schema / Closure / Action Safety",
+        "Capability IR",
+        "Evidence 缺口 / 冲突",
+    ):
+        assert label in compile_time
+    for label in (
+        "MCP stdio",
+        "streamable HTTP Gateway",
+        "PrincipalContext",
+        "Read tool call",
+        "prepare",
+        "approve",
+        "commit",
+        "status",
+        "DeploymentPolicy",
+        "源 JWT / 源 API 最终鉴权",
+    ):
+        assert label in runtime
+
+
+def test_readme_mermaid_blocks_have_stable_structure() -> None:
+    blocks = _readme_mermaid_blocks()
+    assert len(blocks) == 3
+    for block in blocks:
+        assert block.startswith("flowchart ")
+        assert block.count("subgraph ") == sum(line.strip() == "end" for line in block.splitlines())
+        node_ids = re.findall(r"^\s*([A-Z][A-Z0-9_]*)\[", block, flags=re.MULTILINE)
+        assert node_ids
+        assert len(node_ids) == len(set(node_ids))
+    assert "baogao" not in "\n".join(blocks).lower()
 
 
 def test_skill_has_required_platform_neutral_structure_without_placeholders() -> None:

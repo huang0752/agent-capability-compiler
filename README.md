@@ -100,17 +100,125 @@ ACC **不**负责：
 
 ## 架构
 
+### 编译期：从系统事实到 Capability Pack
+
+```mermaid
+flowchart LR
+  subgraph discovery["只读发现"]
+    SOURCES["Backend / OpenAPI / Frontend / Tests"]
+    SCAN["Coding Agent + ACC Engineer Skill"]
+    FACTS["Evidence / Scope Inventory"]
+  end
+
+  subgraph domains["领域向导"]
+    LEDGER["DomainMap / Candidate Ledger"]
+    SELECT["依赖就绪排序<br/>一次处理一个领域"]
+    GOALS["用户确认业务目标 / DomainPolicy"]
+    DECISION["版本化 DomainDecision"]
+  end
+
+  subgraph contracts["当前格式项目"]
+    SOURCE_CONTRACT["SourceContract / InteractionContract"]
+    DEFINITION["Operation / Capability / Policy / Eval"]
+  end
+
+  subgraph gates["确定性门禁"]
+    VALIDATE["Schema / Closure / Action Safety"]
+    ANALYZE["Coverage / Contract Tests"]
+    IR["Capability IR"]
+    PACK_BUILD["确定性 Capability Pack"]
+  end
+
+  BLOCKED["Evidence 缺口 / 冲突<br/>保持 blocked 或 unknown"]
+
+  SOURCES --> SCAN --> FACTS --> LEDGER
+  LEDGER --> SELECT --> GOALS --> DECISION
+  DECISION --> SOURCE_CONTRACT --> DEFINITION --> VALIDATE
+  VALIDATE -->|"通过"| ANALYZE --> IR --> PACK_BUILD
+  VALIDATE -->|"诊断"| BLOCKED --> SCAN
+```
+
+AI 负责从系统事实中提出候选、补充定义并处理诊断；只有 ACC 的确定性 Schema、引用闭合、Action Safety、Coverage 和 Contract Tests 全部满足要求，Compiler 才能产出 Capability IR，并进一步构建可验证的 Pack。Evidence 不足的候选继续保留为 `blocked` 或 `unknown`，不会靠用户确认自动变成可执行能力。
+
+### 运行期：Read 与 Action 共用源权限终裁
+
+```mermaid
+flowchart TB
+  MCP_CLIENT["MCP Client / Agent"]
+  STDIO["MCP stdio<br/>本地单身份"]
+  GATEWAY["streamable HTTP Gateway<br/>多用户会话"]
+  PRINCIPAL["PrincipalContext<br/>会话 / 租户 / effective scopes"]
+  MCP_SERVER["PrincipalCapabilityMcpServer"]
+  PACK_LOAD["已验证 Capability Pack / IR"]
+  RUNTIME_CORE["Generic Runtime<br/>只投影 Read"]
+
+  subgraph read_path["Read 路径"]
+    READ_CALL["Read tool call"]
+    READ_GUARD["Scope / Policy / Input validation"]
+    WORKFLOW["WorkflowExecutor"]
+    OUTPUT["Output validation / filtering"]
+  end
+
+  subgraph action_path["Gateway Action 路径"]
+    ACTION_TOOLS["Action 生命周期工具<br/>非 Generic Runtime.call"]
+    PREPARE["prepare<br/>只读预览"]
+    APPROVE["approve<br/>外部 ApprovalAuthority"]
+    COMMIT["commit<br/>密封输入 / 并发 / 幂等"]
+    STATUS["status<br/>成功或 outcome_unknown"]
+    COORDINATOR["ActionCoordinator / RuntimeActionWorkflowExecutor"]
+  end
+
+  subgraph deployment["Gateway Action 部署依赖"]
+    DEPLOY["DeploymentPolicy<br/>effect / risk / allowlist"]
+    STATE["durable ActionStore / ActionAuditSink"]
+  end
+
+  PROVIDER["HttpProvider / REST Provider"]
+  SOURCE_AUTH["源 JWT / 源 API 最终鉴权"]
+  RESULT["MCP structured result"]
+
+  MCP_CLIENT --> STDIO --> RUNTIME_CORE
+  MCP_CLIENT --> GATEWAY --> PRINCIPAL --> MCP_SERVER
+  PACK_LOAD --> RUNTIME_CORE
+  PACK_LOAD --> MCP_SERVER
+  MCP_SERVER -->|"Read"| RUNTIME_CORE
+  RUNTIME_CORE --> READ_CALL --> READ_GUARD --> WORKFLOW --> PROVIDER
+  PROVIDER --> OUTPUT --> RESULT --> MCP_CLIENT
+  MCP_SERVER --> ACTION_TOOLS
+  ACTION_TOOLS --> COORDINATOR
+  COORDINATOR --> PREPARE --> APPROVE --> COMMIT --> STATUS
+  COORDINATOR --> RESULT
+  DEPLOY --> COORDINATOR
+  STATE --> COORDINATOR
+  PREPARE --> PROVIDER
+  COMMIT --> PROVIDER
+  PROVIDER -->|"对应用户身份"| SOURCE_AUTH
+  SOURCE_AUTH -->|"授权后的响应"| PROVIDER
+```
+
+stdio 和 Gateway 改变的是身份与会话传输方式，不改变权限终裁：Read 与 Action 的源操作最终都由 `HttpProvider` 携带对应身份访问源系统，并接受源 JWT 和源 API 的逐请求鉴权；Action 的 `status` 读取受信 Store 中的生命周期状态，采用状态查询策略时则由 `commit` 阶段解析源状态。普通 `GenericRuntime` 只投影 Read；Gateway 只有在 Action Pack 获得部署方显式提供的 `ActionRuntimeDependencies` 后，才会组合 `ActionCoordinator` 并暴露生命周期工具。生产依赖必须包括 `DeploymentPolicy`、durable `ActionStore`、可信 `ApprovalAuthority` 和 `ActionAuditSink`；仓库内的内存实现仅用于开发与测试，不能替代它们。
+
+### 组件职责
+
 仓库由四个可独立测试的 Python 包和一套平台中立的 Engineer Skill 组成：
 
 | 组件 | 职责 |
 | --- | --- |
 | `acc-core` | 数据模型、JSON Schema、CLI、Evidence、校验器、编译器、Coverage、Eval、Pack |
-| `acc-runtime` | Pack Loader、MCP stdio、Workflow 执行、REST Provider、Provider 级认证、`PrincipalContext`、Policy、结构化错误 |
+| `acc-runtime` | Pack Loader、MCP stdio、streamable HTTP Gateway、`PrincipalContext`、Read Workflow、REST Provider、Policy，以及由部署依赖组合的 Action 生命周期 |
 | `acc-adapter-sdk` | Adapter Contract、Server 基础骨架、测试工具和 Fake Adapter 示例 |
-| `acc-testkit` | Fake REST System、MCP 测试客户端、E2E 断言、故障模拟和示例数据 |
+| `acc-testkit` | Fake REST System、MCP 测试客户端、E2E 断言、交互契约评估、故障模拟和示例数据；Fake/offline 结果不是源连接证明 |
 | `skills/acc-engineer` | `preflight → analyze → model → plan → implement → validate → test → refine → handoff` |
 
-核心原则：
+### 读图时必须保持的边界
+
+1. Core 与 Runtime 不调用 LLM；AI 只在 Coding Agent 的编译期。
+2. Pack 不保存用户账号、密码、JWT 或可直接使用的 Authorization Header。
+3. 用户确认只表达业务目标与策略，不能替代 Evidence 或授予源权限。
+4. Read tool 不能绕过 `prepare → approve → commit → status` 执行 mutation。
+5. Fake/offline 验证不能升级为生产 `source_connected_verified`。
+
+其他核心原则：
 
 1. **Skill-first**：AI 能力由 Coding Agent 宿主提供，ACC 本身不集成模型。
 2. **AI 负责创造，ACC 负责约束**：分析和候选定义可以由 Agent 完成，最终有效性由确定性工具验证。
