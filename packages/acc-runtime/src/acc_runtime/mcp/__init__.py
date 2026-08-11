@@ -1,5 +1,6 @@
 """MCP transport adapters."""
 
+from acc_runtime.mcp.digest import listed_tools_sha256
 from acc_runtime.mcp.schema_projection import (
     McpSchemaProjectionError,
     project_mcp_output_schema,
@@ -19,5 +20,6 @@ __all__ = [
     "McpSchemaProjectionError",
     "PrincipalCapabilityMcpServer",
     "PrincipalResolver",
+    "listed_tools_sha256",
     "project_mcp_output_schema",
 ]

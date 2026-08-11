@@ -35,7 +35,11 @@ from acc_runtime.gateway.models import GatewayRuntimeInfo, GatewaySettings, Sess
 from acc_runtime.gateway.service import GatewaySessionService
 from acc_runtime.gateway.sessions import InMemoryGatewaySessionStore
 from acc_runtime.loader import load_pack
-from acc_runtime.mcp import PrincipalCapabilityMcpServer, project_mcp_output_schema
+from acc_runtime.mcp import (
+    PrincipalCapabilityMcpServer,
+    listed_tools_sha256,
+    project_mcp_output_schema,
+)
 from acc_runtime.providers import HttpProvider
 
 if TYPE_CHECKING:
@@ -206,38 +210,6 @@ def _tool_schema_sha256(tools: Collection[Mapping[str, object]]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _listed_tool_schema_sha256(tools: Collection[object]) -> str:
-    """Digest the exact final MCP tools/list projection."""
-
-    schemas: list[dict[str, object]] = []
-    for value in tools:
-        name = getattr(value, "name", None)
-        input_schema = getattr(value, "inputSchema", None)
-        output_schema = getattr(value, "outputSchema", None)
-        if (
-            not isinstance(name, str)
-            or not isinstance(input_schema, Mapping)
-            or not isinstance(output_schema, Mapping)
-        ):
-            raise TypeError("MCP tool metadata is invalid")
-        schemas.append(
-            {
-                "name": name,
-                "input_schema": dict(input_schema),
-                "output_schema": dict(output_schema),
-            }
-        )
-    schemas.sort(key=lambda item: str(item["name"]))
-    encoded = json.dumps(
-        schemas,
-        ensure_ascii=False,
-        allow_nan=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
-
-
 def create_gateway_runtime(
     *,
     pack_path: str | Path,
@@ -350,7 +322,7 @@ def create_gateway_runtime(
         project_id=loaded.manifest.project_id,
         project_version=loaded.manifest.project_version,
         interaction_sha256=runtime.interaction_sha256,
-        tool_schema_sha256=_listed_tool_schema_sha256(mcp_server.list_tools()),
+        tool_schema_sha256=listed_tools_sha256(mcp_server.list_tools()),
         transport="streamable_http",
     )
     app = create_gateway_app(
