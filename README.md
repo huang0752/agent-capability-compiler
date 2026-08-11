@@ -123,22 +123,24 @@ flowchart LR
   end
 
   subgraph gates["确定性门禁"]
-    VALIDATE["Schema / Closure / Action Safety"]
-    ANALYZE["Coverage / Contract Tests"]
+    VALIDATE["validate_project<br/>Schema / Closure / Action Safety"]
     IR["Capability IR"]
     PACK_BUILD["确定性 Capability Pack"]
   end
 
+  ANALYZE["独立发布 / 验收门禁<br/>Coverage / Contract Tests"]
   BLOCKED["Evidence 缺口 / 冲突<br/>保持 blocked 或 unknown"]
 
   SOURCES --> SCAN --> FACTS --> LEDGER
   LEDGER --> SELECT --> GOALS --> DECISION
   DECISION --> SOURCE_CONTRACT --> DEFINITION --> VALIDATE
-  VALIDATE -->|"通过"| ANALYZE --> IR --> PACK_BUILD
+  VALIDATE -->|"通过"| IR --> PACK_BUILD
+  VALIDATE -.->|"独立报告"| ANALYZE
+  PACK_BUILD -.->|"发布 / 验收输入"| ANALYZE
   VALIDATE -->|"诊断"| BLOCKED --> SCAN
 ```
 
-AI 负责从系统事实中提出候选、补充定义并处理诊断；只有 ACC 的确定性 Schema、引用闭合、Action Safety、Coverage 和 Contract Tests 全部满足要求，Compiler 才能产出 Capability IR，并进一步构建可验证的 Pack。Evidence 不足的候选继续保留为 `blocked` 或 `unknown`，不会靠用户确认自动变成可执行能力。
+AI 负责从系统事实中提出候选、补充定义并处理诊断。`compile_project` 以 `validate_project` 为硬门禁：Schema、引用闭合与 Action Safety 通过后才能产出 Capability IR，并进一步构建可验证的 Pack。Coverage 和 Contract Tests 是独立的发布与验收门禁，不参与 `compile_project` 的控制流。Evidence 不足的候选继续保留为 `blocked` 或 `unknown`，不会靠用户确认自动变成可执行能力。
 
 ### 运行期：Read 与 Action 共用源权限终裁
 
@@ -148,7 +150,8 @@ flowchart TB
   STDIO["MCP stdio<br/>本地单身份"]
   GATEWAY["streamable HTTP Gateway<br/>多用户会话"]
   PRINCIPAL["PrincipalContext<br/>会话 / 租户 / effective scopes"]
-  MCP_SERVER["PrincipalCapabilityMcpServer"]
+  STDIO_SERVER["CapabilityMcpServer"]
+  PRINCIPAL_SERVER["PrincipalCapabilityMcpServer"]
   PACK_LOAD["已验证 Capability Pack / IR"]
   RUNTIME_CORE["Generic Runtime<br/>只投影 Read"]
 
@@ -162,41 +165,52 @@ flowchart TB
   subgraph action_path["Gateway Action 路径"]
     ACTION_TOOLS["Action 生命周期工具<br/>非 Generic Runtime.call"]
     PREPARE["prepare<br/>只读预览"]
-    APPROVE["approve<br/>外部 ApprovalAuthority"]
+    APPROVE["approve<br/>仅 proof 要求时调用"]
     COMMIT["commit<br/>密封输入 / 并发 / 幂等"]
-    STATUS["status<br/>成功或 outcome_unknown"]
-    COORDINATOR["ActionCoordinator / RuntimeActionWorkflowExecutor"]
+    STATUS["status 独立查询<br/>prepared / approved / committing / succeeded<br/>failed / outcome_unknown / expired"]
+    COORDINATOR["ActionCoordinator"]
+    ACTION_EXEC["RuntimeActionWorkflowExecutor"]
   end
 
   subgraph deployment["Gateway Action 部署依赖"]
-    DEPLOY["DeploymentPolicy<br/>effect / risk / allowlist"]
-    STATE["durable ActionStore / ActionAuditSink"]
+    ACTION_DEPS["ActionRuntimeDependencies<br/>DeploymentPolicy / ApprovalAuthority"]
+    STATE["ActionStore / ActionAuditSink<br/>生产部署必须 durable / trusted"]
   end
 
   PROVIDER["HttpProvider / REST Provider"]
   SOURCE_AUTH["源 JWT / 源 API 最终鉴权"]
   RESULT["MCP structured result"]
 
-  MCP_CLIENT --> STDIO --> RUNTIME_CORE
-  MCP_CLIENT --> GATEWAY --> PRINCIPAL --> MCP_SERVER
+  MCP_CLIENT --> STDIO --> STDIO_SERVER --> RUNTIME_CORE
+  MCP_CLIENT --> GATEWAY --> PRINCIPAL --> PRINCIPAL_SERVER
   PACK_LOAD --> RUNTIME_CORE
-  PACK_LOAD --> MCP_SERVER
-  MCP_SERVER -->|"Read"| RUNTIME_CORE
-  RUNTIME_CORE --> READ_CALL --> READ_GUARD --> WORKFLOW --> PROVIDER
+  PACK_LOAD --> ACTION_EXEC
+  PRINCIPAL_SERVER -->|"Read"| RUNTIME_CORE
+  RUNTIME_CORE --> READ_CALL --> READ_GUARD --> WORKFLOW
+  WORKFLOW -->|"HttpProvider"| PROVIDER
   PROVIDER --> OUTPUT --> RESULT --> MCP_CLIENT
-  MCP_SERVER --> ACTION_TOOLS
-  ACTION_TOOLS --> COORDINATOR
-  COORDINATOR --> PREPARE --> APPROVE --> COMMIT --> STATUS
+  PRINCIPAL_SERVER --> ACTION_TOOLS --> COORDINATOR
+  ACTION_DEPS --> COORDINATOR
+  ACTION_DEPS --> STATE
+  ACTION_EXEC --> COORDINATOR
+  COORDINATOR --> PREPARE
+  PREPARE -->|"proof 要求审批"| APPROVE --> COMMIT
+  PREPARE -->|"无需审批, Store 自动 approved"| COMMIT
+  COORDINATOR --> STATUS
+  COORDINATOR <--> STATE
+  PREPARE --> ACTION_EXEC
+  COMMIT --> ACTION_EXEC
+  ACTION_EXEC -->|"同一 HttpProvider"| PROVIDER
   COORDINATOR --> RESULT
-  DEPLOY --> COORDINATOR
-  STATE --> COORDINATOR
-  PREPARE --> PROVIDER
-  COMMIT --> PROVIDER
   PROVIDER -->|"对应用户身份"| SOURCE_AUTH
   SOURCE_AUTH -->|"授权后的响应"| PROVIDER
 ```
 
-stdio 和 Gateway 改变的是身份与会话传输方式，不改变权限终裁：Read 与 Action 的源操作最终都由 `HttpProvider` 携带对应身份访问源系统，并接受源 JWT 和源 API 的逐请求鉴权；Action 的 `status` 读取受信 Store 中的生命周期状态，采用状态查询策略时则由 `commit` 阶段解析源状态。普通 `GenericRuntime` 只投影 Read；Gateway 只有在 Action Pack 获得部署方显式提供的 `ActionRuntimeDependencies` 后，才会组合 `ActionCoordinator` 并暴露生命周期工具。生产依赖必须包括 `DeploymentPolicy`、durable `ActionStore`、可信 `ApprovalAuthority` 和 `ActionAuditSink`；仓库内的内存实现仅用于开发与测试，不能替代它们。
+stdio 通过 `CapabilityMcpServer` 调用固定身份的 `GenericRuntime`；Gateway 通过 `PrincipalCapabilityMcpServer` 为每个请求解析 `PrincipalContext`。已验证 Pack/IR 构造只投影 Read 的 `GenericRuntime`；若 IR 含 Action，Gateway 还必须从同一份已验证 IR、同一个 `HttpProvider` 和部署方显式提供的 `ActionRuntimeDependencies` 构造 `ActionCoordinator`。Pack 不直接构造任何 MCP Server。
+
+传输方式不改变权限终裁：Read 与 Action 的源操作最终都由同一个 `HttpProvider` 携带对应身份访问源系统，并接受源 JWT 和源 API 的逐请求鉴权。`approve` 仅在编译证明要求审批时调用；无需审批的 `prepare` 会在 Store 内自动进入 `approved`，之后才能 `commit`。`status` 是 Coordinator 对受信 Store 的独立生命周期查询，不是固定的最后一步；采用 `status_query` 结果解析策略时，对源状态的访问发生在 `commit` 内。生产 `ActionRuntimeDependencies` 必须包括 `DeploymentPolicy`、durable `ActionStore`、可信 `ApprovalAuthority` 和 `ActionAuditSink`；仓库内的内存实现仅用于开发与测试，不能替代它们。
+
+仓库的文档测试只对 Mermaid 源码执行标签、节点、关键边和禁止边的结构烟测；仓库没有内置 Mermaid parser，因此这些测试不等同于渲染器语法证明。
 
 ### 组件职责
 

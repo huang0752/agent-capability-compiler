@@ -64,6 +64,11 @@ def test_readme_has_compile_and_runtime_architecture_details() -> None:
         "MCP stdio",
         "streamable HTTP Gateway",
         "PrincipalContext",
+        "CapabilityMcpServer",
+        "PrincipalCapabilityMcpServer",
+        "ActionRuntimeDependencies",
+        "ActionCoordinator",
+        "RuntimeActionWorkflowExecutor",
         "Read tool call",
         "prepare",
         "approve",
@@ -74,8 +79,36 @@ def test_readme_has_compile_and_runtime_architecture_details() -> None:
     ):
         assert label in runtime
 
+    assert 'VALIDATE -->|"通过"| IR --> PACK_BUILD' in compile_time
+    assert 'VALIDATE -.->|"独立报告"| ANALYZE' in compile_time
+    assert 'PACK_BUILD -.->|"发布 / 验收输入"| ANALYZE' in compile_time
+    assert "ANALYZE --> IR" not in compile_time
+    assert "ANALYZE --> PACK_BUILD" not in compile_time
 
-def test_readme_mermaid_blocks_have_stable_structure() -> None:
+    for edge in (
+        "STDIO --> STDIO_SERVER --> RUNTIME_CORE",
+        "GATEWAY --> PRINCIPAL --> PRINCIPAL_SERVER",
+        "PACK_LOAD --> RUNTIME_CORE",
+        "PACK_LOAD --> ACTION_EXEC",
+        "ACTION_DEPS --> COORDINATOR",
+        "ACTION_EXEC --> COORDINATOR",
+        'PRINCIPAL_SERVER -->|"Read"| RUNTIME_CORE',
+        "PRINCIPAL_SERVER --> ACTION_TOOLS --> COORDINATOR",
+        'WORKFLOW -->|"HttpProvider"| PROVIDER',
+        'ACTION_EXEC -->|"同一 HttpProvider"| PROVIDER',
+        'PREPARE -->|"proof 要求审批"| APPROVE --> COMMIT',
+        'PREPARE -->|"无需审批, Store 自动 approved"| COMMIT',
+        "COORDINATOR --> STATUS",
+        "COORDINATOR <--> STATE",
+    ):
+        assert edge in runtime
+    assert "PACK_LOAD --> PRINCIPAL_SERVER" not in runtime
+    assert "PACK_LOAD --> STDIO_SERVER" not in runtime
+    assert "STDIO --> RUNTIME_CORE" not in runtime
+    assert "STATUS --> PROVIDER" not in runtime
+
+
+def test_readme_mermaid_source_has_stable_structure_smoke() -> None:
     blocks = _readme_mermaid_blocks()
     assert len(blocks) == 3
     for block in blocks:
