@@ -141,8 +141,7 @@ def test_usage_skill_automates_clear_facts_and_groups_only_required_questions() 
 
 def test_usage_templates_are_generic_and_intentionally_unrenderable() -> None:
     templates = {
-        path.name: path.read_text(encoding="utf-8")
-        for path in (SKILL / "templates").glob("*.yaml")
+        path.name: path.read_text(encoding="utf-8") for path in (SKILL / "templates").glob("*.yaml")
     }
     combined = "\n".join(templates.values())
     assert "<replace-with-sha256>" in combined

@@ -48,8 +48,8 @@ def test_readme_opens_with_an_end_to_end_mermaid_architecture() -> None:
 
 def test_readme_has_compile_and_runtime_architecture_details() -> None:
     blocks = _readme_mermaid_blocks()
-    assert len(blocks) == 3
-    compile_time, runtime = blocks[1:]
+    assert len(blocks) == 4
+    compile_time, runtime = blocks[2:]
     for label in (
         "Evidence / Scope Inventory",
         "DomainMap / Candidate Ledger",
@@ -110,7 +110,7 @@ def test_readme_has_compile_and_runtime_architecture_details() -> None:
 
 def test_readme_mermaid_source_has_stable_structure_smoke() -> None:
     blocks = _readme_mermaid_blocks()
-    assert len(blocks) == 3
+    assert len(blocks) == 4
     for block in blocks:
         assert block.startswith("flowchart ")
         assert block.count("subgraph ") == sum(line.strip() == "end" for line in block.splitlines())

@@ -77,6 +77,44 @@ Capability Pack 是 AI 辅助编译期与无 LLM 运行期之间仅包含数据�
 
 源 JWT 与源 API 是最终授权者。ACC Scope 只能收窄源系统可能允许的范围，不能创建角色、授予权限或替代源系统逐请求鉴权；Action approval 只批准一次已证明的业务变更，也不是源权限。
 
+## 可选的 Agent Usage 管道
+
+Capability 能正确通过 MCP 暴露，不等于 Agent 已经知道一个业务目标需要按什么顺序调用工具、前端默认值和条件如何影响输入、哪个结果字段要继续传给下一步，以及失败或陈旧数据应如何处理。因此 ACC 在 Capability 管道之后提供一条**独立、可选但推荐**的 Agent Usage 管道。
+
+它不会在第一次生成 MCP 时自动运行。用户应先自行测试 Capability Pack，经过多轮反馈并明确接受一个固定 MCP Release；只有这条基线稳定后，Usage Engineer 才重新只读扫描所选领域的 Client、Service、Test、MCP 和 Runtime Observation 证据，恢复真实使用路径。Client 证据包括 Web、移动端、桌面端、CLI 与自动化调用，因此会二次确认只有前端或其他客户端才能证明的默认值、关联数据、条件展示和结果消费。向导仍然一次处理并确认一个完整业务领域，而不是让用户逐条审核全部接口或全部 route。
+
+```mermaid
+flowchart TB
+  subgraph pipeline_a["管道 A：Capability 编译与 MCP 运行"]
+    A_SOURCE["源码 / OpenAPI / 前端 / 测试"]
+    A_ENGINEER["ACC Engineer<br/>领域发现与能力建模"]
+    A_PROJECT["Capability Project"]
+    A_PACK["Capability Pack .accpkg"]
+    A_RUNTIME["Generic Runtime / Gateway"]
+    A_MCP["稳定并由用户接受的 MCP Release"]
+    A_SOURCE --> A_ENGINEER --> A_PROJECT --> A_PACK --> A_RUNTIME --> A_MCP
+  end
+
+  subgraph pipeline_b["管道 B：可选 Agent Usage 发布"]
+    B_ACCEPT["MCP Release Acceptance<br/>精确 Pack / IR / Tool 摘要"]
+    B_RESCAN["Usage Engineer 只读复扫<br/>Client / Service / Test / MCP / Runtime Observation"]
+    B_DOMAIN["一次一个领域<br/>Usage Contract / Scenario / Decision"]
+    B_VERIFY["六个独立验证轴"]
+    B_PACKAGE["Agent Usage Package .accusage"]
+    B_ADAPTER["平台中立输入<br/>可选 Host Adapter"]
+    B_ACCEPT --> B_RESCAN --> B_DOMAIN --> B_VERIFY --> B_PACKAGE --> B_ADAPTER
+  end
+
+  A_MCP -->|"用户接受后才可启动"| B_ACCEPT
+  SOURCE_AUTH["源 JWT / 源 API<br/>每次请求最终鉴权"]
+  A_RUNTIME --> SOURCE_AUTH
+  B_ADAPTER -.->|"只提供调用指导，不授予权限"| SOURCE_AUTH
+```
+
+Usage Release 保留六个相互独立的事实：`source_usage_traced`、`usage_contract_verified`、`headless_agent_verified`、`host_adapter_verified`、`real_mcp_verified` 和 `user_accepted`，不计算总分，也不从一个轴推导另一个轴。缺少真实 MCP 轨迹、宿主适配验证或其他证据时必须保留为 `limited`；只有发布所需的核心轴全部成立时才是 `released`。手写 Evidence、文件名或自我声明的连接标签都不能把 `real_mcp_verified` 设为 true；该轴只能来自专用 real MCP runner 的受信结果，而且不能据此冒充生产源连接。
+
+`.accusage` 只包含已发布领域中用户选定的业务目标和 route 闭包、精确 Decision/Release、Scenario 与必要 Evidence 身份元数据；不嵌入源文件、`.accpkg`、JWT、请求 payload 或未发布领域。核心输出是平台中立合同，Generic Markdown、MCP Resources/Prompts 或其他宿主格式都是可选 Adapter，不能增加工具、权限或 Action 快捷路径。
+
 ## 产品边界
 
 ACC 负责：
@@ -86,7 +124,7 @@ ACC 负责：
 - SourceContract、CapabilityQuality、Eval、九个基础质量轴、十个交互轴与十二个相互独立的领域与 Action Coverage 轴，以及可重复构建的 Capability Pack；
 - 固定通用 Runtime、MCP stdio、REST Provider、Provider 级认证和 SecretRef；
 - Adapter SDK 基础契约、测试工具和 Fake Adapter；
-- 面向 Coding Agent 的 ACC Engineer Skill。
+- 面向 Coding Agent 的 ACC Engineer 与独立 ACC Usage Engineer Skills。
 
 ACC **不**负责：
 
@@ -214,7 +252,7 @@ stdio 通过 `CapabilityMcpServer` 调用固定身份的 `GenericRuntime`；Gate
 
 ### 组件职责
 
-仓库由四个可独立测试的 Python 包和一套平台中立的 Engineer Skill 组成：
+仓库由四个可独立测试的 Python 包和两套平台中立、顺序衔接但互不耦合的 Engineer Skill 组成：
 
 | 组件 | 职责 |
 | --- | --- |
@@ -223,6 +261,7 @@ stdio 通过 `CapabilityMcpServer` 调用固定身份的 `GenericRuntime`；Gate
 | `acc-adapter-sdk` | Adapter Contract、Server 基础骨架、测试工具和 Fake Adapter 示例 |
 | `acc-testkit` | Fake REST System、MCP 测试客户端、E2E 断言、交互契约评估、故障模拟和示例数据；Fake/offline 结果不是源连接证明 |
 | `skills/acc-engineer` | `preflight → analyze → model → plan → implement → validate → test → refine → handoff` |
+| `skills/acc-usage-engineer` | 在用户接受稳定 MCP Release 后，按领域执行 `preflight → scan → model → review → build → test → impact → release → handoff`；不参与 Capability 编译 |
 
 ### 读图时必须保持的边界
 

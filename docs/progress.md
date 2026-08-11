@@ -15,6 +15,7 @@
 | 10 — Action and Live validation | In progress | compiler-proven Gateway MCP lifecycle is offline verified; production durable Store, approval issuer, audit backend, and source-connected sandbox remain pending |
 | 11 — interaction conformance | Complete | platform-neutral sidecars, static proof, Runtime manifest, Testkit evaluator, ten interaction axes, seven cross-industry fixtures, and full release gates |
 | 12 — AI domain-guided discovery | Complete | current-format domain contracts, deterministic Core/CLI, Skill flow, Runtime strategies, 7 cross-industry fixtures, reproducible Schema/Pack, and full release gates |
+| 13 — independent Agent Usage pipeline | Complete | independent project/package, live verification chain, signed release receipts, platform-neutral adapters, seven honest limited profiles, and full release gates |
 
 This file records fresh command evidence at each milestone. A status changes to complete only after its focused tests, the full test suite, lint, type checking, diff review, and milestone commit have succeeded.
 
@@ -28,12 +29,22 @@ This file records fresh command evidence at each milestone. A status changes to 
 - Core 已加入平台中立的 SourceContract/provenance、CapabilityQuality、Schema fidelity、constructability/discoverability/composition、保守输出预算，以及十个独立交互 Coverage 轴。Coverage 不生成总分，route disposition closure 不代表 Capability usable。
 - Coverage 另有十二个相互独立的领域与 Action Coverage 轴，分别保留业务目标、候选分类、安全语义、身份授权、Action 生命周期、冲突控制、幂等、结果解析、验证等级、跨领域依赖和用户决策事实；没有总分或 deployable/usable 推断。
 - Runtime/CLI 已加入路径感知 Scope callability：空 deployment ceiling 默认拒绝，确定不可调用项可由 strict mode 阻止启动，登录前未知的源权限保持 unknown。
-- Action 已有严格模型、编译证明、Pack/Loader 合同、部署策略、Runtime Coordinator、审批协议和显式开发/测试内存 Store。状态机为 `prepare → approve → commit → status`，不能简化为允许 `POST`。
+- Action 已有严格模型、编译证明、Pack/Loader 合同、部署策略、Runtime Coordinator、审批协议和显式开发/测试内存 Store。执行链为 `prepare →（proof 要求时 approve）→ commit`，`status` 可独立查询，不能简化为允许 `POST`。
 - Action semantics 已由 SourceContract 可信 Evidence 逐字段绑定，并在 compiler IR 与 Runtime 之间做摘要证明。乐观并发要求可信 token/precondition；服务端状态谓词策略与状态幂等、`retry: never` 和 `status_query` 成组验证。Gateway 只从当前 Pack IR 与同一 Provider 构造 Coordinator，缺少显式部署依赖时拒绝 Action Pack；DeploymentPolicy 禁止的能力不会出现在 tools/list 或公开 manifest。既有业务 prepare、外部 approval handle、commit/status 与 A/B 会话隔离由官方 MCP SDK 在 Fake Source 上验证；服务端状态策略的终态短路、一次 mutation 和未知结果 replay 目前由独立 Runtime/Fake Provider 测试验证。
 - 普通 Generic Runtime 的 `tools()`/`call()` 仍不能直连 Action。生产 durable Store、可信审批签发服务、集中审计后端和 source-connected 隔离沙箱仍由部署者提供，因此 M10 保持 In progress，当前结论是 `gateway_offline_verified`，不是生产 Action 可用性声明。
 - Live 验证术语分为 `offline_candidate`、`gateway_offline_verified` 和 `source_connected_verified`。历史里程碑使用的旧二层标签保留为当时记录，不自动升级为更高等级；新报告必须依据实际传输和源连接重新判定。
 - 交互验证事实分为 `contract_declared`、`static_verified`、`headless_verified`、`runtime_offline_verified`、`source_connected_verified` 和 `client_adapter_verified`。源连通与真实客户端适配验证相互独立；required scenario 未执行、失败或跳过时不得升级为 verified。
-- 当前完整门禁：`uv run --frozen pytest -q` 为 1763 passed（仅 1 条既有 Starlette 弃用警告）；Ruff format/check 检查 271 个文件通过；mypy 检查 213 个源码文件通过。双次导出的 16 份公开 Schema 与仓库逐字节一致。CRM Read、Finance 乐观并发 Action、Content 服务端状态谓词 Action 的双 Pack 均字节一致，SHA-256 分别为 `eacd5f4ca429cca7547029a0f9381d9b9bf092d305d745602742241babe2a590`、`2f3dc5ef768c5c6eac113c22d2c7108a643be0d590c401c2bc37d28aace6e760`、`19cea9a8594716c0edf51ceb20c6d2cf7e9decb7ca7d563e629c44c6825094b1`，JWT-like、Bearer value、private-key 和 raw-confirmation sentinel 扫描均无命中。FastAPI CRM 的 validate、compile、coverage 与双 Pack 也通过，Pack SHA-256 为 `7944a3fdc2ea03c4d373242c416d0780b8c24d4960d7e0367431b8dacb7c3f04`。
+- 当前完整门禁：`PYTHONDONTWRITEBYTECODE=1 uv run --frozen pytest -p no:cacheprovider -q` 为 2058 passed（仅 1 条既有 Starlette 弃用警告）；Ruff format/check 检查 325 个文件通过；严格 mypy 检查 250 个源码文件通过。fresh 导出的 23 份公开 Schema 与仓库逐字节一致。既有 Capability Pack 确定性、安全扫描与 FastAPI CRM 门禁继续由完整测试覆盖；Agent Usage 另以独立 `.accusage`、签名 receipt、真实 MCP stdio/Streamable HTTP 测试传输和发布投影闭包验证，不改变 Capability `compile`、`pack`、`run` 控制流。
+
+### 2026-08-11 — Milestone 13
+
+- 新增与 Capability 编译/运行完全独立的 Agent Usage 项目边界、MCP Release Acceptance、类型化 Usage Contract、六个独立验证轴和确定性 `.accusage`。Usage 只能在用户接受精确 MCP 基线后显式启动，不进入 `compile`、`pack` 或 `run` 控制流。
+- Usage Engineer 对当前领域的 client、service 与 test 重新进行只读源码确认，一次完成并确认一个领域；默认值、条件、选项来源、关联数据、结果消费、错误分支和 Action 生命周期不能只靠 tools/list 推断。
+- `.accusage` 只携带 active released 领域中用户选择的闭包，不包含源文件、`.accpkg`、JWT、请求 payload、原始用户确认文本或未发布领域。Generic Markdown 和 MCP Overlay 均消费平台中立 verified projection，不能增加工具、权限或 Action 快捷路径。
+- 七类 current-format profile 覆盖 CRM search-detail、ERP shared ID、Finance conditional-approval Action、monitoring stale status、CMS long text、源 JWT 最终授权和 mobile client-only。本任务没有运行专用 real MCP runner 或具体 Host Adapter；手写 Evidence 不能替代受信 runner 结果，因此七类 profile 全部保持 `limited`、`real_mcp_verified=false` 且不发布。
+- 受信发布链只接受真实 `McpReleaseAcceptanceVerification`、实际 analyzer、Headless evaluator、活跃官方 MCP stdio/Streamable HTTP 测试会话和类型化用户确认；fake/in-memory client、序列化报告、对象 copy、手写布尔值或磁盘漂移都不能升级验证轴。测试传输通过仍不等于生产 `source_connected_verified`。
+- `.accusage` 的 released 领域必须携带 live verified bundle 与 HMAC-SHA256 签名 receipt；加载、Renderer 和 MCP Overlay 都会重验包身份、当前磁盘摘要、发布闭包和最终 tools/list 摘要。未配置 trust store、包被替换或 Tool Schema 漂移时失败关闭。
+- 最终门禁为 2058 passed、Ruff 325 files、严格 mypy 250 source files、23 份 Schema byte-exact、Usage Skill quick validation 通过；独立安全复审结论为 0 Critical / 0 Important。七类跨行业 profile 诚实保持 `limited`，不借离线 fixture 宣称真实源或具体 Host 已验证。
 
 ### 2026-08-10 — Milestone 12
 

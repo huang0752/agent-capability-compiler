@@ -57,7 +57,7 @@ Hard boundaries for every task:
 - Create: `schemas/usage-scenario.schema.json`
 - Create: `schemas/usage-release.schema.json`
 
-- [ ] **Step 1: Write failing strict-model tests**
+- [x] **Step 1: Write failing strict-model tests**
 
 Add tests that import and validate these public models:
 
@@ -72,12 +72,14 @@ from acc_core.usage import (
     UsageScenario,
 )
 
+
 def test_usage_models_are_current_strict_and_platform_neutral() -> None:
     acceptance = McpReleaseAcceptance.model_validate(_acceptance())
     assert acceptance.schema_version == "2"
     assert acceptance.pack_digest.startswith("sha256:")
     with pytest.raises(ValidationError):
         McpReleaseAcceptance.model_validate({**_acceptance(), "codex_skill": {}})
+
 
 def test_usage_verification_axes_do_not_imply_one_another() -> None:
     release = AgentUsageRelease.model_validate(_limited_release())
@@ -87,7 +89,7 @@ def test_usage_verification_axes_do_not_imply_one_another() -> None:
 
 Cover stable sorted IDs, bounded clean text, UTC timestamps, exact `sha256:<64>`, frozen models, `extra="forbid"`, JSON Pointer syntax, unique step IDs, route DAG cycles, conditional Action approval, and secret-shaped fields being absent from the wire model.
 
-- [ ] **Step 2: Run the model test and verify RED**
+- [x] **Step 2: Run the model test and verify RED**
 
 Run:
 
@@ -97,7 +99,7 @@ uv run --frozen pytest -q tests/unit/usage/test_models.py
 
 Expected: collection fails with `ModuleNotFoundError: No module named 'acc_core.usage'`.
 
-- [ ] **Step 3: Implement the minimal typed contracts**
+- [x] **Step 3: Implement the minimal typed contracts**
 
 Define a frozen base and the agreed facts:
 
@@ -105,11 +107,13 @@ Define a frozen base and the agreed facts:
 class UsageModel(StrictModel):
     model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
 
+
 class AgentUsageProject(UsageModel):
     schema_version: Literal["2"]
     kind: Literal["agent_usage"]
     project: ProjectIdentity
     source_workspace: SourceWorkspace
+
 
 class McpReleaseAcceptance(UsageModel):
     schema_version: Literal["2"]
@@ -123,6 +127,7 @@ class McpReleaseAcceptance(UsageModel):
     accepted_by: Identifier
     accepted_at: UtcTimestamp
 
+
 class UsageVerification(UsageModel):
     source_usage_traced: bool
     usage_contract_verified: bool
@@ -134,7 +139,7 @@ class UsageVerification(UsageModel):
 
 Also implement `SourceSnapshot`, `UsageEvidenceClaim`, `UsageStepBinding`, `UsageToolStep`, `UsageToolRoute`, `UsageErrorBranch`, `UsageActionLifecycle`, `DomainUsageContract`, `UsageScenario`, `DomainUsageIndex`, `UsageDomainDecision`, and `AgentUsageRelease`. Use `ConditionExpression` and existing declarative `InputMapping`; do not add script/code fields.
 
-- [ ] **Step 4: Export exact public Schemas and verify GREEN**
+- [x] **Step 4: Export exact public Schemas and verify GREEN**
 
 Register seven `usage-*` names in `MODEL_SCHEMAS`, run:
 
@@ -146,7 +151,7 @@ diff -ru schemas /tmp/acc-usage-schemas
 
 Expected: tests pass and the schema diff is empty after copying only fresh generated schema files into `schemas/`.
 
-- [ ] **Step 5: Commit Task 1**
+- [x] **Step 5: Commit Task 1**
 
 ```bash
 git add packages/acc-core/src/acc_core/usage packages/acc-core/src/acc_core/schemas/export.py schemas tests/unit/usage/test_models.py tests/unit/core/test_cli.py
@@ -161,12 +166,13 @@ git commit -m "feat(usage): 定义平台中立使用合同"
 - Create: `tests/unit/usage/test_validation.py`
 - Create: `tests/fixtures/usage/finance/`
 
-- [ ] **Step 1: Write failing loader and closure tests**
+- [x] **Step 1: Write failing loader and closure tests**
 
 Test the independent API and cross-document closure:
 
 ```python
 from acc_core.usage import validate_usage_project
+
 
 def test_usage_project_loads_without_capability_directories(tmp_path: Path) -> None:
     project = write_usage_project(tmp_path)
@@ -175,6 +181,7 @@ def test_usage_project_loads_without_capability_directories(tmp_path: Path) -> N
     assert report.project.kind == "agent_usage"
     assert report.domain_contracts["finance"].domain_id == "finance"
 
+
 def test_usage_project_rejects_capability_project(tmp_path: Path) -> None:
     report = validate_usage_project(write_capability_project(tmp_path))
     assert "ACC_USAGE_PROJECT_INVALID" in error_codes(report)
@@ -182,7 +189,7 @@ def test_usage_project_rejects_capability_project(tmp_path: Path) -> None:
 
 Cover missing fixed documents, duplicate IDs, symlinks including broken directory symlinks, nested files, unknown suffixes, oversized files, non-UTF-8, Capability/Usage project confusion, scenario/contract/index/release missing-orphan pairs, required scenario closure, and stable diagnostic paths.
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 ```bash
 uv run --frozen pytest -q tests/unit/usage/test_project_loader.py tests/unit/usage/test_validation.py
@@ -190,7 +197,7 @@ uv run --frozen pytest -q tests/unit/usage/test_project_loader.py tests/unit/usa
 
 Expected: import or attribute failures for `validate_usage_project` and `UsageProjectReport`.
 
-- [ ] **Step 3: Implement independent loading**
+- [x] **Step 3: Implement independent loading**
 
 Expose:
 
@@ -213,13 +220,14 @@ class UsageProjectReport:
     def ok(self) -> bool:
         return not any(item.severity == "error" for item in self.diagnostics)
 
+
 def validate_usage_project(project_root: str | Path = ".") -> UsageProjectReport:
     return _UsageProjectLoader(Path(project_root)).load_and_validate()
 ```
 
 Use `acc_core.io` safe reads. Load fixed `project.yaml`, `mcp-release-acceptance.yaml`, `source-snapshot.yaml`, `domain-index.yaml`; load one-level collections `domain-usage-contracts/`, `scenarios/`, `domain-decisions/`, `releases/`, and `usage-evidence/`. Never call `validate_project()`.
 
-- [ ] **Step 4: Implement closure and secret-safe diagnostics**
+- [x] **Step 4: Implement closure and secret-safe diagnostics**
 
 Add exact codes including:
 
@@ -234,7 +242,7 @@ ACC_USAGE_EVIDENCE_CLAIM_UNRESOLVED
 
 Require every published domain to have exactly one current contract, decision, and release; every required scenario to exist and belong to that domain; every Evidence claim to match an independently loaded Evidence identity. Do not include source values in diagnostics.
 
-- [ ] **Step 5: Run adjacent regression and commit**
+- [x] **Step 5: Run adjacent regression and commit**
 
 ```bash
 uv run --frozen pytest -q tests/unit/usage/test_project_loader.py tests/unit/usage/test_validation.py tests/unit/core/test_project_validation.py
@@ -254,7 +262,7 @@ git commit -m "feat(usage): 加载并校验独立使用工程"
 - Modify: `packages/acc-runtime/src/acc_runtime/gateway/runtime.py`
 - Create or modify: `tests/unit/runtime/test_mcp.py`
 
-- [ ] **Step 1: Write failing acceptance and shared-digest tests**
+- [x] **Step 1: Write failing acceptance and shared-digest tests**
 
 Freeze a real `.accpkg`, canonical `tools/list` snapshot, runtime info, and acceptance. Assert all four digests must match and that changed descriptions, schemas, pack bytes, IR, or test report fail before Usage analysis.
 
@@ -269,7 +277,7 @@ def test_acceptance_rejects_tool_snapshot_drift(tmp_path: Path) -> None:
     assert result.code == "ACC_USAGE_DIGEST_MISMATCH"
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```bash
 uv run --frozen pytest -q tests/unit/usage/test_acceptance.py tests/unit/runtime/test_mcp.py -k 'usage_acceptance or tool_schema_digest'
@@ -277,23 +285,26 @@ uv run --frozen pytest -q tests/unit/usage/test_acceptance.py tests/unit/runtime
 
 Expected: missing acceptance verifier or public Tool digest function.
 
-- [ ] **Step 3: Promote one canonical Tool digest API**
+- [x] **Step 3: Promote one canonical Tool digest API**
 
 Move the existing Gateway-private algorithm behind a public, data-only API:
 
 ```python
 def listed_tools_sha256(tools: Sequence[Tool]) -> str:
-    payload = [{"name": t.name, "inputSchema": t.inputSchema, "outputSchema": t.outputSchema} for t in tools]
+    payload = [
+        {"name": t.name, "inputSchema": t.inputSchema, "outputSchema": t.outputSchema}
+        for t in tools
+    ]
     return hashlib.sha256(canonical_json_bytes(payload)).hexdigest()
 ```
 
 Gateway and Usage acceptance must call the same function. Keep the wire value in Runtime as bare 64 hex; normalize to `sha256:<64>` in Usage contracts.
 
-- [ ] **Step 4: Implement acceptance verification**
+- [x] **Step 4: Implement acceptance verification**
 
 Use `verify_pack()` for immutable Pack integrity, safely parse its verified `compiled/ir.json`, canonicalize the separately frozen `mcp-tools.json`, and compare acceptance digests. Reject missing compiled IR, changed archive after verification, extra Tool snapshot fields, and project/domain mismatch. Never open arbitrary archive paths supplied by the caller.
 
-- [ ] **Step 5: Run regression and commit**
+- [x] **Step 5: Run regression and commit**
 
 ```bash
 uv run --frozen pytest -q tests/unit/usage/test_acceptance.py tests/unit/runtime/test_mcp.py tests/integration/pack/test_pack.py
@@ -308,7 +319,7 @@ git commit -m "feat(usage): 绑定已接受的 MCP 发布"
 - Create: `packages/acc-core/src/acc_core/usage/analyze.py`
 - Create: `tests/unit/usage/test_analyze.py`
 
-- [ ] **Step 1: Write failing multi-tool analysis tests**
+- [x] **Step 1: Write failing multi-tool analysis tests**
 
 Cover CRM search→detail, ERP shared identifier, empty search stopping before detail, required input from previous public output, optional array index without `minItems`, trusted context exposure, incomplete 403/404/timeout branches, multiple competing routes, and conditional Action approval.
 
@@ -318,12 +329,13 @@ def test_search_empty_path_does_not_force_detail() -> None:
     assert report.ok
     assert report.routes[0].empty_success_step_id == "search"
 
+
 def test_action_contract_cannot_turn_approval_into_source_authorization() -> None:
     report = analyze_domain_usage(unsafe_action_contract(), scenario(), accepted_release())
     assert "ACC_USAGE_ACTION_LIFECYCLE_UNSAFE" in error_codes(report)
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```bash
 uv run --frozen pytest -q tests/unit/usage/test_analyze.py
@@ -331,7 +343,7 @@ uv run --frozen pytest -q tests/unit/usage/test_analyze.py
 
 Expected: missing `analyze_domain_usage`.
 
-- [ ] **Step 3: Implement deterministic analysis**
+- [x] **Step 3: Implement deterministic analysis**
 
 Expose:
 
@@ -352,7 +364,7 @@ def analyze_domain_usage(
 
 Build `Domain -> Scenario -> ToolRoute -> Step -> Capability -> Tool Schema -> Evidence` edges. Reuse `SchemaRelation` directionally for every binding. Adopt already compiled Interaction defaults, conditions, related data, and result projections by digest rather than copying unverified frontend facts. Require public source pointers, guaranteed required paths, stable error branches, and exact Action proof/lifecycle references.
 
-- [ ] **Step 4: Add stable diagnostics and adjacent tests**
+- [x] **Step 4: Add stable diagnostics and adjacent tests**
 
 Implement:
 
@@ -373,7 +385,7 @@ Run:
 uv run --frozen pytest -q tests/unit/usage/test_analyze.py tests/unit/compiler/test_interaction_fidelity.py tests/unit/compiler/test_interaction_compiler.py
 ```
 
-- [ ] **Step 5: Commit Task 4**
+- [x] **Step 5: Commit Task 4**
 
 ```bash
 git add packages/acc-core/src/acc_core/usage/analyze.py packages/acc-core/src/acc_core/usage/__init__.py tests/unit/usage/test_analyze.py
@@ -392,11 +404,11 @@ git commit -m "feat(usage): 验证跨工具业务调用合同"
 - Create: `tests/unit/skill/test_usage_skill_structure.py`
 - Create: `tests/unit/skill/test_usage_evidence_capture.py`
 
-- [ ] **Step 1: Write failing Skill and safe-capture tests**
+- [x] **Step 1: Write failing Skill and safe-capture tests**
 
 Assert the Skill requires three distinct roots (`source_workspace`, `acc_project`, `usage_project`), accepted MCP digest first, one selected domain plus direct dependencies, frontend/backend/test classifications, zero source writes, and no host-specific core format. Test path escape, symlink, secret, oversized file, source mutation, and output outside `usage-evidence/{frontend,backend,tests}`.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```bash
 uv run --frozen pytest -q tests/unit/skill/test_usage_skill_structure.py tests/unit/skill/test_usage_evidence_capture.py
@@ -404,7 +416,7 @@ uv run --frozen pytest -q tests/unit/skill/test_usage_skill_structure.py tests/u
 
 Expected: missing `skills/acc-usage-engineer` and script.
 
-- [ ] **Step 3: Implement the bounded scan workflow**
+- [x] **Step 3: Implement the bounded scan workflow**
 
 Reuse path/snapshot helpers from `skills/acc-engineer/scripts/inventory.py`, `verify_read_only_workspace.py`, and `evidence_capture.py`, but fix the destination root to the Usage project. The scan manifest must contain sorted:
 
@@ -419,7 +431,7 @@ mcp_domain_decision_refs: []
 
 Core and Runtime must not invoke these scripts.
 
-- [ ] **Step 4: Run Skill regression and commit**
+- [x] **Step 4: Run Skill regression and commit**
 
 ```bash
 uv run --frozen pytest -q tests/unit/skill
@@ -437,7 +449,7 @@ git commit -m "feat(skill): 增加领域使用证据扫描"
 - Create: `tests/unit/usage/test_cli.py`
 - Create: `tests/integration/usage/test_cli.py`
 
-- [ ] **Step 1: Write failing CLI tests**
+- [x] **Step 1: Write failing CLI tests**
 
 Cover:
 
@@ -450,7 +462,7 @@ acc usage review --domain <id> --check
 
 Assert `init` creates only Usage directories, does not create acceptance, does not touch source/Capability project, and rejects nonempty/symlink destinations. `status` returns one next dependency-ready domain and never trusts declared completed state without exact release closure.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```bash
 uv run --frozen pytest -q tests/unit/usage/test_cli.py tests/integration/usage/test_cli.py
@@ -458,7 +470,7 @@ uv run --frozen pytest -q tests/unit/usage/test_cli.py tests/integration/usage/t
 
 Expected: argparse rejects the `usage` command.
 
-- [ ] **Step 3: Implement thin CLI routing**
+- [x] **Step 3: Implement thin CLI routing**
 
 Keep parsing in `cli/main.py` and behavior in `cli/usage.py`:
 
@@ -466,8 +478,10 @@ Keep parsing in `cli/main.py` and behavior in `cli/usage.py`:
 def handle_usage_command(args: argparse.Namespace) -> tuple[int, ResultEnvelope]:
     return _USAGE_HANDLERS[args.usage_command](args)
 
+
 def status_usage_domains(report: UsageProjectReport) -> Mapping[str, JsonValue]:
     return UsageDomainWorkflow(report).status_document()
+
 
 def check_usage_domain_review(
     report: UsageProjectReport,
@@ -478,7 +492,7 @@ def check_usage_domain_review(
 
 Use stable JSON envelopes, no Evidence bodies, no raw limitations, no identity values, and no writes for `--check`.
 
-- [ ] **Step 4: Run CLI adjacency and commit**
+- [x] **Step 4: Run CLI adjacency and commit**
 
 ```bash
 uv run --frozen pytest -q tests/unit/usage/test_cli.py tests/integration/usage/test_cli.py tests/unit/core/test_cli.py tests/integration/test_domain_cli_integration.py
@@ -494,7 +508,7 @@ git commit -m "feat(cli): 增加 Agent Usage 领域向导"
 - Create: `packages/acc-testkit/src/acc_testkit/usage/__init__.py`
 - Create: `tests/unit/testkit/test_usage_evaluator.py`
 
-- [ ] **Step 1: Write failing evaluator tests**
+- [x] **Step 1: Write failing evaluator tests**
 
 Define a `UsageToolCaller` fake and test ordered route selection, pointer bindings, exact call count, empty stop, 403 preservation, timeout retry policy, stale digests producing zero calls, prohibited behavior rejected before call, and Action approval conditional on proof.
 
@@ -504,7 +518,7 @@ async def test_no_approval_action_never_calls_approve() -> None:
     assert [entry.phase for entry in report.trace if entry.phase] == ["prepare", "commit", "status"]
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```bash
 uv run --frozen pytest -q tests/unit/testkit/test_usage_evaluator.py
@@ -512,7 +526,7 @@ uv run --frozen pytest -q tests/unit/testkit/test_usage_evaluator.py
 
 Expected: missing `acc_testkit.usage`.
 
-- [ ] **Step 3: Implement deterministic orchestration and trace**
+- [x] **Step 3: Implement deterministic orchestration and trace**
 
 Add:
 
@@ -524,6 +538,7 @@ class UsageToolCaller(Protocol):
         arguments: Mapping[str, JsonValue],
     ) -> UsageToolOutcome:
         raise NotImplementedError
+
 
 class HeadlessUsageEvaluator:
     async def run(
@@ -540,7 +555,7 @@ class HeadlessUsageEvaluator:
 
 Trace entries contain only scenario/route/tool/phase/outcome and canonical arguments/result hashes. Do not store state values, caller exception messages, principal, tenant, JWT, or payload. Compose `HeadlessInteractionEvaluator` only for adopted leaf interaction semantics.
 
-- [ ] **Step 4: Run full testkit regression and commit**
+- [x] **Step 4: Run full testkit regression and commit**
 
 ```bash
 uv run --frozen pytest -q tests/unit/testkit
@@ -557,21 +572,21 @@ git commit -m "feat(testkit): 执行无敏感数据的使用场景"
 - Create: `tests/unit/usage/test_verification.py`
 - Create: `tests/unit/testkit/test_usage_adapter_conformance.py`
 
-- [ ] **Step 1: Write failing independent-axis tests**
+- [x] **Step 1: Write failing independent-axis tests**
 
 Assert required skip/not-provisioned/stale blocks the corresponding axis, one adapter cannot verify another, source-connected cannot upgrade contract safety, user acceptance cannot upgrade any technical axis, and serialized/reloaded reports require trace re-ingestion.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```bash
 uv run --frozen pytest -q tests/unit/usage/test_verification.py tests/unit/testkit/test_usage_adapter_conformance.py
 ```
 
-- [ ] **Step 3: Implement trace-derived reports and release gate**
+- [x] **Step 3: Implement trace-derived reports and release gate**
 
 Create exact-denominator reports with `not_run/passed/failed/stale/blocked`, report digests, scenario IDs, adapter IDs, and evidence references. `AgentUsageRelease.verification` is derived only after validating the corresponding report; never accept a caller-supplied `verified=True` as evidence.
 
-- [ ] **Step 4: Run and commit**
+- [x] **Step 4: Run and commit**
 
 ```bash
 uv run --frozen pytest -q tests/unit/usage/test_verification.py tests/unit/testkit/test_usage_adapter_conformance.py tests/unit/compiler/test_analysis_tools.py
@@ -585,17 +600,17 @@ git commit -m "feat(usage): 分离使用验证与宿主一致性"
 - Create: `packages/acc-core/src/acc_core/usage/impact.py`
 - Create: `tests/unit/usage/test_impact.py`
 
-- [ ] **Step 1: Write failing four-state impact tests**
+- [x] **Step 1: Write failing four-state impact tests**
 
 Test optional output addition→`revalidate`, input/output binding rename→`regenerate`, Capability removal→`blocked`, Action proof/Evidence change→`blocked`, unrelated domain→`unaffected`, direct dependency propagation, and unknown schema relation→fail closed.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```bash
 uv run --frozen pytest -q tests/unit/usage/test_impact.py
 ```
 
-- [ ] **Step 3: Implement the independent graph**
+- [x] **Step 3: Implement the independent graph**
 
 Expose:
 
@@ -605,6 +620,7 @@ class UsageImpactStatus(StrEnum):
     REVALIDATE = "revalidate"
     REGENERATE = "regenerate"
     BLOCKED = "blocked"
+
 
 def analyze_usage_impact(
     *,
@@ -618,7 +634,7 @@ def analyze_usage_impact(
 
 Use precedence `blocked > regenerate > revalidate > unaffected`; do not import private `domains.impact` helpers or emit `DomainChangeRequest`.
 
-- [ ] **Step 4: Run adjacent regression and commit**
+- [x] **Step 4: Run adjacent regression and commit**
 
 ```bash
 uv run --frozen pytest -q tests/unit/usage/test_impact.py tests/unit/compiler/test_domain_impact.py
@@ -632,17 +648,17 @@ git commit -m "feat(usage): 分析领域使用合同局部失效"
 - Create: `packages/acc-core/src/acc_core/usage/packaging.py`
 - Create: `tests/integration/usage/test_package.py`
 
-- [ ] **Step 1: Write failing package safety tests**
+- [x] **Step 1: Write failing package safety tests**
 
 Cover byte-identical double build, `.accusage` suffix, exact manifest/lock coverage, changed contract changes digest, symlink/nested/unknown/duplicate/oversized/encrypted/path traversal members rejected, and no `.accpkg`, source file, JWT, payload, or unverified domain embedded.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```bash
 uv run --frozen pytest -q tests/integration/usage/test_package.py
 ```
 
-- [ ] **Step 3: Implement a separate format**
+- [x] **Step 3: Implement a separate format**
 
 Use:
 
@@ -654,7 +670,7 @@ suffix: .accusage
 
 Implement `build_usage_package()` and `verify_usage_package()` with fixed ZIP timestamps, `ZIP_STORED`, canonical JSON, stable ordering, atomic replace, one-MiB member limit, and a dedicated member allowlist. Never call or parameterize `build_pack()`.
 
-- [ ] **Step 4: Prove Capability Pack remains closed and commit**
+- [x] **Step 4: Prove Capability Pack remains closed and commit**
 
 ```bash
 uv run --frozen pytest -q tests/integration/usage/test_package.py tests/integration/pack/test_pack.py
@@ -672,21 +688,21 @@ git commit -m "feat(usage): 构建独立确定性使用包"
 - Create: `tests/unit/runtime/test_usage_overlay.py`
 - Create: `tests/e2e/test_usage_overlay_transports.py`
 
-- [ ] **Step 1: Write failing Resource/Prompt parity tests**
+- [x] **Step 1: Write failing Resource/Prompt parity tests**
 
 Use official SDK clients to list/read released domain resources and list/get one generated prompt over stdio and streamable HTTP. Assert only published domains appear, unknown/stale digest fails closed, resources are canonical JSON, prompts have bounded non-secret arguments, and tools/list/call stay delegated unchanged.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```bash
 uv run --frozen pytest -q tests/unit/runtime/test_usage_overlay.py tests/e2e/test_usage_overlay_transports.py
 ```
 
-- [ ] **Step 3: Implement independent overlay**
+- [x] **Step 3: Implement independent overlay**
 
 Create `AgentUsageOverlayMcpServer` that consumes a verified `.accusage` plus a base MCP server. Delegate Tool methods exactly; append fixed URI Resources and generated Prompts from platform-neutral contracts. Do not modify the base `.accpkg`, Tool Schema, or GenericRuntime.
 
-- [ ] **Step 4: Expose public client APIs and commit**
+- [x] **Step 4: Expose public client APIs and commit**
 
 Add public `list_resources`, `read_resource`, `list_prompts`, and `get_prompt` methods to both test clients; do not use `_active_session()` in new tests.
 
@@ -704,23 +720,24 @@ git commit -m "feat(runtime): 暴露平台中立使用指南覆盖层"
 - Create: `tests/fixtures/usage/adapters/generic-markdown/`
 - Create: `tests/fixtures/usage/adapters/reference-host/`
 
-- [ ] **Step 1: Write failing renderer tests**
+- [x] **Step 1: Write failing renderer tests**
 
 Assert the generic guide and adapter input contain only released goals/routes/safety, preserve digest and verification limits, never include Evidence locators or secrets, and reject an adapter that adds tools, Action shortcuts, permissions, or unsupported features.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```bash
 uv run --frozen pytest -q tests/unit/usage/test_render.py
 ```
 
-- [ ] **Step 3: Implement faithful projection**
+- [x] **Step 3: Implement faithful projection**
 
 Expose:
 
 ```python
 class UsageAdapter(Protocol):
     adapter_id: str
+
     def render(
         self,
         release: AgentUsageRelease,
@@ -728,11 +745,13 @@ class UsageAdapter(Protocol):
     ) -> AdapterArtifacts:
         raise NotImplementedError
 
+
 def render_generic_agent_guide(
     release: AgentUsageRelease,
     package: VerifiedUsagePackage,
 ) -> bytes:
     return GenericMarkdownRenderer().render(release, package).guide_bytes
+
 
 def validate_adapter_artifacts(
     release: AgentUsageRelease,
@@ -744,7 +763,7 @@ def validate_adapter_artifacts(
 
 The generic renderer is the reference output. Do not name the core output `SKILL.md` and do not require any Codex package.
 
-- [ ] **Step 4: Run and commit**
+- [x] **Step 4: Run and commit**
 
 ```bash
 uv run --frozen pytest -q tests/unit/usage/test_render.py
@@ -760,7 +779,7 @@ git commit -m "feat(usage): 渲染平台中立 Agent 指南"
 - Modify: `tests/unit/usage/test_cli.py`
 - Modify: `tests/integration/usage/test_cli.py`
 
-- [ ] **Step 1: Write failing command-flow tests**
+- [x] **Step 1: Write failing command-flow tests**
 
 Cover:
 
@@ -774,17 +793,17 @@ acc usage export --adapter <id>
 
 Assert build requires acceptance and contract verification; test never claims real MCP without explicit live evidence; impact is read-only unless a specific output path is authorized; release enforces all required gates; export cannot mutate the Usage package or source.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```bash
 uv run --frozen pytest -q tests/unit/usage/test_cli.py tests/integration/usage/test_cli.py -k 'build or test or impact or release or export'
 ```
 
-- [ ] **Step 3: Implement command orchestration**
+- [x] **Step 3: Implement command orchestration**
 
 Keep command handlers thin and call the public Usage APIs from Tasks 2–12. JSON failure envelopes use `ok=false`, no partial success result, and stable exit codes. Every write uses atomic, project-confined, no-symlink output.
 
-- [ ] **Step 4: Run full Usage CLI and commit**
+- [x] **Step 4: Run full Usage CLI and commit**
 
 ```bash
 uv run --frozen pytest -q tests/unit/usage/test_cli.py tests/integration/usage/test_cli.py
@@ -808,17 +827,17 @@ git commit -m "feat(cli): 完成 Agent Usage 发布工作流"
 - Create: `skills/acc-usage-engineer/templates/usage-domain-decision.yaml`
 - Modify: `tests/unit/skill/test_usage_skill_structure.py`
 
-- [ ] **Step 1: Write failing workflow tests**
+- [x] **Step 1: Write failing workflow tests**
 
 Require B0–B9, one domain at a time, automatic handling of evidenced facts, grouped questions only for scope/conflict/high-risk/real-test boundary, feedback routing to A or B, independent verification axes, no total score, no platform-specific core, no permission grant language, and stop before Git review.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```bash
 uv run --frozen pytest -q tests/unit/skill/test_usage_skill_structure.py
 ```
 
-- [ ] **Step 3: Implement guides/templates and validate**
+- [x] **Step 3: Implement guides/templates and validate**
 
 The templates must intentionally fail if digest placeholders are not replaced. Include Read search→detail, frontend default/condition, and conditional-approval Action examples without project-specific names.
 
@@ -838,21 +857,21 @@ git commit -m "feat(skill): 完成 Agent Usage 领域工作流"
 - Modify: `docs/progress.md`
 - Create: `docs/architecture/adr/009-agent-usage-pipeline.md`
 
-- [ ] **Step 1: Write failing cross-industry E2E tests**
+- [x] **Step 1: Write failing cross-industry E2E tests**
 
 Parameterize seven current-format fixtures. Cover CRM search→detail, ERP shared ID, Finance conditional-approval Action, monitoring stale status, CMS long text, permissions with source JWT final authority, and mobile client-only interaction. Assert no fixture claims `real_mcp_verified` without a real trace.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 ```bash
 uv run --frozen pytest -q tests/e2e/test_agent_usage_domain_profiles.py
 ```
 
-- [ ] **Step 3: Add fixtures and truthful docs**
+- [x] **Step 3: Add fixtures and truthful docs**
 
 Document the two pipelines, optional/recommended boundary, source re-scan, platform-neutral package, one-domain confirmation, six independent axes, source authorization, and limited release semantics. Avoid product-specific examples in README.
 
-- [ ] **Step 4: Run E2E and commit**
+- [x] **Step 4: Run E2E and commit**
 
 ```bash
 uv run --frozen pytest -q tests/e2e/test_agent_usage_domain_profiles.py
@@ -868,7 +887,7 @@ git commit -m "docs(usage): 交付跨行业使用管道示例"
 - Verify all Task 1–15 files
 - Modify only files required by concrete review findings
 
-- [ ] **Step 1: Run security and boundary searches**
+- [x] **Step 1: Run security and boundary searches**
 
 ```bash
 rg -n "Codex Skill.*core|source_connected_verified.*=.*true|Authorization:|Bearer [A-Za-z0-9_-]+|password:" packages/acc-core/src/acc_core/usage packages/acc-testkit/src/acc_testkit/usage packages/acc-runtime/src/acc_runtime/usage skills/acc-usage-engineer tests/fixtures/usage
@@ -877,19 +896,19 @@ rg -n "usage" packages/acc-core/src/acc_core/packaging/pack.py packages/acc-core
 
 Expected: no secret values, no false verification upgrade, and no Usage members added to Capability Pack/Project paths.
 
-- [ ] **Step 2: Run focused complete Usage gate**
+- [x] **Step 2: Run focused complete Usage gate**
 
 ```bash
 uv run --frozen pytest -q tests/unit/usage tests/integration/usage tests/unit/testkit/test_usage_evaluator.py tests/unit/testkit/test_usage_adapter_conformance.py tests/unit/runtime/test_usage_overlay.py tests/e2e/test_usage_overlay_transports.py tests/e2e/test_agent_usage_domain_profiles.py tests/unit/skill/test_usage_skill_structure.py tests/unit/skill/test_usage_evidence_capture.py
 ```
 
-- [ ] **Step 3: Run adjacent compatibility gate**
+- [x] **Step 3: Run adjacent compatibility gate**
 
 ```bash
 uv run --frozen pytest -q tests/unit/core tests/unit/compiler tests/unit/runtime tests/unit/testkit tests/integration/pack
 ```
 
-- [ ] **Step 4: Run full static and test gates**
+- [x] **Step 4: Run full static and test gates**
 
 ```bash
 uv lock --check
@@ -902,11 +921,11 @@ diff -ru schemas /tmp/acc-final-schemas
 git diff --check
 ```
 
-- [ ] **Step 5: Verify deterministic artifacts**
+- [x] **Step 5: Verify deterministic artifacts**
 
 Build the same `.accusage` twice from one fixture and require byte-identical SHA-256. Verify a changed unrelated domain leaves the selected domain `unaffected`; changed binding produces `regenerate`; deleted Capability produces `blocked`.
 
-- [ ] **Step 6: Independent review and final commit**
+- [x] **Step 6: Independent review and final commit**
 
 Require reviewers to report Critical/Important findings against the spec, fix each with a RED→GREEN regression, rerun Steps 1–5, then commit only reviewed files:
 
