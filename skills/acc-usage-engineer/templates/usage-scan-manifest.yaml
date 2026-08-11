@@ -1,0 +1,6 @@
+domain_id: finance
+direct_dependency_domain_ids: []
+frontend_include_paths: []
+backend_include_paths: []
+test_include_paths: []
+mcp_domain_decision_refs: []
