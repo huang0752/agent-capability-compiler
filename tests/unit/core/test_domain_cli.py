@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import shutil
 from pathlib import Path
 from typing import cast
 
@@ -10,6 +11,7 @@ import pytest
 import yaml
 
 from acc_core.cli.domains import (
+    action_candidates,
     analyze_domain_changes,
     check_domain_review,
     show_domain,
@@ -181,6 +183,53 @@ def test_status_recommends_one_ready_domain_deterministically(
     alpha = next(item for item in result["domains"] if item["id"] == "alpha")
     assert alpha["dependencies_completed"] is True
     assert [item["id"] for item in result["domains"]] == ["alpha", "beta", "core"]
+
+
+def test_actions_reports_every_action_without_self_certifying_live_verification() -> None:
+    project = Path("tests/fixtures/domains/jobs")
+
+    result, diagnostics = action_candidates(project)
+
+    assert diagnostics == []
+    assert result is not None
+    assert result["summary"] == {
+        "action_candidates": 1,
+        "materialized_candidates": 1,
+        "blocked_candidates": 0,
+    }
+    [candidate] = result["candidates"]
+    assert candidate["candidate_id"] == "jobs.transition"
+    assert candidate["verification"]["contract_ready"] == "proven"
+    assert candidate["verification"]["offline_verified"] == "not_provisioned"
+    assert candidate["verification"]["production_ready"] == "not_provisioned"
+
+
+def test_domains_actions_cli_emits_the_typed_report(capsys: pytest.CaptureFixture[str]) -> None:
+    exit_code = main(["domains", "actions", "tests/fixtures/domains/jobs", "--json"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert payload["ok"] is True
+    assert payload["command"] == "domains actions"
+    assert payload["result"]["summary"]["action_candidates"] == 1
+
+
+def test_domains_actions_cli_fails_closed_on_invalid_project(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    project = tmp_path / "jobs"
+    shutil.copytree(Path("tests/fixtures/domains/jobs"), project)
+    (project / "capabilities" / "jobs.transition.yaml").unlink()
+
+    exit_code = main(["domains", "actions", str(project), "--json"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code != 0
+    assert payload["ok"] is False
+    assert [item["code"] for item in payload["diagnostics"]] == [
+        "ACC_DOMAIN_ACTION_PROJECT_INVALID"
+    ]
+    assert "jobs.transition" not in json.dumps(payload)
 
 
 def test_show_is_bounded_and_does_not_return_evidence_or_gap_text(tmp_path: Path) -> None:

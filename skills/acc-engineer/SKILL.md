@@ -120,6 +120,14 @@ acc test e2e --json
 
 The scope audit and, when client surfaces exist, interaction audit are required gates before `acc validate`. Coverage reports the nine existing axes plus `surface_disposition`, `interaction_trace`, `input_binding_fidelity`, `default_provenance`, `option_resolution`, `condition_coverage`, `related_data_graph`, `state_scenarios`, `presentation_projection`, and `client_adapter_evidence`; it never generates a total score. Then build the pack twice and compare SHA-256 values. A zero exit code is not sufficient evidence if the result contains findings or skipped coverage.
 
+For `system_complete`, interpret route closure separately from executable release readiness. The
+scope result exposes `release_readiness` with deterministic `discovery_complete`,
+`executable_ready`, `blocked`, and `unknown` counts. A known, classified route may remain
+`blocked_on_evidence` and produce `status: limited` without reopening the discovery denominator;
+it is not executable and must not appear in an Operation or Capability. Missing or unknown routes,
+blocked routes smuggled into executable traces, and planned/composed routes that are not eligible
+remain errors. `limited` is a truthful handoff state, not production readiness.
+
 ## Completion
 
 Finish only after Phase 8 produces `HANDOFF.md`, `scope-audit-report.json`, applicable `interaction-audit-report.json`, `coverage-report.json`, `test-report.json`, and `risk-report.json`, plus `candidate.diff` for a Git ACC project or `artifact-manifest.json` for a non-Git ACC project. Copy every audit warning into both risk artifacts; state route and interaction scope plus independently proven verification levels. `headless_verified`, `source_connected_verified`, and `client_adapter_verified` never imply one another; then stop for human review.

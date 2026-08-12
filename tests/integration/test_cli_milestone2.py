@@ -749,6 +749,66 @@ def test_runtime_and_e2e_eval_cli_execute_declared_cases(tmp_path: Path) -> None
             }
 
 
+@pytest.mark.parametrize("suite", ["runtime", "e2e"])
+def test_runtime_and_e2e_cli_report_absent_project_runner_without_credentials(
+    tmp_path: Path,
+    suite: str,
+) -> None:
+    project = _make_project(tmp_path)
+    for eval_id in ("forbidden", "normal"):
+        eval_path = project / "evals" / f"{eval_id}.yaml"
+        eval_document = yaml.safe_load(eval_path.read_text(encoding="utf-8"))
+        eval_document["fixtures"] = {"project_http": {"case": eval_id, "responses": []}}
+        _write_yaml(eval_path, eval_document)
+
+    completed = _run_acc("test", suite, "--json", cwd=project, environment={})
+
+    assert completed.returncode == 5
+    payload = json.loads(completed.stdout)
+    assert payload["ok"] is False
+    assert payload["result"]["status"] == "not_provisioned"
+    assert payload["result"]["summary"] == {
+        "total": 2,
+        "passed": 0,
+        "failed": 0,
+        "not_provisioned": 2,
+        "not_run": 0,
+        "calls": 0,
+    }
+    assert [case["id"] for case in payload["result"]["cases"]] == [
+        "forbidden",
+        "normal",
+    ]
+    assert all(case["calls"] == 0 for case in payload["result"]["cases"])
+
+
+def test_runtime_cli_preserves_full_denominator_when_one_case_needs_adapter(
+    tmp_path: Path,
+) -> None:
+    project = _make_project(tmp_path)
+    eval_path = project / "evals" / "normal.yaml"
+    eval_document = yaml.safe_load(eval_path.read_text(encoding="utf-8"))
+    eval_document["fixtures"] = {"project_http": {"responses": []}}
+    _write_yaml(eval_path, eval_document)
+
+    completed = _run_acc("test", "runtime", "--json", cwd=project, environment={})
+
+    assert completed.returncode == 5
+    payload = json.loads(completed.stdout)
+    assert payload["ok"] is False
+    assert payload["result"]["summary"] == {
+        "total": 2,
+        "passed": 0,
+        "failed": 0,
+        "not_provisioned": 1,
+        "not_run": 1,
+        "calls": 0,
+    }
+    assert [case["id"] for case in payload["result"]["cases"]] == ["forbidden", "normal"]
+    assert payload["result"]["cases"][0]["status"] == "not_run_due_to_suite_provisioning"
+    assert payload["result"]["cases"][1]["status"] == "not_provisioned"
+
+
 @contextmanager
 def _fake_provider_auth_server(auth_kind: str) -> Iterator[str]:
     class Handler(BaseHTTPRequestHandler):

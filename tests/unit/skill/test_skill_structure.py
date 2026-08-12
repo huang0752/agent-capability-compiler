@@ -173,8 +173,13 @@ def test_skill_requires_explicit_scope_audit_and_validation_level() -> None:
     assert "system_complete" in skill
     assert "只有用户明确" in skill
     assert "scope_audit.py" in skill
+    assert "release_readiness" in skill
+    assert "discovery_complete" in skill
+    assert "executable_ready" in skill
     assert "浅层全局发现" in harness
+    assert "limited" in harness
     assert "source_scope" in guides
+    assert "blocked" in guides
     assert "offline_candidate" in guides
     assert "source_connected_verified" in guides
     assert "artifact-manifest.json" in guides

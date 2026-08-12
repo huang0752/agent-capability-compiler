@@ -78,6 +78,12 @@ Write only under `acc_project`, and implement only planned/composed routes and e
 
 Run `scope_audit.py` first, then `interaction_audit.py` when a client surface was discovered; retain both reports. Only after they have no errors run `validate`, `compile --check`, and `coverage`. Inspect every independent source and interaction axis; warning-only is non-blocking but remains a handoff risk.
 
+For `system_complete`, require exact discovery denominator closure and inspect the structured
+`release_readiness` result independently. A `limited` result may contain known, classified,
+explicitly non-executable `blocked` routes while `unknown` remains zero; those routes stay outside
+Operations and Capabilities and are listed as handoff blockers. Missing/unclassified routes,
+smuggled executable traces, or unresolved routes selected as planned/composed still fail closed.
+
 ### 6. Test
 
 Run contract and direct Fake Runtime suites as `offline_candidate`; record `headless_verified` only when every required normalized interaction scenario passes. Keep Gateway/Fake Source protocol evidence distinct. `source_connected_verified` requires an authorized local/test source run, while `client_adapter_verified` requires the real client adapter to replay the same contract successfully. None implies another. Exercise defaults, options, cascades, related data, states, permissions, identity, and the Action lifecycle without exposing secrets.

@@ -180,6 +180,10 @@ flowchart LR
 
 AI 负责从系统事实中提出候选、补充定义并处理诊断。`compile_project` 以 `validate_project` 为硬门禁：Schema、引用闭合与 Action Safety 通过后才能产出 Capability IR，并进一步构建可验证的 Pack。Coverage 和 Contract Tests 是独立的发布与验收门禁，不参与 `compile_project` 的控制流。Evidence 不足的候选继续保留为 `blocked` 或 `unknown`，不会靠用户确认自动变成可执行能力。
 
+对于 `system_complete`，ACC 现在分别报告“发现分母闭合”和“可执行发布就绪”：已知、已分类且没有执行 trace 的 `blocked_on_evidence` 路由可以形成 `release_readiness.status=limited`，但 missing/unknown、错误分类、夹带 Operation/Capability、计划不闭合仍会失败。`limited` 只说明没有漏掉这些路由，绝不把它们升级为 Tool，也不等于生产就绪。
+
+`acc domains actions --json` 提供完整 Action candidate 分母，并分别报告 effect、risk、approval、authorization、idempotency、concurrency、retry、outcome、lifecycle 等安全事实及验证成熟度。候选账本中的 `offline_verified` 或 `source_connected_verified` 只是声明；没有当前受信 runner 产物时，报告只显示 `claimed`，不会自证为发布事实。
+
 ### 运行期：Read 与 Action 共用源权限终裁
 
 ```mermaid

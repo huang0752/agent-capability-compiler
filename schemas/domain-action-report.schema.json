@@ -1,0 +1,304 @@
+{
+  "$defs": {
+    "ActionAxisStatus": {
+      "enum": [
+        "proven",
+        "unresolved",
+        "contradicted",
+        "stale"
+      ],
+      "type": "string"
+    },
+    "ActionCandidateReport": {
+      "additionalProperties": false,
+      "properties": {
+        "blockers": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Blockers",
+          "type": "array"
+        },
+        "business_intent": {
+          "title": "Business Intent",
+          "type": "string"
+        },
+        "candidate_id": {
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "declared_verification_level": {
+          "$ref": "#/$defs/VerificationLevel"
+        },
+        "disposition": {
+          "enum": [
+            "accepted",
+            "deferred",
+            "rejected",
+            "blocked",
+            "undecided"
+          ],
+          "title": "Disposition",
+          "type": "string"
+        },
+        "domain_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Domain Id"
+        },
+        "effect": {
+          "title": "Effect",
+          "type": "string"
+        },
+        "materialized": {
+          "title": "Materialized",
+          "type": "boolean"
+        },
+        "materialized_capability_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Materialized Capability Ids",
+          "type": "array"
+        },
+        "route_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Route Ids",
+          "type": "array"
+        },
+        "safety": {
+          "$ref": "#/$defs/ActionSafetyReport"
+        },
+        "verification": {
+          "$ref": "#/$defs/ActionVerificationReport"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "domain_id",
+        "business_intent",
+        "route_ids",
+        "effect",
+        "disposition",
+        "materialized_capability_ids",
+        "declared_verification_level",
+        "safety",
+        "verification",
+        "materialized",
+        "blockers"
+      ],
+      "title": "ActionCandidateReport",
+      "type": "object"
+    },
+    "ActionClaimAxis": {
+      "additionalProperties": false,
+      "description": "One independent source-backed Action safety fact.",
+      "properties": {
+        "evidence_refs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "status": {
+          "$ref": "#/$defs/ActionAxisStatus"
+        }
+      },
+      "required": [
+        "status",
+        "evidence_refs"
+      ],
+      "title": "ActionClaimAxis",
+      "type": "object"
+    },
+    "ActionReportSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "action_candidates": {
+          "title": "Action Candidates",
+          "type": "integer"
+        },
+        "blocked_candidates": {
+          "title": "Blocked Candidates",
+          "type": "integer"
+        },
+        "materialized_candidates": {
+          "title": "Materialized Candidates",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "action_candidates",
+        "materialized_candidates",
+        "blocked_candidates"
+      ],
+      "title": "ActionReportSummary",
+      "type": "object"
+    },
+    "ActionSafetyReport": {
+      "additionalProperties": false,
+      "description": "Safety axes remain independent; there is intentionally no aggregate score.",
+      "properties": {
+        "approval": {
+          "$ref": "#/$defs/ActionClaimAxis"
+        },
+        "authorization_boundary": {
+          "$ref": "#/$defs/ActionClaimAxis"
+        },
+        "conflict_control": {
+          "$ref": "#/$defs/ActionClaimAxis"
+        },
+        "context_isolation": {
+          "$ref": "#/$defs/ActionClaimAxis"
+        },
+        "effect": {
+          "$ref": "#/$defs/ActionClaimAxis"
+        },
+        "idempotency": {
+          "$ref": "#/$defs/ActionClaimAxis"
+        },
+        "identity_binding": {
+          "$ref": "#/$defs/ActionClaimAxis"
+        },
+        "lifecycle": {
+          "$ref": "#/$defs/ActionClaimAxis"
+        },
+        "outcome_resolution": {
+          "$ref": "#/$defs/ActionClaimAxis"
+        },
+        "retry": {
+          "$ref": "#/$defs/ActionClaimAxis"
+        },
+        "reversibility": {
+          "$ref": "#/$defs/ActionClaimAxis"
+        },
+        "risk": {
+          "$ref": "#/$defs/ActionClaimAxis"
+        },
+        "schema": {
+          "$ref": "#/$defs/ActionClaimAxis"
+        }
+      },
+      "required": [
+        "schema",
+        "effect",
+        "risk",
+        "reversibility",
+        "approval",
+        "retry",
+        "conflict_control",
+        "idempotency",
+        "outcome_resolution",
+        "lifecycle",
+        "authorization_boundary",
+        "identity_binding",
+        "context_isolation"
+      ],
+      "title": "ActionSafetyReport",
+      "type": "object"
+    },
+    "ActionVerificationReport": {
+      "additionalProperties": false,
+      "description": "Evidence maturity; declaration and execution proof are deliberately distinct.",
+      "properties": {
+        "contract_ready": {
+          "$ref": "#/$defs/VerificationStatus"
+        },
+        "discovered": {
+          "$ref": "#/$defs/VerificationStatus"
+        },
+        "gateway_offline_verified": {
+          "$ref": "#/$defs/VerificationStatus"
+        },
+        "offline_verified": {
+          "$ref": "#/$defs/VerificationStatus"
+        },
+        "production_ready": {
+          "$ref": "#/$defs/VerificationStatus"
+        },
+        "semantics_evidenced": {
+          "$ref": "#/$defs/VerificationStatus"
+        },
+        "source_connected_verified": {
+          "$ref": "#/$defs/VerificationStatus"
+        },
+        "user_accepted": {
+          "$ref": "#/$defs/VerificationStatus"
+        }
+      },
+      "required": [
+        "discovered",
+        "semantics_evidenced",
+        "contract_ready",
+        "offline_verified",
+        "gateway_offline_verified",
+        "source_connected_verified",
+        "user_accepted",
+        "production_ready"
+      ],
+      "title": "ActionVerificationReport",
+      "type": "object"
+    },
+    "VerificationLevel": {
+      "enum": [
+        "discovered",
+        "action_discovered",
+        "semantics_evidenced",
+        "contract_ready",
+        "offline_verified",
+        "sandbox_verified",
+        "source_connected_verified"
+      ],
+      "type": "string"
+    },
+    "VerificationStatus": {
+      "enum": [
+        "proven",
+        "claimed",
+        "not_provisioned",
+        "blocked"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "candidates": {
+      "items": {
+        "$ref": "#/$defs/ActionCandidateReport"
+      },
+      "title": "Candidates",
+      "type": "array"
+    },
+    "project_valid": {
+      "title": "Project Valid",
+      "type": "boolean"
+    },
+    "schema_version": {
+      "const": "2",
+      "default": "2",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "summary": {
+      "$ref": "#/$defs/ActionReportSummary"
+    }
+  },
+  "required": [
+    "project_valid",
+    "summary",
+    "candidates"
+  ],
+  "title": "ActionCandidateInventoryReport",
+  "type": "object"
+}

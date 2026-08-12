@@ -886,6 +886,12 @@ def audit_inventory(
     operation_ids: set[str] = set()
     counters = {name: 0 for name in SUMMARY_FIELDS}
     source_counters = {name: 0 for name in SUMMARY_FIELDS}
+    readiness_counts = {
+        "discovery_complete": 0,
+        "executable_ready": 0,
+        "blocked": 0,
+        "unknown": 0,
+    }
     for index, raw_route in enumerate(routes):
         counters["discovered_routes"] += 1
         pointer = f"/routes/{index}"
@@ -956,6 +962,7 @@ def audit_inventory(
             )
         route_kind = string_at(route, "kind")
         route_effect = string_at(route, "effect")
+        classification_unknown = route_kind == "unknown" or route_effect == "unknown"
         if route_kind not in {"unknown", "read", "action"}:
             add_issue(
                 diagnostics,
@@ -995,6 +1002,16 @@ def audit_inventory(
                 path=path,
                 pointer=f"{pointer}/effect",
             )
+        if classification_unknown:
+            readiness_counts["unknown"] += 1
+            if mode == "system_complete":
+                add_issue(
+                    diagnostics,
+                    "ACC_SCOPE_CLASSIFICATION_UNKNOWN",
+                    "system scope requires every route kind and effect to be classified",
+                    path=path,
+                    pointer=f"{pointer}/kind",
+                )
         evidence = non_empty_string_list(route.get("evidence_sources"))
         if evidence is None:
             add_issue(
@@ -1063,6 +1080,21 @@ def audit_inventory(
         counters[disposition] += 1
         if eligible_route:
             source_counters[disposition] += 1
+        if not classification_unknown:
+            readiness_counts["discovery_complete"] += 1
+            if disposition in {"planned", "composed"} and eligibility == "eligible":
+                readiness_counts["executable_ready"] += 1
+            elif disposition == "blocked_on_evidence":
+                readiness_counts["blocked"] += 1
+
+        if disposition in {"planned", "composed"} and eligibility != "eligible":
+            add_issue(
+                diagnostics,
+                "ACC_SCOPE_EXECUTABLE_NOT_READY",
+                "planned or composed route must be eligible before executable release",
+                path=path,
+                pointer=f"{pointer}/eligibility",
+            )
 
         if mode == "domain_complete" and selected_domain_ids:
             if (
@@ -1134,15 +1166,6 @@ def audit_inventory(
                 path=path,
                 pointer=f"{pointer}/disposition",
             )
-        if mode == "system_complete" and disposition == "blocked_on_evidence":
-            add_issue(
-                diagnostics,
-                "ACC_SCOPE_EVIDENCE_BLOCKED",
-                "system scope has unresolved evidence",
-                path=path,
-                pointer=f"{pointer}/disposition",
-            )
-
     for name, actual in counters.items():
         if summary.get(name) != actual:
             add_issue(
@@ -1158,6 +1181,10 @@ def audit_inventory(
         "selected_domains": sorted(selected_domains or []),
         "operation_ids": sorted(operation_ids),
         "source_scope": source_counters,
+        "release_readiness": {
+            "status": "limited" if readiness_counts["blocked"] else "ready",
+            **readiness_counts,
+        },
     }
     diagnostics.extend(structured_diagnostics)
     return result, diagnostics

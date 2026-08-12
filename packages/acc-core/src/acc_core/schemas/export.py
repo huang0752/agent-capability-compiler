@@ -9,6 +9,7 @@ from pydantic import BaseModel, TypeAdapter
 
 from acc_core.contracts import SourceContract
 from acc_core.domains import (
+    ActionCandidateInventoryReport,
     CapabilityCandidateLedger,
     DomainChangeRequest,
     DomainDecision,
@@ -38,6 +39,7 @@ from acc_core.usage import (
 
 JSON_SCHEMA_DRAFT_2020_12 = "https://json-schema.org/draft/2020-12/schema"
 MODEL_SCHEMAS: dict[str, type[BaseModel] | TypeAdapter[object]] = {
+    "domain-action-report": ActionCandidateInventoryReport,
     "capability": TypeAdapter(Capability),
     "capability-quality": CapabilityQuality,
     "eval": Eval,

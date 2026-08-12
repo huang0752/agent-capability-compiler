@@ -21,10 +21,12 @@
 10. 只有全部 required interaction scenarios 未跳过且通过时才记录 `headless_verified`。实际连接本地/测试源只支持 `source_connected_verified`；只有真实客户端 adapter 重放同一合同通过时才记录 `client_adapter_verified`，三者互不推导。
 11. 当前领域的证据清晰候选自动运行适用测试；只把失败、冲突、高风险策略或必须由用户控制的测试边界逐个提交用户决定。
 12. Action 同时覆盖 optimistic token 与 server-serialized state predicate：前者验证 CAS 冲突，后者验证源端串行状态谓词、禁止业务重试和显式 outcome/status 查询。
+13. 当 Eval 使用 CLI 内置 `runtime_context` 之外的项目 fixture namespace，而部署方没有显式注入受信 fixture adapter 时，`runtime/e2e` 必须返回 `status: not_provisioned`、精确 case IDs 和 `calls: 0`；不得动态导入项目代码，也不得把它混成测试失败或通过。fixture 格式错误或已 provision runner 的执行错误仍是 `failed`。
 
 ## 门禁
 
 - Contract、Runtime、E2E 的 JSON 结果均与 Eval 预期一致。
+- `not_provisioned` 不是通过，也不是执行失败；它阻止完整发布验收，但允许诚实交付 limited/offline 结果。
 - `forbidden_fields` 不出现在结果中，Token 不出现在工具参数、日志或报告中。
 - 测试只使用 Fake/隔离环境和非生产 fixtures，不调用生产环境或写接口。
 - 原系统只读基线无变化；所有失败和未覆盖项均如实记录。

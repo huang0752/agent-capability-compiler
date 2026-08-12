@@ -17,6 +17,7 @@ from acc_core.domains import (
     DomainDecision,
     DomainReadiness,
     EvidenceChangeSet,
+    analyze_action_candidates,
     analyze_candidate_readiness,
     analyze_domain_readiness,
     analyze_project_domain_impact,
@@ -188,6 +189,25 @@ def status_domains(project: Path) -> tuple[dict[str, Any] | None, list[Diagnosti
             selectable.append((preferred.get(domain.id, len(preferred)), risk, domain.id))
     next_domain = min(selectable)[2] if selectable else None
     return {"domains": output_domains, "next_domain": next_domain}, []
+
+
+def action_candidates(project: Path) -> tuple[dict[str, Any] | None, list[Diagnostic]]:
+    """Return the complete typed Action denominator and independent proof axes."""
+
+    report, diagnostics = _domain_report(project)
+    if diagnostics:
+        return None, diagnostics
+    if not report.ok:
+        return None, [
+            _diagnostic(
+                "ACC_DOMAIN_ACTION_PROJECT_INVALID",
+                "Action reporting requires a structurally closed Project baseline.",
+                path=None,
+                pointer=None,
+            )
+        ]
+    inventory = analyze_action_candidates(report)
+    return inventory.model_dump(mode="json", by_alias=True), []
 
 
 def _decision_for_domain(report: ValidationReport, domain_id: str) -> DomainDecision | None:

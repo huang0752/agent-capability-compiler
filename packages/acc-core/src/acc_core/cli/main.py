@@ -12,13 +12,15 @@ import re
 import sys
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Never, cast
+from typing import Any, Literal, Never, Protocol, cast
 
 import yaml
 from pydantic import JsonValue, ValidationError
 
 from acc_core.cli.domains import (
+    action_candidates,
     analyze_domain_changes,
     check_domain_review,
     show_domain,
@@ -56,6 +58,77 @@ class AccArgumentParser(argparse.ArgumentParser):
 
 
 CommandHandler = Callable[[argparse.Namespace], tuple[int, ResultEnvelope]]
+
+
+class _ProjectEvalFixtureAdapter(Protocol):
+    """Explicit trusted injection boundary for project-specific test fixtures.
+
+    The CLI never discovers or imports an adapter from a scanned project. A trusted
+    host may inject an already-constructed adapter when composing ACC in-process.
+    """
+
+    @property
+    def fixture_keys(self) -> frozenset[str]:
+        """Return the exact fixture namespaces handled by this adapter."""
+
+    async def load(self, fixtures: Mapping[str, JsonValue]) -> None:
+        """Install one case's declared project fixtures."""
+
+
+@dataclass(frozen=True, slots=True)
+class _NotProvisionedEvalCase:
+    case_id: str
+    capability_id: str
+    fixture_key: str | None
+
+    def to_dict(self) -> dict[str, object]:
+        if self.fixture_key is None:
+            status = "not_run_due_to_suite_provisioning"
+            message = "Eval case was not run because another case requires an unavailable adapter."
+        else:
+            status = "not_provisioned"
+            message = "Eval case requires a project fixture adapter that was not provided."
+        return {
+            "id": self.case_id,
+            "capability": self.capability_id,
+            "ok": False,
+            "status": status,
+            "calls": 0,
+            "diagnostics": [
+                {
+                    "code": "ACC_TEST_RUNNER_NOT_PROVISIONED",
+                    "message": message,
+                }
+            ],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class _NotProvisionedEvalReport:
+    suite: Literal["runtime", "e2e"]
+    cases: tuple[_NotProvisionedEvalCase, ...]
+
+    @property
+    def ok(self) -> bool:
+        return False
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "kind": "runtime",
+            "suite": self.suite,
+            "ok": False,
+            "status": "not_provisioned",
+            "summary": {
+                "total": len(self.cases),
+                "passed": 0,
+                "failed": 0,
+                "not_provisioned": sum(case.fixture_key is not None for case in self.cases),
+                "not_run": sum(case.fixture_key is None for case in self.cases),
+                "calls": 0,
+            },
+            "diagnostics": [],
+            "cases": [case.to_dict() for case in self.cases],
+        }
 
 
 def _add_json_argument(parser: argparse.ArgumentParser) -> None:
@@ -104,6 +177,12 @@ def _parser() -> AccArgumentParser:
     domains_status_parser.add_argument("path", nargs="?", default=".")
     _add_json_argument(domains_status_parser)
     domains_status_parser.set_defaults(handler=_domains_command)
+    domains_actions_parser = domains_subparsers.add_parser(
+        "actions", help="show the complete typed Action candidate report"
+    )
+    domains_actions_parser.add_argument("path", nargs="?", default=".")
+    _add_json_argument(domains_actions_parser)
+    domains_actions_parser.set_defaults(handler=_domains_command)
     domains_show_parser = domains_subparsers.add_parser("show", help="show one domain")
     domains_show_parser.add_argument("domain_id")
     domains_show_parser.add_argument("--project", default=".")
@@ -586,6 +665,8 @@ def _domains_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope
     command = f"domains {arguments.domains_command}"
     if arguments.domains_command == "status":
         result, diagnostics = status_domains(Path(str(arguments.path)).expanduser().resolve())
+    elif arguments.domains_command == "actions":
+        result, diagnostics = action_candidates(Path(str(arguments.path)).expanduser().resolve())
     elif arguments.domains_command == "show":
         result, diagnostics = show_domain(
             Path(str(arguments.project)).expanduser().resolve(), str(arguments.domain_id)
@@ -778,6 +859,7 @@ def _test_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope]:
     compilation = compile_project(Path(str(arguments.path)).resolve())
     if not compilation.ok or compilation.ir is None:
         return EXIT_TEST, _compilation_failure(command, compilation.diagnostics)
+    report: Any
     if suite == "contract":
         report = ContractEvalRunner().run(compilation.ir)
     else:
@@ -803,6 +885,24 @@ def _test_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope]:
                     pointer=None,
                 ),
             )
+    if isinstance(report, _NotProvisionedEvalReport):
+        provisioning_diagnostics = [
+            Diagnostic(
+                code="ACC_TEST_RUNNER_NOT_PROVISIONED",
+                severity="error",
+                message=("The evaluation suite requires a project runner that was not provided."),
+                path=f"evals/{case.case_id}",
+                pointer=f"/fixtures/{case.fixture_key}",
+            )
+            for case in report.cases
+            if case.fixture_key is not None
+        ]
+        return EXIT_TEST, ResultEnvelope(
+            ok=False,
+            command=command,
+            result=report.to_dict(),
+            diagnostics=provisioning_diagnostics,
+        )
     if report.ok:
         return EXIT_SUCCESS, _success(command, report.to_dict())
     diagnostics: list[Diagnostic] = [
@@ -846,8 +946,19 @@ async def _run_runtime_eval_report(
     compiled_ir: dict[str, Any],
     project_root: Path,
     through_mcp: bool,
+    project_fixture_adapter: _ProjectEvalFixtureAdapter | None = None,
 ) -> Any:
     """Compose Eval with Runtime lazily so ``acc-core`` has no package cycle."""
+
+    not_provisioned = _find_not_provisioned_eval_cases(
+        compiled_ir,
+        project_fixture_adapter=project_fixture_adapter,
+    )
+    if not_provisioned:
+        return _NotProvisionedEvalReport(
+            suite="e2e" if through_mcp else "runtime",
+            cases=not_provisioned,
+        )
 
     from acc_core.evals import AsyncCapabilityCaller, RuntimeEvalRunner
     from acc_runtime import GenericRuntime
@@ -902,6 +1013,10 @@ async def _run_runtime_eval_report(
         context = _EvalRuntimeContext(
             granted_scopes=_runtime_scopes(()),
             tenant_id=os.environ.get("ACC_TENANT_ID"),
+        )
+        fixture_loader = _CliEvalFixtureLoader(
+            context=context,
+            project_adapter=project_fixture_adapter,
         )
 
         def create_runtime() -> GenericRuntime:
@@ -959,9 +1074,79 @@ async def _run_runtime_eval_report(
 
         return await RuntimeEvalRunner(
             caller,
-            fixture_loader=context,
+            fixture_loader=fixture_loader,
             call_recorder=recorder,
         ).run(runtime_ir)
+
+
+def _find_not_provisioned_eval_cases(
+    compiled_ir: Mapping[str, Any],
+    *,
+    project_fixture_adapter: _ProjectEvalFixtureAdapter | None,
+) -> tuple[_NotProvisionedEvalCase, ...]:
+    """Find fixture namespaces that have no explicitly injected adapter."""
+
+    supported_keys = {"runtime_context"}
+    if project_fixture_adapter is not None:
+        supported_keys.update(project_fixture_adapter.fixture_keys)
+    raw_evals = compiled_ir.get("evals")
+    if not isinstance(raw_evals, Mapping):
+        return ()
+
+    raw_cases: list[tuple[str, str, str | None]] = []
+    has_unsupported = False
+    for case_id in sorted(key for key in raw_evals if isinstance(key, str)):
+        raw_case = raw_evals[case_id]
+        if not isinstance(raw_case, Mapping):
+            continue
+        raw_fixtures = raw_case.get("fixtures")
+        if not isinstance(raw_fixtures, Mapping):
+            raw_fixtures = {}
+        unsupported = sorted(
+            key for key in raw_fixtures if isinstance(key, str) and key not in supported_keys
+        )
+        capability = raw_case.get("capability")
+        fixture_key = unsupported[0] if unsupported else None
+        has_unsupported = has_unsupported or fixture_key is not None
+        raw_cases.append((case_id, capability if isinstance(capability, str) else "", fixture_key))
+    if not has_unsupported:
+        return ()
+    return tuple(
+        _NotProvisionedEvalCase(
+            case_id=case_id,
+            capability_id=capability_id,
+            fixture_key=fixture_key,
+        )
+        for case_id, capability_id, fixture_key in raw_cases
+    )
+
+
+class _CliEvalFixtureLoader:
+    """Route built-in and explicitly injected fixtures without dynamic imports."""
+
+    def __init__(
+        self,
+        *,
+        context: _EvalRuntimeContext,
+        project_adapter: _ProjectEvalFixtureAdapter | None,
+    ) -> None:
+        self._context = context
+        self._project_adapter = project_adapter
+
+    async def load(self, fixtures: Mapping[str, JsonValue]) -> None:
+        runtime_context = {
+            key: copy.deepcopy(value) for key, value in fixtures.items() if key == "runtime_context"
+        }
+        if runtime_context:
+            await self._context.load(runtime_context)
+
+        project_fixtures = {
+            key: copy.deepcopy(value) for key, value in fixtures.items() if key != "runtime_context"
+        }
+        if project_fixtures:
+            if self._project_adapter is None:
+                raise RuntimeError("project fixture adapter was not provisioned")
+            await self._project_adapter.load(project_fixtures)
 
 
 class _EvalRuntimeContext:

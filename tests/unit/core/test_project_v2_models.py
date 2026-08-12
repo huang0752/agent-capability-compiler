@@ -61,6 +61,7 @@ def test_schema_exports_use_only_canonical_current_names() -> None:
         "domain-change-request",
         "domain-decision",
         "domain-evidence-change-set",
+        "domain-action-report",
         "domain-map",
         "eval",
         "evidence",

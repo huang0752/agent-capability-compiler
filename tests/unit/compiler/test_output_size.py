@@ -93,6 +93,24 @@ def test_open_object_is_unknown_even_when_known_properties_are_bounded() -> None
     assert estimate.unknown_pointers == ("/additionalProperties",)
 
 
+def test_pattern_properties_keep_an_object_unknown_despite_additional_properties_false() -> None:
+    estimate = estimate_output_size(
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "patternProperties": {
+                "^x-": {"type": "string", "maxLength": 10},
+            },
+        }
+    )
+
+    assert estimate == OutputSizeEstimate(
+        status="unknown",
+        max_bytes=None,
+        unknown_pointers=("/patternProperties",),
+    )
+
+
 def test_recursive_schema_returns_unknown_without_recursing_forever() -> None:
     schema: JsonObject = {
         "$defs": {
@@ -112,6 +130,154 @@ def test_recursive_schema_returns_unknown_without_recursing_forever() -> None:
 
     assert estimate.status == "unknown"
     assert estimate.unknown_pointers == ("/properties/child/$ref",)
+
+
+def test_local_refs_prove_a_bounded_paginated_projection() -> None:
+    schema: JsonObject = {
+        "$defs": {
+            "projected_customer": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "id": {"type": "string", "maxLength": 36},
+                    "name": {"type": "string", "maxLength": 80},
+                },
+            }
+        },
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "items": {
+                "type": "array",
+                "maxItems": 20,
+                "items": {"$ref": "#/$defs/projected_customer"},
+            },
+            "total": {"type": "integer", "minimum": 0, "maximum": 999_999},
+        },
+    }
+
+    estimate = estimate_output_size(schema)
+
+    assert estimate.status == "proven_bounded"
+    assert estimate.max_bytes is not None
+
+
+def test_local_ref_annotations_do_not_count_as_bound_evidence_or_block_it() -> None:
+    estimate = estimate_output_size(
+        {
+            "$defs": {"identifier": {"type": "string", "maxLength": 36}},
+            "$ref": "#/$defs/identifier",
+            "description": "Public identifier.",
+            "examples": ["short-example"],
+        }
+    )
+
+    assert estimate == OutputSizeEstimate(
+        status="proven_bounded",
+        max_bytes=218,
+        unknown_pointers=(),
+    )
+
+
+def test_all_of_requires_every_reachable_branch_to_be_bounded() -> None:
+    estimate = estimate_output_size(
+        {
+            "allOf": [
+                {"type": "string", "maxLength": 12},
+                {"type": "string"},
+            ]
+        }
+    )
+
+    assert estimate == OutputSizeEstimate(
+        status="unknown",
+        max_bytes=None,
+        unknown_pointers=("/allOf/1/maxLength",),
+    )
+
+
+def test_all_of_uses_the_tightest_bound_only_when_every_branch_is_bounded() -> None:
+    estimate = estimate_output_size(
+        {
+            "allOf": [
+                {"type": "string", "maxLength": 12},
+                {"type": "string", "maxLength": 4},
+            ]
+        }
+    )
+
+    assert estimate == OutputSizeEstimate(
+        status="proven_bounded",
+        max_bytes=26,
+        unknown_pointers=(),
+    )
+
+
+def test_one_of_is_unknown_when_any_reachable_branch_is_unbounded() -> None:
+    estimate = estimate_output_size(
+        {
+            "oneOf": [
+                {"type": "string", "maxLength": 12},
+                {"type": "array", "items": {"const": 1}},
+            ]
+        }
+    )
+
+    assert estimate == OutputSizeEstimate(
+        status="unknown",
+        max_bytes=None,
+        unknown_pointers=("/oneOf/1/maxItems",),
+    )
+
+
+def test_unused_unbounded_definitions_do_not_taint_a_closed_projection() -> None:
+    estimate = estimate_output_size(
+        {
+            "$defs": {"source_record": {"type": "object", "additionalProperties": True}},
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"id": {"type": "string", "maxLength": 36}},
+        }
+    )
+
+    assert estimate.status == "proven_bounded"
+
+
+def test_binary_body_is_unknown_even_when_a_string_length_is_declared() -> None:
+    estimate = estimate_output_size({"type": "string", "format": "binary", "maxLength": 1024})
+
+    assert estimate == OutputSizeEstimate(
+        status="unknown",
+        max_bytes=None,
+        unknown_pointers=("/format",),
+    )
+
+
+def test_examples_and_page_size_names_do_not_invent_schema_bounds() -> None:
+    estimate = estimate_output_size(
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {"type": "string", "maxLength": 20},
+                    "examples": [["one", "two"]],
+                },
+                "page_size": {"type": "integer", "examples": [20]},
+            },
+        }
+    )
+
+    assert estimate == OutputSizeEstimate(
+        status="unknown",
+        max_bytes=None,
+        unknown_pointers=(
+            "/properties/items/maxItems",
+            "/properties/page_size/maximum",
+            "/properties/page_size/minimum",
+        ),
+    )
 
 
 def test_bounded_array_of_objects_has_a_proven_canonical_upper_bound() -> None:
@@ -204,3 +370,29 @@ def test_acknowledged_long_text_does_not_hide_an_unknown_size_bound() -> None:
     )
 
     assert [item.code for item in diagnostics] == ["ACC_CAPABILITY_OUTPUT_BOUND_UNKNOWN"]
+
+
+def test_nested_schema_resource_ref_is_not_resolved_against_document_root() -> None:
+    estimate = estimate_output_size(
+        {
+            "$defs": {"payload": {"type": "string", "maxLength": 1}},
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "value": {
+                    "$id": "nested-resource",
+                    "$defs": {"payload": {"type": "string"}},
+                    "$ref": "#/$defs/payload",
+                }
+            },
+        }
+    )
+
+    assert estimate.status == "unknown"
+    assert estimate.max_bytes is None
+
+
+def test_empty_all_of_is_not_a_static_bound() -> None:
+    estimate = estimate_output_size({"allOf": []})
+
+    assert estimate.status == "unknown"

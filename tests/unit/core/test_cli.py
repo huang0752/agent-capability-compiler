@@ -14,7 +14,7 @@ import pytest
 import yaml
 from pydantic import JsonValue
 
-from acc_core.cli.main import EXIT_RUNTIME, EXIT_SUCCESS, _run_runtime_eval_report
+from acc_core.cli.main import EXIT_RUNTIME, EXIT_SUCCESS, _parser, _run_runtime_eval_report
 from acc_core.cli.main import _run_command as run_pack_command
 from acc_core.compiler import compile_project
 from acc_runtime import GenericRuntime
@@ -40,6 +40,7 @@ EXPORTED_SCHEMAS = {
     "domain-decision.schema.json",
     "domain-change-request.schema.json",
     "domain-evidence-change-set.schema.json",
+    "domain-action-report.schema.json",
     "usage-domain-contract.schema.json",
     "usage-domain-index.schema.json",
     "usage-mcp-release-acceptance.schema.json",
@@ -1071,6 +1072,85 @@ def test_runtime_eval_composition_closes_every_created_runtime(
     )
 
     assert close_calls == 1
+
+
+@pytest.mark.parametrize("suite", ["runtime", "e2e"])
+def test_cli_eval_reports_project_fixture_runner_as_not_provisioned(
+    tmp_path: Path,
+    suite: str,
+) -> None:
+    project = _make_valid_project(tmp_path)
+    eval_path = project / "evals" / "get-customer-normal.yaml"
+    eval_document = yaml.safe_load(eval_path.read_text(encoding="utf-8"))
+    eval_document["fixtures"] = {
+        "project_http": {"responses": [{"status": 200, "json": {"id": "c-1"}}]}
+    }
+    _write_yaml(eval_path, eval_document)
+
+    arguments = _parser().parse_args(["test", suite, str(project), "--json"])
+    exit_code, envelope = arguments.handler(arguments)
+
+    assert exit_code == 5
+    assert envelope.ok is False
+    assert envelope.result == {
+        "kind": "runtime",
+        "suite": suite,
+        "ok": False,
+        "status": "not_provisioned",
+        "summary": {
+            "total": 1,
+            "passed": 0,
+            "failed": 0,
+            "not_provisioned": 1,
+            "not_run": 0,
+            "calls": 0,
+        },
+        "diagnostics": [],
+        "cases": [
+            {
+                "id": "get-customer-normal",
+                "capability": "get_customer",
+                "ok": False,
+                "status": "not_provisioned",
+                "calls": 0,
+                "diagnostics": [
+                    {
+                        "code": "ACC_TEST_RUNNER_NOT_PROVISIONED",
+                        "message": (
+                            "Eval case requires a project fixture adapter that was not provided."
+                        ),
+                    }
+                ],
+            }
+        ],
+    }
+    assert [item.model_dump(mode="json") for item in envelope.diagnostics] == [
+        {
+            "code": "ACC_TEST_RUNNER_NOT_PROVISIONED",
+            "severity": "error",
+            "message": "The evaluation suite requires a project runner that was not provided.",
+            "path": "evals/get-customer-normal",
+            "pointer": "/fixtures/project_http",
+        }
+    ]
+
+
+def test_cli_eval_keeps_malformed_builtin_fixture_as_failed(tmp_path: Path) -> None:
+    project = _make_valid_project(tmp_path)
+    eval_path = project / "evals" / "get-customer-normal.yaml"
+    eval_document = yaml.safe_load(eval_path.read_text(encoding="utf-8"))
+    eval_document["fixtures"] = {
+        "runtime_context": {"granted_scopes": "customer.read", "tenant_id": None}
+    }
+    _write_yaml(eval_path, eval_document)
+
+    arguments = _parser().parse_args(["test", "runtime", str(project), "--json"])
+    exit_code, envelope = arguments.handler(arguments)
+
+    assert exit_code == 5
+    assert envelope.ok is False
+    assert envelope.result is None
+    assert [item.code for item in envelope.diagnostics] == ["ACC_EVAL_FIXTURE_LOAD_FAILED"]
 
 
 @pytest.mark.parametrize("through_mcp", [False, True])

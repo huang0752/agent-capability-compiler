@@ -1,5 +1,14 @@
 """Public domain-guided capability discovery contracts."""
 
+from acc_core.domains.action_report import (
+    ActionCandidateInventoryReport,
+    ActionCandidateReport,
+    ActionClaimAxis,
+    ActionReportSummary,
+    ActionSafetyReport,
+    ActionVerificationReport,
+    analyze_action_candidates,
+)
 from acc_core.domains.analyze import (
     AuthorizationStatus,
     CandidateReadiness,
@@ -47,6 +56,12 @@ from acc_core.domains.models import (
 )
 
 __all__ = [
+    "ActionCandidateInventoryReport",
+    "ActionCandidateReport",
+    "ActionClaimAxis",
+    "ActionReportSummary",
+    "ActionSafetyReport",
+    "ActionVerificationReport",
     "AuthorizationBoundaryClaim",
     "AuthorizationStatus",
     "CandidateClaims",
@@ -79,6 +94,7 @@ __all__ = [
     "UserDecision",
     "VerificationLevel",
     "aggregate_reference_digest",
+    "analyze_action_candidates",
     "analyze_candidate_readiness",
     "analyze_domain_impact",
     "analyze_domain_readiness",

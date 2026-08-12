@@ -83,7 +83,10 @@ class ResultEnvelope(BaseModel):
         if self.ok and has_error:
             raise ValueError("a successful result cannot contain error diagnostics")
         if not self.ok:
-            if self.result is not None:
+            retained_blocked_report = (
+                isinstance(self.result, dict) and self.result.get("status") == "not_provisioned"
+            )
+            if self.result is not None and not retained_blocked_report:
                 raise ValueError("a failed result must use a null result")
             if not has_error:
                 raise ValueError("a failed result requires an error diagnostic")

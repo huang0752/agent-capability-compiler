@@ -12,6 +12,11 @@
 1. 先运行 `scope_audit.py --project <acc_project>`；发现客户端面时紧接运行 `interaction_audit.py --project <acc_project> --output interaction-audit-report.json`。任一审计失败前不得运行 ACC 校验命令。
 2. 再依次运行 `acc validate --json`、`acc compile --check --json` 和 `acc coverage --json`；route 与 interaction denominator 必须分别闭合。
 3. 同时检查退出码、`ok`、`result` 和全部 `diagnostics`；不得只凭命令退出判断成功。Scope audit 的 warning 不阻断（warning-only 仍为 `ok: true`），但必须原样保留到风险交付物，不能当作“无诊断”。
+   对 `system_complete` 还必须单独读取 `result.release_readiness`：
+   `discovery_complete`、`executable_ready`、`blocked`、`unknown` 是确定性计数。
+   已知且已分类、明确不执行的 blocked route 可以形成 `status: limited`，但不得进入
+   Operation/Capability；missing、unknown、夹带执行 trace，或把未就绪 route 标为
+   planned/composed，仍然是 error。
 4. 修复 ACC 定义或事实来源后，每次都从 scope audit 重新验证；不得放宽 Schema 掩盖错误。
 5. 复核原系统只读基线及 Secret 扫描结果。
 6. 检查 `provider.auth`/transport 组合、Operation 禁止凭据、`context_binding_allowlist` 与全部 `context_bindings` 编译诊断；不要把 Schema 可验证误写为 `streamable_http` Gateway 已运行。
@@ -23,7 +28,7 @@
 ## 门禁
 
 - 三个命令均真实执行并返回 `ok: true`，不存在被忽略的 error diagnostics。
-- Scope/interaction audits 先于三个 ACC 命令通过，且 JSON 已保留。
+- Scope/interaction audits 先于三个 ACC 命令通过，且 JSON 已保留；`limited` 只表示发现闭合但存在明确 blocked 的非执行 route，不表示 executable release ready。
 - 编译仅接受静态引用、有界工作流、证据绑定的 Read，以及具备完整安全生命周期的 Action。
 - 修复未触及原系统，未连接生产环境，也未引入 Secret 或未经安全合同的 Action。
 - 任何失败、警告或未运行项都被如实保留。

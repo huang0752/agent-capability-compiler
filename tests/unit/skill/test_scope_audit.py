@@ -776,7 +776,7 @@ def test_pilot_requires_explicit_user_confirmation(tmp_path: Path) -> None:
     assert payload["diagnostics"][0]["pointer"] == "/scope/user_confirmation"
 
 
-def test_system_complete_rejects_out_of_scope_and_evidence_blockers(
+def test_system_complete_rejects_out_of_scope_but_allows_known_evidence_blockers(
     tmp_path: Path,
 ) -> None:
     project = _write_project(
@@ -785,6 +785,7 @@ def test_system_complete_rejects_out_of_scope_and_evidence_blockers(
             _route("customer.search", disposition="out_of_scope", reason="not selected"),
             _route(
                 "report.get",
+                eligibility="undetermined",
                 disposition="blocked_on_evidence",
                 reason="scope unknown",
             ),
@@ -794,10 +795,7 @@ def test_system_complete_rejects_out_of_scope_and_evidence_blockers(
     completed, payload = _run(project)
 
     assert completed.returncode == 3
-    assert {item["code"] for item in payload["diagnostics"]} == {
-        "ACC_SCOPE_OUT_OF_SCOPE_FORBIDDEN",
-        "ACC_SCOPE_EVIDENCE_BLOCKED",
-    }
+    assert {item["code"] for item in payload["diagnostics"]} == {"ACC_SCOPE_OUT_OF_SCOPE_FORBIDDEN"}
 
 
 def test_missing_mode_is_rejected(tmp_path: Path) -> None:
@@ -1626,19 +1624,64 @@ def test_ineligible_route_rejects_whitespace_only_evidence(tmp_path: Path) -> No
     assert payload["diagnostics"][0]["pointer"] == "/routes/0/evidence_sources"
 
 
-def test_system_complete_still_rejects_blocked_on_evidence(tmp_path: Path) -> None:
+def test_system_complete_reports_known_non_executable_blocker_as_limited(
+    tmp_path: Path,
+) -> None:
     route = _route(
         "customer.blocked",
+        eligibility="undetermined",
         disposition="blocked_on_evidence",
         operation_id=None,
+        capability_ids=[],
         reason="permission evidence missing",
     )
     project = _write_project(tmp_path, routes=[route])
 
     completed, payload = _run(project)
 
+    assert completed.returncode == 0
+    assert payload["ok"] is True
+    assert payload["diagnostics"] == []
+    assert payload["result"]["release_readiness"] == {
+        "status": "limited",
+        "discovery_complete": 1,
+        "executable_ready": 0,
+        "blocked": 1,
+        "unknown": 0,
+    }
+
+
+def test_system_complete_rejects_unknown_classification_even_when_blocked(
+    tmp_path: Path,
+) -> None:
+    route = _route(
+        "customer.unknown",
+        kind="unknown",
+        effect="unknown",
+        eligibility="undetermined",
+        disposition="blocked_on_evidence",
+        operation_id=None,
+        capability_ids=[],
+        candidate_id="candidate.customer.unknown",
+        reason="route semantics remain unknown",
+    )
+    project = _write_project(
+        tmp_path,
+        routes=[route],
+        candidates=[
+            _candidate(
+                "candidate.customer.unknown",
+                ["customer.unknown"],
+                kind_claim="unknown",
+                effect_claim="unknown",
+            )
+        ],
+    )
+
+    completed, payload = _run(project)
+
     assert completed.returncode == 3
-    assert "ACC_SCOPE_EVIDENCE_BLOCKED" in {item["code"] for item in payload["diagnostics"]}
+    assert "ACC_SCOPE_CLASSIFICATION_UNKNOWN" in {item["code"] for item in payload["diagnostics"]}
 
 
 @pytest.mark.parametrize(

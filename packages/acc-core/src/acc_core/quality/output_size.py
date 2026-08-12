@@ -12,6 +12,22 @@ from acc_core.diagnostics import Diagnostic
 from acc_core.models import JsonObject
 from acc_core.quality.models import OutputBudget
 
+_NON_ASSERTION_REF_SIBLINGS = frozenset(
+    {
+        "$comment",
+        "$defs",
+        "$id",
+        "$schema",
+        "default",
+        "deprecated",
+        "description",
+        "examples",
+        "readOnly",
+        "title",
+        "writeOnly",
+    }
+)
+
 
 @dataclass(frozen=True, slots=True)
 class OutputSizeEstimate:
@@ -112,6 +128,9 @@ def _estimate_object(
 ) -> OutputSizeEstimate:
     if schema.get("additionalProperties", True) is not False:
         return _unknown(_child(pointer, "additionalProperties"))
+    pattern_properties = schema.get("patternProperties")
+    if isinstance(pattern_properties, dict) and pattern_properties:
+        return _unknown(_child(pointer, "patternProperties"))
     properties = schema.get("properties", {})
     if not isinstance(properties, dict):
         return _unknown(_child(pointer, "properties"))
@@ -169,6 +188,11 @@ def _estimate(
         return _bounded(0)
     if raw_schema is True or not isinstance(raw_schema, dict):
         return _unknown(pointer or "/type")
+    if pointer and "$id" in raw_schema:
+        # A nested $id starts a new schema resource. This conservative estimator
+        # does not maintain a resource registry, so resolving its fragments
+        # against the outer document root would be unsound.
+        return _unknown(_child(pointer, "$id"))
 
     if "const" in raw_schema:
         value = raw_schema["const"]
@@ -182,7 +206,7 @@ def _estimate(
     if "$ref" in raw_schema:
         reference = raw_schema.get("$ref")
         ref_pointer = _child(pointer, "$ref")
-        assertion_siblings = set(raw_schema) - {"$ref", "$defs", "$id", "$schema"}
+        assertion_siblings = set(raw_schema) - {"$ref"} - _NON_ASSERTION_REF_SIBLINGS
         if not isinstance(reference, str) or assertion_siblings or reference in resolving:
             return _unknown(ref_pointer)
         resolved = _resolve_local_ref(root, reference)
@@ -211,6 +235,8 @@ def _estimate(
             )
     all_of = raw_schema.get("allOf")
     if isinstance(all_of, list):
+        if not all_of:
+            return _unknown(_child(pointer, "allOf"))
         estimates = [
             _estimate(
                 branch,
@@ -220,10 +246,11 @@ def _estimate(
             )
             for index, branch in enumerate(all_of)
         ]
+        unknown_pointers = tuple(pointer for item in estimates for pointer in item.unknown_pointers)
+        if unknown_pointers:
+            return _unknown(*unknown_pointers)
         bounded = [item.max_bytes for item in estimates if item.max_bytes is not None]
-        if bounded:
-            return _bounded(min(bounded))
-        return _unknown(*(pointer for item in estimates for pointer in item.unknown_pointers))
+        return _bounded(min(bounded, default=0))
 
     schema_type = raw_schema.get("type")
     if isinstance(schema_type, list) and all(isinstance(item, str) for item in schema_type):
@@ -243,6 +270,8 @@ def _estimate(
     if schema_type == "boolean":
         return _bounded(5)
     if schema_type == "string":
+        if raw_schema.get("format") == "binary":
+            return _unknown(_child(pointer, "format"))
         max_length = raw_schema.get("maxLength")
         if not isinstance(max_length, int) or isinstance(max_length, bool) or max_length < 0:
             return _unknown(_child(pointer, "maxLength"))

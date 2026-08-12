@@ -718,6 +718,34 @@ def test_compile_project_emits_normalized_json_ir_and_operation_dependencies(
     assert "assert" in compiled_capability["definition"]["workflow"][2]
 
 
+def test_compile_project_accepts_a_locally_referenced_bounded_output(
+    tmp_path: Path,
+) -> None:
+    project = _make_project(tmp_path)
+    capability = _load_capability(project)
+    capability["output_schema"] = {
+        "$defs": {
+            "customer": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "id": {"type": "string", "maxLength": 36},
+                    "name": {"type": "string", "maxLength": 80},
+                },
+            }
+        },
+        "type": "array",
+        "maxItems": 20,
+        "items": {"$ref": "#/$defs/customer"},
+    }
+    _write_capability(project, capability)
+
+    report = compile_project(project)
+
+    assert report.ok is True
+    assert all(item.code != "ACC_CAPABILITY_OUTPUT_BOUND_UNKNOWN" for item in report.diagnostics)
+
+
 def test_compile_project_reports_missing_operation_policy_and_eval_references(
     tmp_path: Path,
 ) -> None:
