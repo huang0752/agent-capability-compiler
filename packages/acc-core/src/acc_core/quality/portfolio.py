@@ -136,6 +136,30 @@ def analyze_tool_portfolio(
             )
         )
 
+    for intent_key, members in intent_groups.items():
+        if not intent_key.startswith("transition:"):
+            continue
+        action_members = tuple(
+            capability_id
+            for capability_id in members
+            if capabilities[capability_id].kind == "action"
+        )
+        if len(action_members) < 2:
+            continue
+        diagnostics.append(
+            Diagnostic(
+                code="ACC_TOOL_PORTFOLIO_TRANSITION_FRAGMENTATION",
+                severity="warning",
+                message=(
+                    "Multiple Action tools model the same resource transition intent; prefer "
+                    "one bounded target-state selector unless distinct business outcomes are "
+                    "evidenced. Const schema differences do not make separate intents."
+                ),
+                path=f"capability-quality/{action_members[1]}.yaml",
+                pointer="/intent",
+            )
+        )
+
     overlaps: list[PortfolioOverlap] = []
     for capability_id, capability_dependencies in dependencies.items():
         if capability_dependencies:

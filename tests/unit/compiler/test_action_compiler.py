@@ -551,7 +551,14 @@ def test_one_mutation_in_each_branch_is_one_mutation_per_execution_path() -> Non
     commit: list[dict[str, object]] = [
         {
             "branch": {
-                "condition": "$.prepared.preview.allowed",
+                "condition": {
+                    "operator": "eq",
+                    "left": {
+                        "kind": "reference",
+                        "value": "$.prepared.input.order_id",
+                    },
+                    "right": {"kind": "literal", "value": "c-1"},
+                },
                 "then": [_call("orders.update")],
                 "else": [_call("orders.transition")],
             }

@@ -295,6 +295,59 @@ def _write_capability(project: Path, capability: dict[str, Any]) -> None:
     _write_yaml(project / "capabilities" / "get_customer.yaml", capability)
 
 
+def test_compiler_accepts_bound_references_in_safe_branch_condition_ast(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    capability = _load_capability(project)
+    capability["workflow"] = [
+        {
+            "id": "selected",
+            "branch": {
+                "condition": {
+                    "operator": "eq",
+                    "left": {"kind": "reference", "value": "$.input.customer_id"},
+                    "right": {"kind": "literal", "value": "c-1"},
+                },
+                "then": [{"emit": {"value": {}}}],
+                "else": [{"emit": {"value": {}}}],
+            },
+        },
+        {"emit": {"value": "$.steps.selected"}},
+    ]
+    _write_capability(project, capability)
+
+    report = compile_project(project)
+
+    assert report.ok is True
+
+
+def test_compiler_rejects_unbound_reference_in_safe_branch_condition_ast(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    capability = _load_capability(project)
+    capability["workflow"] = [
+        {
+            "id": "selected",
+            "branch": {
+                "condition": {
+                    "operator": "in",
+                    "item": {"kind": "reference", "value": "$.steps.future.status"},
+                    "values": {"kind": "literal", "value": ["closed"]},
+                },
+                "then": [{"emit": {"value": {}}}],
+                "else": [{"emit": {"value": {}}}],
+            },
+        },
+        {"emit": {"value": "$.steps.selected"}},
+    ]
+    _write_capability(project, capability)
+
+    report = compile_project(project)
+
+    diagnostic = next(
+        item for item in report.diagnostics if item.code == "ACC_COMPILE_STEP_REFERENCE_NOT_PRIOR"
+    )
+    assert diagnostic.pointer == "/workflow/0/branch/condition/item/value"
+
+
 def _configure_streamable_gateway_auth(
     project: Path,
     *,

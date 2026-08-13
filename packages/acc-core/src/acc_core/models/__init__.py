@@ -605,12 +605,90 @@ class EmitStep(WorkflowStepBase):
     emit: EmitAction
 
 
+class WorkflowReferenceOperand(StrictModel):
+    """A statically validated workflow reference used by a condition."""
+
+    kind: Literal["reference"]
+    value: NonEmptyString
+
+
+class WorkflowLiteralOperand(StrictModel):
+    """An inert JSON literal used by a workflow condition."""
+
+    kind: Literal["literal"]
+    value: JsonValue
+
+
+type WorkflowConditionOperand = Annotated[
+    WorkflowReferenceOperand | WorkflowLiteralOperand,
+    Field(discriminator="kind"),
+]
+
+
+class WorkflowEqCondition(StrictModel):
+    operator: Literal["eq"]
+    left: WorkflowConditionOperand
+    right: WorkflowConditionOperand
+
+
+class WorkflowInCondition(StrictModel):
+    operator: Literal["in"]
+    item: WorkflowConditionOperand
+    values: WorkflowConditionOperand
+
+
+class WorkflowAllCondition(StrictModel):
+    operator: Literal["all"]
+    conditions: Annotated[list[WorkflowCondition], Field(min_length=1, max_length=16)]
+
+
+class WorkflowAnyCondition(StrictModel):
+    operator: Literal["any"]
+    conditions: Annotated[list[WorkflowCondition], Field(min_length=1, max_length=16)]
+
+
+class WorkflowNotCondition(StrictModel):
+    operator: Literal["not"]
+    condition: WorkflowCondition
+
+
+type WorkflowCondition = Annotated[
+    WorkflowEqCondition
+    | WorkflowInCondition
+    | WorkflowAllCondition
+    | WorkflowAnyCondition
+    | WorkflowNotCondition,
+    Field(discriminator="operator"),
+]
+
+
+def _workflow_condition_size(condition: WorkflowCondition, *, depth: int = 1) -> tuple[int, int]:
+    if isinstance(condition, (WorkflowAllCondition, WorkflowAnyCondition)):
+        sizes = [_workflow_condition_size(item, depth=depth + 1) for item in condition.conditions]
+        return 1 + sum(size for size, _ in sizes), max(level for _, level in sizes)
+    if isinstance(condition, WorkflowNotCondition):
+        size, max_depth = _workflow_condition_size(condition.condition, depth=depth + 1)
+        return 1 + size, max_depth
+    return 1, depth
+
+
 class BranchAction(StrictModel):
     """Choose between two statically declared workflow branches."""
 
-    condition: NonEmptyString
+    condition: NonEmptyString | WorkflowCondition
     then_steps: Annotated[list[WorkflowStep], Field(min_length=1)] = Field(alias="then")
     else_steps: Annotated[list[WorkflowStep], Field(min_length=1)] = Field(alias="else")
+
+    @model_validator(mode="after")
+    def validate_condition_bounds(self) -> BranchAction:
+        """Keep recursive conditions small enough for deterministic evaluation."""
+
+        if isinstance(self.condition, str):
+            return self
+        nodes, depth = _workflow_condition_size(self.condition)
+        if nodes > 64 or depth > 16:
+            raise ValueError("branch condition exceeds the limit of 64 nodes or depth 16")
+        return self
 
 
 class BranchStep(WorkflowStepBase):
@@ -651,6 +729,9 @@ type WorkflowStep = (
 
 
 _RECURSIVE_MODELS = (
+    WorkflowAllCondition,
+    WorkflowAnyCondition,
+    WorkflowNotCondition,
     BranchAction,
     BranchStep,
     ParallelStep,
@@ -658,7 +739,12 @@ _RECURSIVE_MODELS = (
     ForeachStep,
 )
 for _model in _RECURSIVE_MODELS:
-    _model.model_rebuild(_types_namespace={"WorkflowStep": WorkflowStep})
+    _model.model_rebuild(
+        _types_namespace={
+            "WorkflowCondition": WorkflowCondition,
+            "WorkflowStep": WorkflowStep,
+        }
+    )
 
 from acc_core.models.v2 import (  # noqa: E402  # import after recursive workflow rebuild
     ActionCapabilityV2,
@@ -735,6 +821,15 @@ __all__ = [
     "SourceWorkspace",
     "StrictModel",
     "TenantContextBindingReference",
+    "WorkflowAllCondition",
+    "WorkflowAnyCondition",
+    "WorkflowCondition",
+    "WorkflowConditionOperand",
+    "WorkflowEqCondition",
+    "WorkflowInCondition",
+    "WorkflowLiteralOperand",
+    "WorkflowNotCondition",
+    "WorkflowReferenceOperand",
     "WorkflowStep",
     "load_project_document",
 ]

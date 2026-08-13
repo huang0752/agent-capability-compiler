@@ -35,6 +35,8 @@ _KNOWN_ACTIONS = {
 }
 _MAX_PARALLEL_STEPS = 8
 _MAX_COLLECTION_ITEMS = 100
+_MAX_CONDITION_DEPTH = 16
+_MAX_CONDITION_NODES = 64
 _MISSING = object()
 
 
@@ -213,8 +215,8 @@ class WorkflowExecutor:
             return _redact(action, context, details)
         if action_name == "branch":
             branch = _required_mapping(action, code="ACC_RUNTIME_STEP_INVALID", details=details)
-            condition = _resolve_required_reference(branch.get("condition"), context, details)
-            selected = branch.get("then" if bool(condition) else "else")
+            condition = _evaluate_condition(branch.get("condition"), context, details)
+            selected = branch.get("then" if condition else "else")
             workflow = _required_list(selected, code="ACC_RUNTIME_STEP_INVALID", details=details)
             return await self._run_workflow(
                 workflow,
@@ -438,6 +440,148 @@ def _resolve_required_reference(
             details=details,
         )
     return _resolve_value(value, context, details)
+
+
+def _evaluate_condition(
+    raw_condition: Any,
+    context: _ExecutionContext,
+    details: Mapping[str, str | int | None],
+    *,
+    depth: int = 1,
+    budget: list[int] | None = None,
+) -> bool:
+    if isinstance(raw_condition, str):
+        return bool(_resolve_required_reference(raw_condition, context, details))
+    if depth > _MAX_CONDITION_DEPTH:
+        raise ExecutionError(
+            "ACC_RUNTIME_BOUND_EXCEEDED",
+            "Workflow condition depth exceeds the runtime bound.",
+            details=details,
+        )
+    remaining = [_MAX_CONDITION_NODES] if budget is None else budget
+    remaining[0] -= 1
+    if remaining[0] < 0:
+        raise ExecutionError(
+            "ACC_RUNTIME_BOUND_EXCEEDED",
+            "Workflow condition size exceeds the runtime bound.",
+            details=details,
+        )
+    condition = _required_mapping(raw_condition, code="ACC_RUNTIME_STEP_INVALID", details=details)
+    operator = condition.get("operator")
+    if operator in {"eq", "in"}:
+        expected = (
+            {"operator", "left", "right"}
+            if operator == "eq"
+            else {
+                "operator",
+                "item",
+                "values",
+            }
+        )
+        if set(condition) != expected:
+            raise ExecutionError(
+                "ACC_RUNTIME_STEP_INVALID",
+                "Workflow condition has an invalid shape.",
+                details=details,
+            )
+        left_key, right_key = ("left", "right") if operator == "eq" else ("item", "values")
+        left = _resolve_condition_operand(condition[left_key], context, details)
+        right = _resolve_condition_operand(condition[right_key], context, details)
+        if operator == "eq":
+            return _json_equal(left, right)
+        if not isinstance(right, list):
+            raise ExecutionError(
+                "ACC_RUNTIME_STEP_INVALID",
+                "Workflow in condition requires a JSON array operand.",
+                details=details,
+            )
+        return any(_json_equal(left, item) for item in right)
+    if operator in {"all", "any"}:
+        if set(condition) != {"operator", "conditions"}:
+            raise ExecutionError(
+                "ACC_RUNTIME_STEP_INVALID",
+                "Workflow condition has an invalid shape.",
+                details=details,
+            )
+        children = _required_list(
+            condition.get("conditions"), code="ACC_RUNTIME_STEP_INVALID", details=details
+        )
+        if not 1 <= len(children) <= 16:
+            raise ExecutionError(
+                "ACC_RUNTIME_BOUND_EXCEEDED",
+                "Workflow condition fan-out exceeds the runtime bound.",
+                details=details,
+            )
+        results = [
+            _evaluate_condition(child, context, details, depth=depth + 1, budget=remaining)
+            for child in children
+        ]
+        return all(results) if operator == "all" else any(results)
+    if operator == "not":
+        if set(condition) != {"operator", "condition"}:
+            raise ExecutionError(
+                "ACC_RUNTIME_STEP_INVALID",
+                "Workflow condition has an invalid shape.",
+                details=details,
+            )
+        return not _evaluate_condition(
+            condition.get("condition"),
+            context,
+            details,
+            depth=depth + 1,
+            budget=remaining,
+        )
+    raise ExecutionError(
+        "ACC_RUNTIME_STEP_INVALID",
+        "Workflow condition operator is not supported.",
+        details=details,
+    )
+
+
+def _resolve_condition_operand(
+    raw_operand: Any,
+    context: _ExecutionContext,
+    details: Mapping[str, str | int | None],
+) -> JsonValue:
+    operand = _required_mapping(raw_operand, code="ACC_RUNTIME_STEP_INVALID", details=details)
+    if set(operand) != {"kind", "value"}:
+        raise ExecutionError(
+            "ACC_RUNTIME_STEP_INVALID",
+            "Workflow condition operand has an invalid shape.",
+            details=details,
+        )
+    kind = operand.get("kind")
+    if kind == "reference":
+        return _resolve_required_reference(operand.get("value"), context, details)
+    if kind == "literal":
+        return _copy_json(operand.get("value"), code="ACC_RUNTIME_STEP_INVALID", details=details)
+    raise ExecutionError(
+        "ACC_RUNTIME_STEP_INVALID",
+        "Workflow condition operand kind is not supported.",
+        details=details,
+    )
+
+
+def _json_equal(left: JsonValue, right: JsonValue) -> bool:
+    if isinstance(left, bool) or isinstance(right, bool):
+        return isinstance(left, bool) and isinstance(right, bool) and left == right
+    if isinstance(left, (int, float)) or isinstance(right, (int, float)):
+        return isinstance(left, (int, float)) and isinstance(right, (int, float)) and left == right
+    if isinstance(left, list) or isinstance(right, list):
+        return (
+            isinstance(left, list)
+            and isinstance(right, list)
+            and len(left) == len(right)
+            and all(_json_equal(a, b) for a, b in zip(left, right, strict=True))
+        )
+    if isinstance(left, dict) or isinstance(right, dict):
+        return (
+            isinstance(left, dict)
+            and isinstance(right, dict)
+            and left.keys() == right.keys()
+            and all(_json_equal(left[key], right[key]) for key in left)
+        )
+    return left == right
 
 
 def _resolve_match(

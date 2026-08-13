@@ -294,6 +294,84 @@ def test_projects_actual_mcp_tools_list_for_action_capabilities() -> None:
     assert "2 Capabilities and projects 5 MCP tools" in result.diagnostics[0].message
 
 
+def test_warns_on_transition_fragmentation_despite_const_and_dependency_differences() -> None:
+    capabilities = _capabilities("find_orders")
+    close = _action("close_order").model_copy(
+        update={
+            "input_schema": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {"target_status": {"const": "closed"}},
+            }
+        }
+    )
+    cancel = _action("cancel_order").model_copy(
+        update={
+            "input_schema": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {"target_status": {"const": "cancelled"}},
+            }
+        }
+    )
+    capabilities.update({"close_order": close, "cancel_order": cancel})
+    qualities = {
+        "find_orders": _quality("find_orders", "search", "order"),
+        "close_order": _quality("close_order", "transition", "order"),
+        "cancel_order": _quality("cancel_order", "transition", "order"),
+    }
+
+    result = analyze_tool_portfolio(
+        capabilities,
+        qualities,
+        {
+            "find_orders": ["orders.list"],
+            "close_order": ["orders.close"],
+            "cancel_order": ["orders.cancel", "audit.write"],
+        },
+        _scope(),
+    )
+
+    assert result.overlaps == ()
+    assert "ACC_TOOL_PORTFOLIO_TRANSITION_FRAGMENTATION" in {
+        item.code for item in result.diagnostics
+    }
+    assert result.projected_mcp_tool_names.count("acc_action_commit") == 1
+
+
+def test_one_bounded_transition_action_is_not_fragmented() -> None:
+    capabilities = _capabilities("find_orders")
+    capabilities["transition_order"] = _action("transition_order").model_copy(
+        update={
+            "input_schema": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "target_status": {"enum": ["closed", "cancelled"]},
+                },
+            }
+        }
+    )
+    qualities = {
+        "find_orders": _quality("find_orders", "search", "order"),
+        "transition_order": _quality("transition_order", "transition", "order"),
+    }
+
+    result = analyze_tool_portfolio(
+        capabilities,
+        qualities,
+        {
+            "find_orders": ["orders.list"],
+            "transition_order": ["orders.transition"],
+        },
+        _scope(),
+    )
+
+    assert "ACC_TOOL_PORTFOLIO_TRANSITION_FRAGMENTATION" not in {
+        item.code for item in result.diagnostics
+    }
+
+
 def test_detects_read_name_collision_with_action_prepare_and_shared_lifecycle() -> None:
     capabilities = _capabilities("orders.update.prepare", "acc_action_commit")
     capabilities["orders.update"] = _action("orders.update")

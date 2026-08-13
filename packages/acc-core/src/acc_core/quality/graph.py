@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from typing import cast
 
 from pydantic import JsonValue
 
@@ -108,7 +109,13 @@ def _walk_calls(
                 )
             )
         elif isinstance(step, BranchStep):
-            _, condition_steps = _references(step.branch.condition)
+            condition = step.branch.condition
+            condition_value = (
+                condition
+                if isinstance(condition, str)
+                else cast(JsonValue, condition.model_dump(mode="json"))
+            )
+            _, condition_steps = _references(condition_value)
             inherited = inherited_steps | condition_steps
             calls.extend(
                 _walk_calls(

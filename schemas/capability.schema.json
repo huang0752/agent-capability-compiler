@@ -202,9 +202,16 @@
       "description": "Choose between two statically declared workflow branches.",
       "properties": {
         "condition": {
-          "minLength": 1,
-          "title": "Condition",
-          "type": "string"
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/WorkflowCondition"
+            }
+          ],
+          "title": "Condition"
         },
         "else": {
           "items": {
@@ -788,6 +795,209 @@
         "redact"
       ],
       "title": "RedactStep",
+      "type": "object"
+    },
+    "WorkflowAllCondition": {
+      "additionalProperties": false,
+      "properties": {
+        "conditions": {
+          "items": {
+            "$ref": "#/$defs/WorkflowCondition"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Conditions",
+          "type": "array"
+        },
+        "operator": {
+          "const": "all",
+          "title": "Operator",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operator",
+        "conditions"
+      ],
+      "title": "WorkflowAllCondition",
+      "type": "object"
+    },
+    "WorkflowAnyCondition": {
+      "additionalProperties": false,
+      "properties": {
+        "conditions": {
+          "items": {
+            "$ref": "#/$defs/WorkflowCondition"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Conditions",
+          "type": "array"
+        },
+        "operator": {
+          "const": "any",
+          "title": "Operator",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operator",
+        "conditions"
+      ],
+      "title": "WorkflowAnyCondition",
+      "type": "object"
+    },
+    "WorkflowCondition": {
+      "discriminator": {
+        "mapping": {
+          "all": "#/$defs/WorkflowAllCondition",
+          "any": "#/$defs/WorkflowAnyCondition",
+          "eq": "#/$defs/WorkflowEqCondition",
+          "in": "#/$defs/WorkflowInCondition",
+          "not": "#/$defs/WorkflowNotCondition"
+        },
+        "propertyName": "operator"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/WorkflowEqCondition"
+        },
+        {
+          "$ref": "#/$defs/WorkflowInCondition"
+        },
+        {
+          "$ref": "#/$defs/WorkflowAllCondition"
+        },
+        {
+          "$ref": "#/$defs/WorkflowAnyCondition"
+        },
+        {
+          "$ref": "#/$defs/WorkflowNotCondition"
+        }
+      ]
+    },
+    "WorkflowConditionOperand": {
+      "discriminator": {
+        "mapping": {
+          "literal": "#/$defs/WorkflowLiteralOperand",
+          "reference": "#/$defs/WorkflowReferenceOperand"
+        },
+        "propertyName": "kind"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/WorkflowReferenceOperand"
+        },
+        {
+          "$ref": "#/$defs/WorkflowLiteralOperand"
+        }
+      ]
+    },
+    "WorkflowEqCondition": {
+      "additionalProperties": false,
+      "properties": {
+        "left": {
+          "$ref": "#/$defs/WorkflowConditionOperand"
+        },
+        "operator": {
+          "const": "eq",
+          "title": "Operator",
+          "type": "string"
+        },
+        "right": {
+          "$ref": "#/$defs/WorkflowConditionOperand"
+        }
+      },
+      "required": [
+        "operator",
+        "left",
+        "right"
+      ],
+      "title": "WorkflowEqCondition",
+      "type": "object"
+    },
+    "WorkflowInCondition": {
+      "additionalProperties": false,
+      "properties": {
+        "item": {
+          "$ref": "#/$defs/WorkflowConditionOperand"
+        },
+        "operator": {
+          "const": "in",
+          "title": "Operator",
+          "type": "string"
+        },
+        "values": {
+          "$ref": "#/$defs/WorkflowConditionOperand"
+        }
+      },
+      "required": [
+        "operator",
+        "item",
+        "values"
+      ],
+      "title": "WorkflowInCondition",
+      "type": "object"
+    },
+    "WorkflowLiteralOperand": {
+      "additionalProperties": false,
+      "description": "An inert JSON literal used by a workflow condition.",
+      "properties": {
+        "kind": {
+          "const": "literal",
+          "title": "Kind",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/JsonValue"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "title": "WorkflowLiteralOperand",
+      "type": "object"
+    },
+    "WorkflowNotCondition": {
+      "additionalProperties": false,
+      "properties": {
+        "condition": {
+          "$ref": "#/$defs/WorkflowCondition"
+        },
+        "operator": {
+          "const": "not",
+          "title": "Operator",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operator",
+        "condition"
+      ],
+      "title": "WorkflowNotCondition",
+      "type": "object"
+    },
+    "WorkflowReferenceOperand": {
+      "additionalProperties": false,
+      "description": "A statically validated workflow reference used by a condition.",
+      "properties": {
+        "kind": {
+          "const": "reference",
+          "title": "Kind",
+          "type": "string"
+        },
+        "value": {
+          "minLength": 1,
+          "title": "Value",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "title": "WorkflowReferenceOperand",
       "type": "object"
     },
     "WorkflowStep": {

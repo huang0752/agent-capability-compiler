@@ -221,6 +221,85 @@ class _NeverCalled:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("include, expected", [(True, True), (False, False)])
+async def test_executor_evaluates_composed_safe_branch_conditions(
+    include: bool, expected: bool
+) -> None:
+    reference = {"kind": "reference", "value": "$.input.include"}
+    truth = {"kind": "literal", "value": True}
+    workflow = [
+        {
+            "id": "selected",
+            "branch": {
+                "condition": {
+                    "operator": "all",
+                    "conditions": [
+                        {"operator": "eq", "left": reference, "right": truth},
+                        {
+                            "operator": "any",
+                            "conditions": [
+                                {
+                                    "operator": "in",
+                                    "item": reference,
+                                    "values": {"kind": "literal", "value": [True]},
+                                },
+                                {
+                                    "operator": "not",
+                                    "condition": {
+                                        "operator": "eq",
+                                        "left": reference,
+                                        "right": truth,
+                                    },
+                                },
+                            ],
+                        },
+                    ],
+                },
+                "then": [{"emit": {"value": {"selected": True}}}],
+                "else": [{"emit": {"value": {"selected": False}}}],
+            },
+        },
+        {"emit": {"value": "$.steps.selected"}},
+    ]
+
+    result = await WorkflowExecutor(_NeverCalled()).execute(
+        _compiled_ir(workflow, []),
+        "customer_context",
+        {"customer_id": "c-1", "include": include},
+    )
+
+    assert result == {"selected": expected}
+
+
+@pytest.mark.asyncio
+async def test_executor_fails_closed_when_in_values_is_not_an_array() -> None:
+    workflow = [
+        {
+            "id": "selected",
+            "branch": {
+                "condition": {
+                    "operator": "in",
+                    "item": {"kind": "reference", "value": "$.input.include"},
+                    "values": {"kind": "literal", "value": True},
+                },
+                "then": [{"emit": {"value": {}}}],
+                "else": [{"emit": {"value": {}}}],
+            },
+        },
+        {"emit": {"value": "$.steps.selected"}},
+    ]
+
+    with pytest.raises(ExecutionError) as caught:
+        await WorkflowExecutor(_NeverCalled()).execute(
+            _compiled_ir(workflow, []),
+            "customer_context",
+            {"customer_id": "c-1", "include": True},
+        )
+
+    assert caught.value.code == "ACC_RUNTIME_STEP_INVALID"
+
+
+@pytest.mark.asyncio
 async def test_executor_rejects_capability_input_without_exposing_its_values() -> None:
     ir = _compiled_ir([{"emit": {"value": {}}}], [])
     secret = "top-secret-input"
