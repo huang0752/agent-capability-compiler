@@ -33,6 +33,32 @@ def _contract(**overrides: object) -> contracts.AdapterContract:
     return contracts.AdapterContract.model_validate(document)
 
 
+def _action(**overrides: object) -> contracts.AdapterActionOperation:
+    document: dict[str, object] = {
+        "id": "crm.close_customer",
+        "method": "POST",
+        "path": "/customers/{customer_id}/close",
+        "summary": "Close one customer",
+        "safety": {
+            "idempotency": {
+                "mode": "source_key",
+                "target": {"kind": "header", "name": "Idempotency-Key"},
+            },
+            "concurrency": {
+                "mode": "required",
+                "token": {"kind": "response_header", "name": "ETag"},
+                "precondition": {"kind": "header", "name": "If-Match"},
+            },
+            "transactional_outcome": True,
+            "authorization": "source_revalidated",
+            "max_request_bytes": 4096,
+            "max_response_bytes": 4096,
+        },
+    }
+    document.update(overrides)
+    return contracts.AdapterActionOperation.model_validate(document)
+
+
 def test_adapter_contract_is_strict_and_preserves_health_metadata() -> None:
     contract = _contract()
 
@@ -65,9 +91,72 @@ def test_adapter_contract_is_strict_and_preserves_health_metadata() -> None:
 
 
 @pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
-def test_adapter_operations_are_read_only(method: str) -> None:
+def test_read_adapter_operations_remain_read_only(method: str) -> None:
     with pytest.raises(ValidationError):
         _operation(method=method)
+
+
+@pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
+def test_action_contract_accepts_only_declared_mutation_methods(method: str) -> None:
+    assert _action(method=method).method == method
+
+
+@pytest.mark.parametrize("method", ["GET", "HEAD", "OPTIONS"])
+def test_action_contract_rejects_non_mutation_methods(method: str) -> None:
+    with pytest.raises(ValidationError):
+        _action(method=method)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("idempotency", {"mode": "runtime_deduplicate"}),
+        ("concurrency", {"mode": "not_supported"}),
+        ("transactional_outcome", False),
+        ("authorization", "trusted_proxy"),
+        ("max_request_bytes", 0),
+        ("max_response_bytes", 0),
+    ],
+)
+def test_action_contract_requires_all_production_safety_invariants(
+    field: str, value: object
+) -> None:
+    safety = _action().safety.model_dump(mode="python")
+    safety[field] = value
+
+    with pytest.raises(ValidationError):
+        _action(safety=safety)
+
+
+def test_action_controls_require_distinct_safe_targets_and_valid_pointers() -> None:
+    action = _action()
+    safety = action.safety.model_dump(mode="python")
+    safety["concurrency"]["precondition"] = {
+        "kind": "header",
+        "name": "Idempotency-Key",
+    }
+    with pytest.raises(ValidationError, match="distinct targets"):
+        _action(safety=safety)
+
+    safety = action.safety.model_dump(mode="python")
+    safety["idempotency"]["target"] = {"kind": "body", "pointer": "request/id"}
+    with pytest.raises(ValidationError, match="JSON Pointer"):
+        _action(safety=safety)
+
+    safety = action.safety.model_dump(mode="python")
+    safety["idempotency"]["target"] = {"kind": "header", "name": "Authorization"}
+    with pytest.raises(ValidationError, match="reserved"):
+        _action(safety=safety)
+
+
+def test_mixed_contract_preserves_read_compatibility_and_action_metadata() -> None:
+    contract = _contract(operations=[_operation(), _action()])
+
+    assert isinstance(contract.operations[0], contracts.AdapterOperation)
+    assert isinstance(contract.operations[1], contracts.AdapterActionOperation)
+    action = contract.operations[1]
+    assert action.safety.transactional_outcome is True
+    assert action.safety.authorization == "source_revalidated"
 
 
 @pytest.mark.parametrize(

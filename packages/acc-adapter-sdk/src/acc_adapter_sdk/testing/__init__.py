@@ -1,4 +1,4 @@
-"""Assertions for proving an adapter server matches its read-only contract."""
+"""Assertions for proving an adapter server matches its fixed contract."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from fastapi.routing import APIRoute
 from acc_adapter_sdk.contracts import join_adapter_path
 from acc_adapter_sdk.server import AdapterServer
 
-_READ_ONLY_METHODS = {"GET", "HEAD"}
+_WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
 
 class AdapterContractAssertionError(AssertionError):
@@ -19,7 +19,7 @@ def _format_routes(routes: set[tuple[str, str]]) -> str:
 
 
 def assert_adapter_contract(server: AdapterServer) -> None:
-    """Assert exact operation registration and the absence of write routes."""
+    """Assert exact registration and reject every undeclared route."""
 
     declared_ids = {operation.id for operation in server.contract.operations}
     registered_ids = set(server.registered_operation_ids)
@@ -48,7 +48,9 @@ def assert_adapter_contract(server: AdapterServer) -> None:
         if isinstance(route, APIRoute)
         for method in route.methods or set()
     }
-    unsafe_routes = {route for route in actual_routes if route[1] not in _READ_ONLY_METHODS}
+    unsafe_routes = {
+        route for route in actual_routes - expected_routes if route[1] in _WRITE_METHODS
+    }
     if unsafe_routes:
         raise AdapterContractAssertionError(
             f"unsafe adapter route methods: {_format_routes(unsafe_routes)}"

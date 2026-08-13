@@ -12,6 +12,8 @@ def test_adapter_sdk_exports_its_public_contract_server_and_testing_api() -> Non
     expected = {
         "AdapterContract",
         "AdapterContractAssertionError",
+        "AdapterActionOperation",
+        "AdapterActionSafety",
         "AdapterHealth",
         "AdapterOperation",
         "AdapterRegistrationError",

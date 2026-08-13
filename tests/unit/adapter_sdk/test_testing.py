@@ -81,3 +81,41 @@ def test_contract_assertion_rejects_undeclared_read_routes() -> None:
         match="undeclared adapter routes",
     ):
         adapter_testing.assert_adapter_contract(server)
+
+
+def test_contract_assertion_accepts_declared_action_registered_through_action_api() -> None:
+    contract = AdapterContract.model_validate(
+        {
+            "schema_version": "2",
+            "id": "action-adapter",
+            "version": "0.1.0",
+            "base_path": "/adapter/v2",
+            "operations": [
+                {
+                    "id": "items.close",
+                    "method": "POST",
+                    "path": "/items/{item_id}/close",
+                    "summary": "Close item",
+                    "safety": {
+                        "idempotency": {
+                            "mode": "source_key",
+                            "target": {"kind": "header", "name": "Idempotency-Key"},
+                        },
+                        "concurrency": {
+                            "mode": "required",
+                            "token": {"kind": "body", "pointer": "/version"},
+                            "precondition": {"kind": "header", "name": "If-Match"},
+                        },
+                        "transactional_outcome": True,
+                        "authorization": "source_revalidated",
+                        "max_request_bytes": 4096,
+                        "max_response_bytes": 4096,
+                    },
+                }
+            ],
+        }
+    )
+    server = AdapterServer(contract)
+    server.register_action("items.close", _handler, source_authorizer=_handler)
+
+    adapter_testing.assert_adapter_contract(server)
