@@ -79,6 +79,23 @@ async def _create(vault: SQLiteGatewaySessionVault) -> None:
 
 
 @pytest.mark.asyncio
+async def test_operator_session_digest_is_bound_and_resolvable(tmp_path: Path) -> None:
+    vault = _vault(tmp_path / "vault.db")
+    try:
+        await _create(vault)
+        digest = vault.session_digest("session-1")
+
+        record = await vault.resolve_session_digest(digest)
+
+        assert record.session_id == "session-1"
+        assert "session-1" not in digest
+        with pytest.raises(GatewaySessionInvalidError):
+            await vault.resolve_session_digest("0" * 64)
+    finally:
+        await vault.close()
+
+
+@pytest.mark.asyncio
 async def test_restart_restores_session_and_authentication_without_raw_gateway_token(
     tmp_path: Path,
 ) -> None:

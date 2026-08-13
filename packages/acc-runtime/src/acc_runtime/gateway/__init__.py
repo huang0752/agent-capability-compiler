@@ -31,7 +31,10 @@ from acc_runtime.gateway.models import (
     SessionCreateRequest,
     SessionCreateResponse,
 )
-from acc_runtime.gateway.operator import LocalDevelopmentOperatorApprovalConfig
+from acc_runtime.gateway.operator import (
+    LocalDevelopmentOperatorApprovalConfig,
+    ProductionOperatorApprovalConfig,
+)
 from acc_runtime.gateway.runtime import GatewayRuntimeComposition, create_gateway_runtime
 from acc_runtime.gateway.service import GatewaySessionService
 from acc_runtime.gateway.sessions import (
@@ -75,6 +78,7 @@ __all__ = [
     "MemoryAuditSink",
     "NoopAuditSink",
     "OperationObserver",
+    "ProductionOperatorApprovalConfig",
     "SQLiteGatewaySessionVault",
     "SessionCreateRequest",
     "SessionCreateResponse",

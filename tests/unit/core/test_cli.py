@@ -19,6 +19,7 @@ from acc_core.cli.main import (
     EXIT_RUNTIME,
     EXIT_SUCCESS,
     _close_untransferred_action_dependencies,
+    _production_operator_approval,
     _run_runtime_eval_report,
 )
 from acc_core.cli.main import _run_command as run_pack_command
@@ -809,6 +810,56 @@ def test_run_development_operator_approval_fails_closed(
     assert exit_code == EXIT_RUNTIME
     assert envelope.ok is False
     assert composition.close_calls == 0
+
+
+def test_production_operator_approval_uses_independent_secret_and_safe_inspection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from acc_runtime.gateway.operator import ProductionOperatorApprovalConfig
+
+    monkeypatch.setenv("PRODUCTION_OPERATOR_SECRET", "p" * 48)
+    arguments = _run_arguments(json_output=True)
+    arguments.production_actions = True
+    arguments.production_action_operator_approval = True
+    arguments.production_action_operator_secret_ref = "PRODUCTION_OPERATOR_SECRET"
+
+    config, safe = _production_operator_approval(arguments)
+
+    assert isinstance(config, ProductionOperatorApprovalConfig)
+    assert config.secret_ref == "PRODUCTION_OPERATOR_SECRET"
+    assert safe == {
+        "operator_approval": {
+            "mode": "production_loopback_process_bound",
+            "path": "/operator/actions/approve",
+            "request_body_limit": 1024,
+            "restart_behavior": "prepared_actions_must_be_reprepared",
+        }
+    }
+    assert "p" * 48 not in repr((config, safe))
+
+
+@pytest.mark.parametrize(
+    ("enabled", "reference", "production"),
+    [
+        (False, "PRODUCTION_OPERATOR_SECRET", True),
+        (True, None, True),
+        (True, "MISSING", True),
+        (True, "PRODUCTION_OPERATOR_SECRET", False),
+    ],
+)
+def test_production_operator_approval_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    enabled: bool,
+    reference: str | None,
+    production: bool,
+) -> None:
+    arguments = _run_arguments(json_output=True)
+    arguments.production_actions = production
+    arguments.production_action_operator_approval = enabled
+    arguments.production_action_operator_secret_ref = reference
+
+    with pytest.raises(AccRuntimeError):
+        _production_operator_approval(arguments)
 
 
 def test_run_stdio_rejects_development_operator_endpoint(

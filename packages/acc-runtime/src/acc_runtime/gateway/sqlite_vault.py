@@ -178,6 +178,28 @@ class SQLiteGatewaySessionVault:
                 await asyncio.to_thread(self._persist_reauth_session_sync, session_id)
                 raise
 
+    def session_digest(self, session_id: str) -> str:
+        """Return the keyed, deployment-bound session index used by operator registries."""
+
+        if not isinstance(session_id, str) or not session_id:
+            raise GatewaySessionInvalidError("Gateway session is invalid.")
+        self._ensure_open()
+        return self._session_digest(session_id)
+
+    async def resolve_session_digest(self, digest: str) -> GatewaySessionRecord:
+        """Resolve only a registry-bound keyed digest, never an unbound identifier."""
+
+        if (
+            not isinstance(digest, str)
+            or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)
+        ):
+            raise GatewaySessionInvalidError("Gateway session is invalid.")
+        async with self._lock:
+            self._ensure_open()
+            record = await asyncio.to_thread(self._record_by_session_digest_sync, digest)
+            return await self._inner.resolve_session_id(record.session_id)
+
     async def revoke(self, session_id: str) -> GatewaySessionRecord | None:
         return await self.revoke_session(session_id)
 
@@ -490,6 +512,22 @@ class SQLiteGatewaySessionVault:
 
     def _session_digest(self, session_id: str) -> str:
         return hmac.new(self._index_key, session_id.encode(), hashlib.sha256).hexdigest()
+
+    def _record_by_session_digest_sync(self, session_digest: str) -> GatewaySessionRecord:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT token_digest,nonce,ciphertext FROM sessions WHERE session_digest=?",
+                (session_digest,),
+            ).fetchone()
+        if row is None:
+            raise GatewaySessionInvalidError("Gateway session is invalid.")
+        record, _ = self._decrypt_row(
+            cast(str, row[0]),
+            session_digest,
+            cast(bytes, row[1]),
+            cast(bytes, row[2]),
+        )
+        return record
 
     def _check_aad(self) -> bytes:
         return b"\0".join(

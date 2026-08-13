@@ -314,6 +314,15 @@ def _parser() -> AccArgumentParser:
         help="environment SecretRef for the independent development operator secret",
     )
     run_parser.add_argument(
+        "--production-action-operator-approval",
+        action="store_true",
+        help="enable the loopback-only durable production Action approval endpoint",
+    )
+    run_parser.add_argument(
+        "--production-action-operator-secret-ref",
+        help="environment SecretRef for the independent production operator secret",
+    )
+    run_parser.add_argument(
         "--action-capability",
         action="append",
         default=[],
@@ -1395,6 +1404,9 @@ def _run_streamable_http_gateway(
             details={"reason": "production_actions_opt_in_required"},
         )
     operator_approval, operator_configuration = _development_operator_approval(arguments)
+    production_operator_approval, production_operator_configuration = _production_operator_approval(
+        arguments
+    )
     if bool(getattr(arguments, "production_actions", False)):
         action_dependencies, action_configuration, session_vault = _production_action_dependencies(
             arguments
@@ -1413,6 +1425,7 @@ def _run_streamable_http_gateway(
             max_request_body_size=arguments.body_limit,
             action_dependencies=action_dependencies,
             operator_approval=operator_approval,
+            production_operator_approval=production_operator_approval,
             session_vault=session_vault,
         )
     except BaseException:
@@ -1436,6 +1449,7 @@ def _run_streamable_http_gateway(
         },
         **action_configuration,
         **operator_configuration,
+        **production_operator_configuration,
     }
     if bool(arguments.json_output):
         try:
@@ -1753,6 +1767,12 @@ def _production_action_dependencies(
         )
     values = cast(dict[str, str], configured)
     references = {key: value for key, value in values.items() if not key.endswith("_path")}
+    production_operator_ref = cast(
+        str | None,
+        getattr(arguments, "production_action_operator_secret_ref", None),
+    )
+    if production_operator_ref is not None:
+        references["production_operator_secret"] = production_operator_ref
     try:
         resolved = _resolve_independent_cli_secrets(references)
         paths = [str(Path(values[key]).resolve()) for key in fields if key.endswith("_path")]
@@ -1863,6 +1883,81 @@ def _development_operator_approval(
             "path": "/operator/actions/approve",
             "secret_ref": reference,
             "request_body_limit": OPERATOR_APPROVAL_BODY_LIMIT,
+        }
+    }
+
+
+def _production_operator_approval(
+    arguments: argparse.Namespace,
+) -> tuple[Any | None, dict[str, object]]:
+    from acc_runtime.credentials import SecretRef, resolve_secret
+    from acc_runtime.gateway.operator import (
+        OPERATOR_APPROVAL_BODY_LIMIT,
+        ProductionOperatorApprovalConfig,
+    )
+    from acc_runtime.runtime import RuntimeConfigurationError
+
+    enabled = bool(getattr(arguments, "production_action_operator_approval", False))
+    reference = cast(
+        str | None,
+        getattr(arguments, "production_action_operator_secret_ref", None),
+    )
+    if not enabled:
+        if reference is not None:
+            raise RuntimeConfigurationError(
+                "Production operator SecretRef requires explicit operator approval.",
+                details={"reason": "production_operator_opt_in_required"},
+            )
+        return None, {}
+    if (
+        not bool(getattr(arguments, "production_actions", False))
+        or reference is None
+        or bool(getattr(arguments, "development_action_operator_approval", False))
+        or getattr(arguments, "action_operator_secret_ref", None) is not None
+    ):
+        raise RuntimeConfigurationError(
+            "Production operator approval requires production Actions "
+            "and an independent SecretRef.",
+            details={"reason": "production_operator_configuration_incomplete"},
+        )
+    existing_refs = [
+        cast(str, value)
+        for name in (
+            "action_store_secret_ref",
+            "action_store_salt_ref",
+            "session_vault_key_ref",
+            "session_vault_salt_ref",
+            "approval_secret_ref",
+            "approval_salt_ref",
+            "audit_secret_ref",
+            "audit_salt_ref",
+        )
+        if (value := getattr(arguments, name, None)) is not None
+    ]
+    try:
+        if reference in existing_refs or len(existing_refs) != len(set(existing_refs)):
+            raise ValueError
+        checked_ref = SecretRef(reference)
+        secret = resolve_secret(checked_ref, os.environ)
+        existing_values = [
+            resolve_secret(SecretRef(item), os.environ).get_secret_value() for item in existing_refs
+        ]
+        if secret.get_secret_value() in existing_values or len(existing_values) != len(
+            set(existing_values)
+        ):
+            raise ValueError
+        config = ProductionOperatorApprovalConfig(secret=secret, secret_ref=reference)
+    except (TypeError, ValueError, LookupError):
+        raise RuntimeConfigurationError(
+            "Production operator approval SecretRef is invalid, unavailable, or reused.",
+            details={"reason": "production_operator_secret_invalid"},
+        ) from None
+    return config, {
+        "operator_approval": {
+            "mode": "production_loopback_process_bound",
+            "path": "/operator/actions/approve",
+            "request_body_limit": OPERATOR_APPROVAL_BODY_LIMIT,
+            "restart_behavior": "prepared_actions_must_be_reprepared",
         }
     }
 

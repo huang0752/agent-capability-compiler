@@ -22,6 +22,7 @@ from acc_runtime.actions import (
     ActionStore,
     InMemoryApprovalAuthority,
     SQLiteActionStore,
+    SQLiteApprovalAuthority,
     create_runtime_action_coordinator,
 )
 from acc_runtime.auth import AuthUnauthorizedError, PasswordBearerAuthStrategy
@@ -38,6 +39,8 @@ from acc_runtime.gateway.models import GatewayRuntimeInfo, GatewaySettings, Sess
 from acc_runtime.gateway.operator import (
     LocalDevelopmentOperatorApprovalConfig,
     LocalDevelopmentOperatorApprovalService,
+    ProductionOperatorApprovalConfig,
+    ProductionOperatorApprovalService,
 )
 from acc_runtime.gateway.service import GatewaySessionService
 from acc_runtime.gateway.sessions import InMemoryGatewaySessionStore
@@ -254,6 +257,7 @@ def create_gateway_runtime(
     provider_client: httpx.AsyncClient | None = None,
     action_dependencies: ActionRuntimeDependencies | None = None,
     operator_approval: LocalDevelopmentOperatorApprovalConfig | None = None,
+    production_operator_approval: ProductionOperatorApprovalConfig | None = None,
     application_success_policy: JsonApplicationSuccessPolicy | None = None,
     session_vault: GatewaySessionVaultConfig | None = None,
 ) -> GatewayRuntimeComposition:
@@ -343,6 +347,28 @@ def create_gateway_runtime(
                 "Development operator approval requires the in-memory authority.",
                 details={"reason": "operator_approval_authority_invalid"},
             )
+    if operator_approval is not None and production_operator_approval is not None:
+        raise RuntimeConfigurationError(
+            "Development and production operator approval are mutually exclusive.",
+            details={"reason": "operator_approval_modes_conflict"},
+        )
+    if production_operator_approval is not None:
+        if action_dependencies is None or session_vault is None:
+            raise RuntimeConfigurationError(
+                "Production operator approval requires production Action dependencies.",
+                details={"reason": "production_operator_dependencies_required"},
+            )
+        if not settings.listen_host.startswith("127.") and settings.listen_host != "::1":
+            raise RuntimeConfigurationError(
+                "Production operator approval requires a loopback listener.",
+                details={"reason": "production_operator_loopback_required"},
+            )
+        if not isinstance(action_dependencies.approval_authority, SQLiteApprovalAuthority):
+            raise RuntimeConfigurationError(
+                "Production operator approval requires the durable SQLite authority.",
+                details={"reason": "production_operator_authority_invalid"},
+            )
+        action_dependencies.validate_production(session_vault=session_vault)
     action_coordinator = None
     if action_dependencies is not None:
         action_coordinator = create_runtime_action_coordinator(
@@ -404,7 +430,7 @@ def create_gateway_runtime(
     resolver = GatewayPrincipalResolver(store=store, project_id=project.project.id)
     token_verifier = GatewayTokenVerifier(store=store, project_id=project.project.id)
     coordinated_runtime = _ReauthCoordinatingRuntime(runtime, service=service)
-    operator_service = (
+    development_operator_service = (
         None
         if operator_approval is None or action_coordinator is None or action_dependencies is None
         else LocalDevelopmentOperatorApprovalService(
@@ -422,11 +448,25 @@ def create_gateway_runtime(
             ),
         )
     )
+    production_operator_service = (
+        None
+        if production_operator_approval is None
+        or action_coordinator is None
+        or action_dependencies is None
+        or not isinstance(store, SQLiteGatewaySessionVault)
+        else ProductionOperatorApprovalService(
+            config=production_operator_approval,
+            coordinator=action_coordinator,
+            authority=cast(SQLiteApprovalAuthority, action_dependencies.approval_authority),
+            session_store=store,
+        )
+    )
+    operator_observer = production_operator_service or development_operator_service
     mcp_server = PrincipalCapabilityMcpServer(
         coordinated_runtime,
         resolver=resolver,
         action_coordinator=action_coordinator,
-        action_prepare_observer=operator_service,
+        action_prepare_observer=operator_observer,
     )
     runtime_info = GatewayRuntimeInfo(
         pack_sha256=loaded.verification.sha256,
@@ -444,7 +484,8 @@ def create_gateway_runtime(
         runtime_info=runtime_info,
         max_request_body_size=max_request_body_size,
         mcp_session_idle_timeout_seconds=mcp_session_idle_timeout_seconds,
-        operator_approval_service=operator_service,
+        operator_approval_service=development_operator_service,
+        production_operator_approval_service=production_operator_service,
     )
     return GatewayRuntimeComposition(
         app=app,
