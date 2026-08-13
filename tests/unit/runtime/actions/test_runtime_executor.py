@@ -415,6 +415,82 @@ def _server_serialized_ir() -> dict[str, Any]:
     return ir
 
 
+def _source_key_outcome_ir() -> dict[str, Any]:
+    ir = _ir()
+    status_document = _operation(read=True)
+    status_document["id"] = "orders.outcome"
+    status_document["title"] = "orders.outcome"
+    status_document["input_schema"] = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "idempotency_key": {"type": "string"},
+            "tenant_id": {"type": "string"},
+        },
+        "required": ["idempotency_key", "tenant_id"],
+    }
+    status_document["http"]["path"] = "/action-outcomes/{idempotency_key}"
+    status_document["http"]["path_parameters"] = {"idempotency_key": "idempotency_key"}
+    status_document["http"]["query_parameters"] = {"tenant": "tenant_id"}
+    ir["operations"]["orders.outcome"] = status_document
+    capability = ActionCapabilityV2.model_validate(
+        ir["capabilities"]["orders.change"]["definition"]
+    )
+    operations: dict[str, OperationV2] = {
+        operation_id: (
+            ReadOperationV2.model_validate(document)
+            if document["kind"] == "read"
+            else ActionOperationV2.model_validate(document)
+        )
+        for operation_id, document in ir["operations"].items()
+    }
+    mutation = operations["orders.update"]
+    assert isinstance(mutation, ActionOperationV2)
+    semantics = ActionSemantics.model_validate(
+        {
+            "method": mutation.http.method,
+            **mutation.http.safety.model_dump(mode="json"),
+            "outcome_resolution": {
+                "mode": "status_query",
+                "operation_id": "orders.outcome",
+                "request_bindings": [
+                    {
+                        "target": "idempotency_key",
+                        "source": "runtime_idempotency_key",
+                    }
+                ],
+                "success_pointer": "/status",
+                "success_values": ["approved"],
+            },
+            "evidence": mutation.evidence[0].model_dump(mode="json"),
+            "authority": "implementation",
+        }
+    )
+    proof = prove_action_capability(
+        capability,
+        operations,
+        action_semantics={"orders.update": semantics},
+        policy=Policy.model_validate(ir["policies"]["orders-write"]),
+    )
+    assert proof.ok
+    ir["capabilities"]["orders.change"]["operation_dependencies"] = [
+        "orders.get",
+        "orders.outcome",
+        "orders.update",
+    ]
+    ir["capabilities"]["orders.change"]["action_proof"] = {
+        "approval_required": proof.approval_required,
+        "effects": list(proof.effects),
+        "maximum_risk": proof.maximum_risk,
+        "mutation_operation_ids": list(proof.mutation_operation_ids),
+        "operation_semantics": {
+            "orders.update": compile_action_semantics_attestation(mutation, semantics)
+        },
+        "required_scopes": list(proof.required_scopes),
+    }
+    return ir
+
+
 def _local_development_guard_ir() -> dict[str, Any]:
     ir = _ir()
     capability_document = cast(dict[str, Any], ir["capabilities"]["orders.change"]["definition"])
@@ -692,6 +768,58 @@ class _StatefulLocalProvider(_Provider):
         )
         self.status = "approved"
         return result
+
+
+@dataclass
+class _OutcomeLedgerProvider(_Provider):
+    ledger_status: str = "not_found"
+    lose_mutation_response: bool = True
+
+    async def call_read(
+        self,
+        operation: ReadOperationV2,
+        arguments: Mapping[str, JsonValue],
+        principal_context: PrincipalContext,
+    ) -> ActionReadResult:
+        if operation.id != "orders.outcome":
+            return await super().call_read(operation, arguments, principal_context)
+        self.read_calls.append((operation, dict(arguments), principal_context))
+        return ActionReadResult(
+            value={
+                "order_id": "order-1",
+                "status": self.ledger_status,
+                "version": 4,
+                "internal": "provider-private",
+            }
+        )
+
+    async def call_action(
+        self,
+        operation: ActionOperationV2,
+        arguments: Mapping[str, JsonValue],
+        principal_context: PrincipalContext,
+        *,
+        idempotency_key: SecretValue,
+        concurrency_token: JsonValue,
+    ) -> JsonValue:
+        self.action_calls.append(
+            (
+                operation,
+                dict(arguments),
+                principal_context,
+                idempotency_key,
+                concurrency_token,
+            )
+        )
+        self.ledger_status = "approved"
+        if self.lose_mutation_response:
+            raise RuntimeError("private-lost-mutation-response")
+        return {
+            "order_id": "order-1",
+            "status": "approved",
+            "version": 4,
+            "internal": "provider-private",
+        }
 
 
 def _local_execution(*, key: str = "runtime-idempotency") -> ActionCommitExecution:
@@ -1214,6 +1342,91 @@ def _server_serialized_coordinator(
         ),
     )
     return coordinator, authority
+
+
+def _source_key_outcome_coordinator(
+    provider: _OutcomeLedgerProvider,
+    *,
+    store: InMemoryActionStore | None = None,
+    authority: InMemoryApprovalAuthority | None = None,
+) -> tuple[Any, InMemoryApprovalAuthority]:
+    selected_authority = authority or InMemoryApprovalAuthority(development_only=True)
+    coordinator = create_runtime_action_coordinator(
+        _source_key_outcome_ir(),
+        pack_digest="sha256:" + "a" * 64,
+        provider=provider,
+        dependencies=ActionRuntimeDependencies(
+            deployment_policy=DeploymentPolicy(
+                allowed_effects=frozenset({"read", "update"}),
+                max_risk="medium",
+                capability_allowlist=frozenset({"orders.change"}),
+                require_durable_action_store=False,
+                action_audit_mode="best_effort",
+            ),
+            store=store or InMemoryActionStore(development_only=True),
+            approval_authority=selected_authority,
+            audit_sink=_ActionAudit(),
+            audit_salt=b"source-key-outcome-audit-salt",
+        ),
+    )
+    return coordinator, selected_authority
+
+
+@pytest.mark.asyncio
+async def test_source_key_lost_response_recovers_from_sealed_key_without_replay() -> None:
+    provider = _OutcomeLedgerProvider()
+    store = InMemoryActionStore(development_only=True)
+    coordinator, authority = _source_key_outcome_coordinator(provider, store=store)
+    principal = _principal()
+    prepared = await coordinator.prepare("orders.change", {"order_id": "order-1"}, principal)
+    binding = await coordinator.approval_binding_for_trusted_host(prepared.action_handle, principal)
+    approval = await authority.issue_for_testing(binding, expires_in_seconds=60)
+    await coordinator.approve(prepared.action_handle, approval, principal)
+
+    with pytest.raises(ActionStateConflictError) as captured:
+        await coordinator.commit(prepared.action_handle, principal)
+
+    assert "private-lost-mutation-response" not in str(captured.value)
+    assert len(provider.action_calls) == 1
+    # Reconstructing the coordinator simulates a Gateway restart; recovery has
+    # no caller-provided mutation arguments or idempotency material.
+    restarted, _ = _source_key_outcome_coordinator(provider, store=store, authority=authority)
+    recovered = await restarted.status(prepared.action_handle, principal)
+
+    assert recovered.status is PreparedActionStatus.SUCCEEDED
+    assert recovered.result == {
+        "order_id": "order-1",
+        "status": "approved",
+        "version": 4,
+    }
+    assert len(provider.action_calls) == 1
+    outcome_call = [call for call in provider.read_calls if call[0].id == "orders.outcome"]
+    sealed_key = provider.action_calls[0][3].get_secret_value()
+    assert outcome_call[-1][1]["idempotency_key"] == sealed_key
+    assert sealed_key not in repr(recovered)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ledger_status", ["pending", "not_found"])
+async def test_source_key_unresolved_ledger_status_stays_unknown(
+    ledger_status: str,
+) -> None:
+    provider = _OutcomeLedgerProvider()
+    coordinator, authority = _source_key_outcome_coordinator(provider)
+    principal = _principal()
+    prepared = await coordinator.prepare("orders.change", {"order_id": "order-1"}, principal)
+    binding = await coordinator.approval_binding_for_trusted_host(prepared.action_handle, principal)
+    approval = await authority.issue_for_testing(binding, expires_in_seconds=60)
+    await coordinator.approve(prepared.action_handle, approval, principal)
+    with pytest.raises(ActionStateConflictError):
+        await coordinator.commit(prepared.action_handle, principal)
+    provider.ledger_status = ledger_status
+
+    unresolved = await coordinator.status(prepared.action_handle, principal)
+
+    assert unresolved.status is PreparedActionStatus.OUTCOME_UNKNOWN
+    assert unresolved.result is None
+    assert len(provider.action_calls) == 1
 
 
 @pytest.mark.asyncio

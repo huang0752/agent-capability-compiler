@@ -20,6 +20,7 @@ from acc_core.models.actions import (
     Reversibility,
     Risk,
     ServerSerializedStatePredicateV2,
+    StatusQueryOutcomeResolutionV2,
 )
 
 
@@ -116,6 +117,32 @@ class ActionSemantics(StrictModel):
     def validate_replay_contract(self) -> Self:
         if self.retry.mode == "idempotent_only" and self.idempotency.mode != "source_key":
             raise ValueError("idempotent_only mutation retry requires source_key idempotency")
+        if isinstance(self.outcome_resolution, StatusQueryOutcomeResolutionV2):
+            source_key = self.idempotency.mode == "source_key"
+            has_success_contract = (
+                self.outcome_resolution.success_pointer is not None
+                and self.outcome_resolution.success_values is not None
+            )
+            runtime_bindings = [
+                binding
+                for binding in self.outcome_resolution.request_bindings
+                if binding.source == "runtime_idempotency_key"
+            ]
+            if source_key and (not has_success_contract or len(runtime_bindings) != 1):
+                raise ValueError(
+                    "source-key status query requires one runtime key binding and success contract"
+                )
+            if not source_key and (has_success_contract or runtime_bindings):
+                raise ValueError(
+                    "status query success contract and runtime key binding "
+                    "require source_key idempotency"
+                )
+            if (self.outcome_resolution.success_pointer is None) != (
+                self.outcome_resolution.success_values is None
+            ):
+                raise ValueError(
+                    "status query success pointer and values must be declared together"
+                )
         if isinstance(self.concurrency, ServerSerializedStatePredicateV2):
             if self.outcome_resolution is None or self.outcome_resolution.mode != "status_query":
                 raise ValueError(

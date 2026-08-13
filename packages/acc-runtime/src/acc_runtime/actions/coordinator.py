@@ -94,6 +94,30 @@ class ActionCommitExecution:
     idempotent_result: JsonValue = field(default=None, repr=False)
 
 
+@dataclass(frozen=True, slots=True)
+class ActionOutcomeRecovery:
+    """Result of a read-only source-ledger recovery attempt."""
+
+    resolved: bool
+    result: JsonValue = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.resolved, bool):
+            raise TypeError("resolved must be bool")
+        if not self.resolved and self.result is not None:
+            raise ValueError("unresolved recovery cannot contain a result")
+
+
+@runtime_checkable
+class ActionOutcomeResolver(Protocol):
+    async def resolve_unknown_outcome(
+        self,
+        capability: ActionCapabilityV2,
+        execution: ActionCommitExecution,
+        principal_context: PrincipalContext,
+    ) -> ActionOutcomeRecovery: ...
+
+
 @runtime_checkable
 class ActionWorkflowExecutor(Protocol):
     def verified_definition(self, capability_id: str) -> CompiledActionDefinition: ...
@@ -610,6 +634,57 @@ class ActionCoordinator:
         definition = self._definition(state.record.capability_id)
         self._authorize(definition, principal_context)
         result: JsonValue = None
+        if state.record.status is PreparedActionStatus.OUTCOME_UNKNOWN and isinstance(
+            self._executor, ActionOutcomeResolver
+        ):
+            preview_value, token, idempotency_key, idempotent_terminal, idempotent_result = (
+                _unseal_preview(state.preview_value)
+            )
+            execution = ActionCommitExecution(
+                input_value=_canonical_copy(state.input_value, error_type=ActionStateConflictError),
+                preview_value=preview_value,
+                concurrency_token=token,
+                idempotency_key=SecretValue(idempotency_key),
+                idempotent_terminal=idempotent_terminal,
+                idempotent_result=idempotent_result,
+            )
+            try:
+                recovery = await self._executor.resolve_unknown_outcome(
+                    definition.capability,
+                    execution,
+                    principal_context,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                recovery = ActionOutcomeRecovery(resolved=False)
+            if not isinstance(recovery, ActionOutcomeRecovery):
+                raise ActionStateConflictError("Action outcome recovery result is invalid")
+            if recovery.resolved:
+                safe_result = _canonical_copy(recovery.result, error_type=ActionStateConflictError)
+                if next(
+                    Draft202012Validator(definition.capability.output_schema).iter_errors(
+                        safe_result
+                    ),
+                    None,
+                ):
+                    raise ActionStateConflictError("Action outcome recovery result is invalid")
+                try:
+                    state = await self._store.transition(
+                        action_handle,
+                        principal_id=principal_context.principal_id,
+                        session_id=principal_context.gateway_session_id,
+                        pack_digest=self._pack_digest,
+                        expected=PreparedActionStatus.OUTCOME_UNKNOWN,
+                        target=PreparedActionStatus.SUCCEEDED,
+                        result_value=safe_result,
+                    )
+                except ActionStateConflictError:
+                    # Another status caller may have won the same recovery CAS.
+                    # Accept only its already-validated durable success result.
+                    state = await self._resolve(action_handle, principal_context)
+                    if state.record.status is not PreparedActionStatus.SUCCEEDED:
+                        raise
         if state.record.status is PreparedActionStatus.SUCCEEDED:
             result = copy.deepcopy(state.result_value)
         return _public_status(state, result=result)
@@ -718,6 +793,7 @@ class ActionCoordinator:
         if (
             not isinstance(value, str)
             or not value
+            or len(value.encode("utf-8")) > 200
             or value != value.strip()
             or any(unicodedata.category(character) in {"Cc", "Cs"} for character in value)
         ):
@@ -798,6 +874,8 @@ __all__ = [
     "ActionDeploymentConfigurationError",
     "ActionDeploymentDeniedError",
     "ActionInputInvalidError",
+    "ActionOutcomeRecovery",
+    "ActionOutcomeResolver",
     "ActionPreviewExecution",
     "ActionPreviewInvalidError",
     "ActionScopeDeniedError",

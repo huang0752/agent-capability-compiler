@@ -903,16 +903,27 @@ def test_status_query_binding_proof_is_not_limited_to_server_serialized_actions(
         "outcome_resolution": {
             "mode": "status_query",
             "operation_id": "orders.get",
+            "request_bindings": [{"target": "order_id", "source": "runtime_idempotency_key"}],
+            "success_pointer": "/status",
+            "success_values": ["succeeded"],
         },
         "evidence": mutation.evidence[0].model_dump(mode="json"),
         "authority": "implementation",
     }
     semantics = ActionSemantics.model_validate(semantics_document)
+    status_operation_document = _operation("orders.get", effect="read").model_dump(
+        mode="json", by_alias=True
+    )
+    status_operation_document["output_schema"] = {
+        "type": "object",
+        "properties": {"status": {"type": "string"}},
+        "required": ["status"],
+    }
 
     proof = prove_action_capability(
         _capability(),
         {
-            "orders.get": _operation("orders.get", effect="read"),
+            "orders.get": ReadOperationV2.model_validate(status_operation_document),
             "orders.update": mutation,
         },
         action_semantics={"orders.update": semantics},
@@ -920,6 +931,45 @@ def test_status_query_binding_proof_is_not_limited_to_server_serialized_actions(
 
     assert proof.ok
     assert proof.strategy_operation_ids == ("orders.get",)
+
+
+def test_runtime_idempotency_status_binding_rejects_non_string_target() -> None:
+    mutation = _operation("orders.update", effect="update")
+    assert isinstance(mutation, ActionOperationV2)
+    semantics = ActionSemantics.model_validate(
+        {
+            "method": mutation.http.method,
+            **mutation.http.safety.model_dump(mode="json"),
+            "outcome_resolution": {
+                "mode": "status_query",
+                "operation_id": "orders.get",
+                "request_bindings": [{"target": "order_id", "source": "runtime_idempotency_key"}],
+                "success_pointer": "/status",
+                "success_values": ["succeeded"],
+            },
+            "evidence": mutation.evidence[0].model_dump(mode="json"),
+            "authority": "implementation",
+        }
+    )
+    status_document = _operation("orders.get", effect="read").model_dump(mode="json", by_alias=True)
+    status_document["input_schema"]["properties"]["order_id"] = {"type": "integer"}
+    status_document["output_schema"] = {
+        "type": "object",
+        "properties": {"status": {"type": "string"}},
+        "required": ["status"],
+    }
+
+    proof = prove_action_capability(
+        _capability(),
+        {
+            "orders.get": ReadOperationV2.model_validate(status_document),
+            "orders.update": mutation,
+        },
+        action_semantics={"orders.update": semantics},
+    )
+
+    assert "ACC_COMPILE_ACTION_STATUS_QUERY_RUNTIME_KEY_TARGET_INVALID" in _codes(proof)
+    assert not proof.ok
 
 
 def test_status_query_rejects_optional_binding_sources_even_for_optional_targets() -> None:

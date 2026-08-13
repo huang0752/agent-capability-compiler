@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import traceback
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import cast
 
@@ -169,6 +169,7 @@ def _coordinator(
     approval: str = "required",
     approval_required: bool = True,
     pack_digest: str = PACK_DIGEST,
+    idempotency_key_generator: Callable[[], str] | None = None,
 ) -> ActionCoordinator:
     capability = _capability(approval=approval)
     selected_executor = executor or FakeExecutor()
@@ -191,7 +192,7 @@ def _coordinator(
         store=store or _store(),
         approval_authority=authority or _authority(),
         executor=selected_executor,
-        idempotency_key_generator=lambda: "idem-private-value",
+        idempotency_key_generator=idempotency_key_generator or (lambda: "idem-private-value"),
     )
 
 
@@ -632,6 +633,18 @@ async def test_default_deployment_policy_denies_action_before_preview() -> None:
             _principal(),
         )
     assert executor.preview_calls == []
+
+
+@pytest.mark.asyncio
+async def test_prepare_rejects_oversized_runtime_idempotency_key() -> None:
+    coordinator = _coordinator(idempotency_key_generator=lambda: "x" * 201)
+
+    with pytest.raises(ActionPreviewInvalidError, match="idempotency key generation failed"):
+        await coordinator.prepare(
+            "orders.update",
+            {"order_id": "order-1", "comment": "approve"},
+            _principal(),
+        )
 
 
 @pytest.mark.asyncio

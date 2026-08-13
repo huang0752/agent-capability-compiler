@@ -23,6 +23,7 @@ from acc_core.models.actions import (
     BodyTokenSourceV2,
     ResponseHeaderTokenSourceV2,
     ServerSerializedStatePredicateV2,
+    SourceKeyIdempotencyV2,
     StateIdempotencyV2,
     StatusQueryOutcomeResolutionV2,
     StatusQueryRequestBindingV2,
@@ -36,6 +37,7 @@ from acc_core.models.v2 import (
 )
 from acc_runtime.actions.coordinator import (
     ActionCommitExecution,
+    ActionOutcomeRecovery,
     ActionPreviewExecution,
     CompiledActionDefinition,
 )
@@ -391,10 +393,47 @@ class RuntimeActionWorkflowExecutor:
                 public_prepared_preview,
                 principal_context,
                 self._provider,
+                idempotency_key=execution.idempotency_key,
             )
         public_result = PolicyEnforcer().filter_output(loaded.policy, raw_result)
         _validate_action_output(loaded, public_result)
         return public_result
+
+    async def resolve_unknown_outcome(
+        self,
+        capability: ActionCapabilityV2,
+        execution: ActionCommitExecution,
+        principal_context: PrincipalContext,
+    ) -> ActionOutcomeRecovery:
+        """Read a source outcome ledger without ever replaying its mutation."""
+
+        loaded = self._load(capability, principal_context)
+        if not isinstance(execution, ActionCommitExecution):
+            raise TypeError("execution must be ActionCommitExecution")
+        if len(loaded.mutation_operation_ids) != 1:
+            raise ActionRuntimeConfigurationError("Compiled Action outcome recovery is invalid")
+        semantics = loaded.semantics.get(loaded.mutation_operation_ids[0])
+        if (
+            semantics is None
+            or not isinstance(semantics.idempotency, SourceKeyIdempotencyV2)
+            or not isinstance(semantics.outcome_resolution, StatusQueryOutcomeResolutionV2)
+        ):
+            return ActionOutcomeRecovery(resolved=False)
+        public_preview = PolicyEnforcer().filter_output(loaded.policy, execution.preview_value)
+        try:
+            result = await _resolve_status_query(
+                loaded,
+                semantics,
+                execution.input_value,
+                public_preview,
+                principal_context,
+                self._provider,
+                idempotency_key=execution.idempotency_key,
+            )
+        except ActionStateConflictError:
+            return ActionOutcomeRecovery(resolved=False)
+        _validate_action_output(loaded, result)
+        return ActionOutcomeRecovery(resolved=True, result=result)
 
     def _load(
         self,
@@ -713,6 +752,8 @@ async def _resolve_status_query(
     preview_value: JsonValue,
     principal_context: PrincipalContext,
     provider: ActionOperationProvider,
+    *,
+    idempotency_key: SecretValue,
 ) -> JsonValue:
     outcome = semantics.outcome_resolution
     if not isinstance(outcome, StatusQueryOutcomeResolutionV2):
@@ -735,10 +776,15 @@ async def _resolve_status_query(
     for binding in bindings:
         if binding.target in operation.context_bindings:
             raise ActionRuntimeConfigurationError("Compiled Action status query is invalid")
-        source = input_value if binding.source == "capability_input" else preview_value
-        found, resolved = _resolve_json_pointer(source, binding.source_pointer)
-        if not found:
-            raise ActionRuntimeConfigurationError("Compiled Action status query is invalid")
+        if binding.source == "runtime_idempotency_key":
+            resolved: JsonValue = idempotency_key.get_secret_value()
+        else:
+            source = input_value if binding.source == "capability_input" else preview_value
+            if binding.source_pointer is None:
+                raise ActionRuntimeConfigurationError("Compiled Action status query is invalid")
+            found, resolved = _resolve_json_pointer(source, binding.source_pointer)
+            if not found:
+                raise ActionRuntimeConfigurationError("Compiled Action status query is invalid")
         arguments[binding.target] = resolved
     caller = _ActionOperationCaller(
         provider=provider,
@@ -753,6 +799,14 @@ async def _resolve_status_query(
         arguments,
     )
     idempotency = semantics.idempotency
+    if isinstance(idempotency, SourceKeyIdempotencyV2):
+        if outcome.success_pointer is None or outcome.success_values is None:
+            raise ActionRuntimeConfigurationError("Compiled Action status query is invalid")
+        found, success = _resolve_json_pointer(value, outcome.success_pointer)
+        success_values = {canonical_json_bytes(item) for item in outcome.success_values}
+        if not found or canonical_json_bytes(success) not in success_values:
+            raise ActionStateConflictError("Action commit outcome is unknown")
+        return PolicyEnforcer().filter_output(loaded.policy, value)
     if not isinstance(idempotency, StateIdempotencyV2):
         raise ActionRuntimeConfigurationError("Compiled Action status query is invalid")
     found, state = _resolve_json_pointer(value, idempotency.state_pointer)

@@ -9,6 +9,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal, cast
 
+from jsonschema import Draft202012Validator
 from pydantic import JsonValue, ValidationError
 
 from acc_core.contracts import ActionSemantics
@@ -353,13 +354,44 @@ def _prove_status_query_bindings(
                 pointer=f"{binding_pointer}/target",
             )
             continue
+        if binding.source == "runtime_idempotency_key":
+            if (
+                compare_operation_output(
+                    {"type": "string", "minLength": 1, "maxLength": 200},
+                    target_schema,
+                ).relation
+                is not SchemaRelation.PROVEN
+            ):
+                _diagnostic(
+                    diagnostics,
+                    code="ACC_COMPILE_ACTION_STATUS_QUERY_RUNTIME_KEY_TARGET_INVALID",
+                    message=(
+                        "A Runtime idempotency key status binding requires a proven "
+                        "string-compatible target."
+                    ),
+                    path=path,
+                    pointer=binding_pointer,
+                )
+                continue
+            constructed.add(binding.target)
+            continue
+        source_pointer = binding.source_pointer
+        if source_pointer is None:  # model validation normally makes this unreachable
+            _diagnostic(
+                diagnostics,
+                code="ACC_COMPILE_ACTION_STATUS_QUERY_BINDING_SOURCE_INVALID",
+                message="A sealed status query binding requires a source pointer.",
+                path=path,
+                pointer=f"{binding_pointer}/source_pointer",
+            )
+            continue
         source_root = (
             capability.input_schema if binding.source == "capability_input" else preview_schema
         )
         if binding.source == "prepared_preview" and (
             policy is None
             or policy.id != capability.policy
-            or not _policy_discloses_unmodified(policy, binding.source_pointer)
+            or not _policy_discloses_unmodified(policy, source_pointer)
         ):
             _diagnostic(
                 diagnostics,
@@ -381,10 +413,8 @@ def _prove_status_query_bindings(
                 pointer=f"{binding_pointer}/source_pointer",
             )
             continue
-        source_schema = _schema_at_data_pointer(source_root, binding.source_pointer)
-        if source_schema is None or not _schema_pointer_is_guaranteed(
-            source_root, binding.source_pointer
-        ):
+        source_schema = _schema_at_data_pointer(source_root, source_pointer)
+        if source_schema is None or not _schema_pointer_is_guaranteed(source_root, source_pointer):
             _diagnostic(
                 diagnostics,
                 code="ACC_COMPILE_ACTION_STATUS_QUERY_BINDING_SOURCE_INVALID",
@@ -406,6 +436,30 @@ def _prove_status_query_bindings(
             )
             continue
         constructed.add(binding.target)
+
+    if outcome.success_pointer is not None and outcome.success_values is not None:
+        success_schema = _schema_at_data_pointer(operation.output_schema, outcome.success_pointer)
+        if success_schema is None or not _schema_pointer_is_guaranteed(
+            operation.output_schema, outcome.success_pointer
+        ):
+            _diagnostic(
+                diagnostics,
+                code="ACC_COMPILE_ACTION_STATUS_QUERY_SUCCESS_FIELD_UNPROVEN",
+                message="The status query success field must be guaranteed by its output schema.",
+                path=path,
+                pointer="/commit_workflow/status_query/success_pointer",
+            )
+        elif any(
+            next(Draft202012Validator(success_schema).iter_errors(value), None) is not None
+            for value in outcome.success_values
+        ):
+            _diagnostic(
+                diagnostics,
+                code="ACC_COMPILE_ACTION_STATUS_QUERY_SUCCESS_VALUE_INVALID",
+                message="Every declared success value must satisfy the success field schema.",
+                path=path,
+                pointer="/commit_workflow/status_query/success_values",
+            )
 
     for target in sorted(required - constructed):
         _diagnostic(

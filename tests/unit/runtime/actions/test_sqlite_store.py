@@ -193,6 +193,34 @@ async def test_payload_is_canonical_and_secrets_are_not_persisted(tmp_path: Path
 
 
 @pytest.mark.asyncio
+async def test_unknown_outcome_can_recover_to_succeeded_after_reopen(tmp_path: Path) -> None:
+    database = tmp_path / "actions.db"
+    first = _store(database)
+    creation = await _create(first)
+    handle = creation.handle
+    for expected, target in (
+        (PreparedActionStatus.PREPARED, PreparedActionStatus.APPROVED),
+        (PreparedActionStatus.APPROVED, PreparedActionStatus.COMMITTING),
+        (PreparedActionStatus.COMMITTING, PreparedActionStatus.OUTCOME_UNKNOWN),
+    ):
+        await first.transition(handle, expected=expected, target=target, **_bindings())
+    await first.close()
+
+    restarted = _store(database)
+    recovered = await restarted.transition(
+        handle,
+        expected=PreparedActionStatus.OUTCOME_UNKNOWN,
+        target=PreparedActionStatus.SUCCEEDED,
+        result_value={"receipt": "source-ledger"},
+        **_bindings(),
+    )
+
+    assert recovered.record.status is PreparedActionStatus.SUCCEEDED
+    assert recovered.result_value == {"receipt": "source-ledger"}
+    await restarted.close()
+
+
+@pytest.mark.asyncio
 async def test_expiry_is_persisted_across_restart(tmp_path: Path) -> None:
     now = [100.0]
     database = tmp_path / "actions.db"

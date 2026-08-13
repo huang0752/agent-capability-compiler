@@ -656,6 +656,34 @@
           },
           "title": "Request Bindings",
           "type": "array"
+        },
+        "success_pointer": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Success Pointer"
+        },
+        "success_values": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Success Values"
         }
       },
       "required": [
@@ -672,15 +700,24 @@
         "source": {
           "enum": [
             "capability_input",
-            "prepared_preview"
+            "prepared_preview",
+            "runtime_idempotency_key"
           ],
           "title": "Source",
           "type": "string"
         },
         "source_pointer": {
-          "minLength": 1,
-          "title": "Source Pointer",
-          "type": "string"
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Pointer"
         },
         "target": {
           "minLength": 1,
@@ -690,8 +727,7 @@
       },
       "required": [
         "target",
-        "source",
-        "source_pointer"
+        "source"
       ],
       "title": "StatusQueryRequestBindingV2",
       "type": "object"
