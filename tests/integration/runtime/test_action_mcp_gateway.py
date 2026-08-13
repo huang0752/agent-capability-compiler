@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import base64
-from collections.abc import Mapping
+from argparse import Namespace
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import cast
@@ -12,6 +13,7 @@ from mcp import types
 from pydantic import JsonValue, SecretStr
 from starlette.applications import Starlette
 
+from acc_core.cli.main import _development_action_dependencies
 from acc_core.compiler.actions import ActionProof
 from acc_core.models.v2 import ActionCapabilityV2
 from acc_runtime.actions import (
@@ -32,6 +34,10 @@ from acc_runtime.deployment import DeploymentPolicy
 from acc_runtime.gateway.app import create_gateway_app
 from acc_runtime.gateway.auth import GatewayPrincipalResolver, GatewayTokenVerifier
 from acc_runtime.gateway.models import GatewayRuntimeInfo, GatewaySettings, SessionCreateResponse
+from acc_runtime.gateway.operator import (
+    LocalDevelopmentOperatorApprovalConfig,
+    LocalDevelopmentOperatorApprovalService,
+)
 from acc_runtime.gateway.runtime import create_gateway_runtime
 from acc_runtime.gateway.sessions import InMemoryGatewaySessionStore
 from acc_runtime.mcp import PrincipalCapabilityMcpServer
@@ -143,7 +149,11 @@ class _Executor(ActionWorkflowExecutor):
         }
 
 
-def _coordinator() -> tuple[ActionCoordinator, InMemoryApprovalAuthority, _Executor]:
+def _coordinator(
+    *,
+    approval_required: bool = True,
+    dependencies: ActionRuntimeDependencies | None = None,
+) -> tuple[ActionCoordinator, InMemoryApprovalAuthority, _Executor]:
     capability = ActionCapabilityV2.model_validate(
         {
             "schema_version": "2",
@@ -160,7 +170,7 @@ def _coordinator() -> tuple[ActionCoordinator, InMemoryApprovalAuthority, _Execu
             "output_schema": {"type": "object"},
             "action": {
                 "execution_mode": "single",
-                "approval": {"mode": "required"},
+                "approval": {"mode": "required" if approval_required else "not_required"},
                 "expires_in_seconds": 300,
             },
             "preview_workflow": [{"emit": {"value": None}}],
@@ -177,36 +187,52 @@ def _coordinator() -> tuple[ActionCoordinator, InMemoryApprovalAuthority, _Execu
             effects=("update",),
             maximum_risk="medium",
             required_scopes=("orders.read", "orders.write"),
-            approval_required=True,
+            approval_required=approval_required,
         ),
     )
     executor = _Executor(definitions={capability.id: definition})
     action_handles = iter(("h" * 43, "i" * 43))
     approvals = iter(("p" * 43, "q" * 43))
-    authority = InMemoryApprovalAuthority(
-        development_only=True,
-        clock=lambda: 100.0,
-        handle_generator=lambda: next(approvals),
+    authority = (
+        InMemoryApprovalAuthority(
+            development_only=True,
+            clock=lambda: 100.0,
+            handle_generator=lambda: next(approvals),
+        )
+        if dependencies is None
+        else cast(InMemoryApprovalAuthority, dependencies.approval_authority)
     )
-    coordinator = ActionCoordinator(
-        definitions={capability.id: definition},
-        pack_digest=PACK_DIGEST,
-        deployment_policy=DeploymentPolicy(
+    deployment_policy = (
+        DeploymentPolicy(
             allowed_effects=frozenset({"read", "update"}),
             max_risk="medium",
             capability_allowlist=frozenset({capability.id}),
             require_durable_action_store=False,
             action_audit_mode="best_effort",
-        ),
-        store=InMemoryActionStore(
+        )
+        if dependencies is None
+        else dependencies.deployment_policy
+    )
+    store = (
+        InMemoryActionStore(
             development_only=True,
             deployment_salt=b"action-mcp-gateway-test-salt",
             clock=lambda: 100.0,
             handle_generator=lambda: next(action_handles),
-        ),
+        )
+        if dependencies is None
+        else dependencies.store
+    )
+    coordinator = ActionCoordinator(
+        definitions={capability.id: definition},
+        pack_digest=PACK_DIGEST,
+        deployment_policy=deployment_policy,
+        store=store,
         approval_authority=authority,
         executor=executor,
         idempotency_key_generator=lambda: PRIVATE_IDEMPOTENCY_KEY,
+        action_audit_sink=(None if dependencies is None else dependencies.audit_sink),
+        action_audit_salt=(None if dependencies is None else dependencies.audit_salt),
     )
     return coordinator, authority, executor
 
@@ -217,6 +243,9 @@ def _token(seed: int) -> str:
 
 def _build_app(
     coordinator: ActionCoordinator,
+    *,
+    authority: InMemoryApprovalAuthority | None = None,
+    operator_secret: str | None = None,
 ) -> Starlette:
     tokens = iter((_token(1), _token(2)))
     store = InMemoryGatewaySessionStore(
@@ -226,10 +255,25 @@ def _build_app(
     )
     service = _SessionService(store)
     resolver = GatewayPrincipalResolver(store=store, project_id="orders-system")
+    operator_service = (
+        None
+        if authority is None or operator_secret is None
+        else LocalDevelopmentOperatorApprovalService(
+            config=LocalDevelopmentOperatorApprovalConfig(
+                secret=SecretValue(operator_secret),
+                secret_ref="ACC_TEST_OPERATOR_SECRET",
+            ),
+            coordinator=coordinator,
+            authority=authority,
+            session_store=store,
+            clock=lambda: 100.0,
+        )
+    )
     server = PrincipalCapabilityMcpServer(
         _ReadRuntime(),
         resolver=resolver,
         action_coordinator=coordinator,
+        action_prepare_observer=operator_service,
     )
     return create_gateway_app(
         settings=GatewaySettings(
@@ -247,7 +291,136 @@ def _build_app(
             tool_schema_sha256="b" * 64,
             transport="streamable_http",
         ),
+        operator_approval_service=operator_service,
     )
+
+
+@pytest.mark.anyio
+async def test_loopback_operator_approves_without_exposing_approval_secret_or_mcp_tool() -> None:
+    coordinator, authority, _ = _coordinator()
+    operator_secret = "operator-secret-" + "x" * 40
+    app = _build_app(
+        coordinator,
+        authority=authority,
+        operator_secret=operator_secret,
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with (
+        app.router.lifespan_context(app),
+        GatewaySessionClient("http://gateway.test", transport=transport) as gateway,
+        httpx.AsyncClient(base_url="http://gateway.test", transport=transport) as operator,
+    ):
+        await gateway.login(identity=SecretValue("a"), password=SecretValue("correct-password"))
+        async with gateway.mcp_client() as client:
+            tools = {tool.name for tool in (await client.list_tools()).tools}
+            assert not any("operator" in name for name in tools)
+            prepared = _result(
+                await client.call_tool("orders.update.prepare", {"order_id": "order-1"})
+            )
+        action_handle = cast(str, prepared["action_handle"])
+        unauthorized = await operator.post(
+            "/operator/actions/approve",
+            headers={"content-type": "application/json"},
+            json={"action_handle": action_handle},
+        )
+        wrong_secret = await operator.post(
+            "/operator/actions/approve",
+            headers={
+                "content-type": "application/json",
+                "x-acc-operator-authorization": f"Bearer {'z' * len(operator_secret)}",
+            },
+            json={"action_handle": action_handle},
+        )
+        approved = await operator.post(
+            "/operator/actions/approve",
+            headers={
+                "content-type": "application/json",
+                "x-acc-operator-authorization": f"Bearer {operator_secret}",
+            },
+            json={"action_handle": action_handle},
+        )
+        repeated = await operator.post(
+            "/operator/actions/approve",
+            headers={
+                "content-type": "application/json",
+                "x-acc-operator-authorization": f"Bearer {operator_secret}",
+            },
+            json={"action_handle": action_handle},
+        )
+        async with gateway.mcp_client() as client:
+            revoked_prepared = _result(
+                await client.call_tool("orders.update.prepare", {"order_id": "order-2"})
+            )
+        revoked_handle = cast(str, revoked_prepared["action_handle"])
+        await gateway.logout()
+        revoked = await operator.post(
+            "/operator/actions/approve",
+            headers={
+                "content-type": "application/json",
+                "x-acc-operator-authorization": f"Bearer {operator_secret}",
+            },
+            json={"action_handle": revoked_handle},
+        )
+
+    assert unauthorized.status_code == 401
+    assert wrong_secret.status_code == 401
+    assert approved.status_code == 200
+    assert approved.json() == {"capability_id": "orders.update", "status": "approved"}
+    assert repeated.status_code == 404
+    assert revoked.status_code == 404
+    exposed = repr((approved.json(), repeated.json(), revoked.json()))
+    assert action_handle not in exposed
+    assert operator_secret not in exposed
+
+
+@pytest.mark.anyio
+async def test_operator_endpoint_is_absent_by_default() -> None:
+    coordinator, _, _ = _coordinator()
+    app = _build_app(coordinator)
+    transport = httpx.ASGITransport(app=app)
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(base_url="http://gateway.test", transport=transport) as client,
+    ):
+        response = await client.post(
+            "/operator/actions/approve",
+            headers={"content-type": "application/json"},
+            json={"action_handle": "h" * 43},
+        )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_operator_endpoint_rejects_oversize_and_chunked_bodies_before_json() -> None:
+    coordinator, authority, _ = _coordinator()
+    operator_secret = "operator-secret-" + "x" * 40
+    app = _build_app(
+        coordinator,
+        authority=authority,
+        operator_secret=operator_secret,
+    )
+    transport = httpx.ASGITransport(app=app)
+
+    async def chunks() -> AsyncIterator[bytes]:
+        yield b'{"action_handle":"'
+        yield b"x" * 1100
+        yield b'"}'
+
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(base_url="http://gateway.test", transport=transport) as client,
+    ):
+        response = await client.post(
+            "/operator/actions/approve",
+            headers={
+                "content-type": "application/json",
+                "x-acc-operator-authorization": f"Bearer {operator_secret}",
+            },
+            content=chunks(),
+        )
+
+    assert response.status_code == 413
 
 
 def _principal(identity: str) -> PrincipalContext:
@@ -261,6 +434,40 @@ def _principal(identity: str) -> PrincipalContext:
         scope_mapping={scope: {scope} for scope in scopes},
         tenant_context={"tenant_id": f"tenant-{identity}"},
         auth_state_handle=f"auth-{identity}-1",
+    )
+
+
+@pytest.mark.anyio
+async def test_operator_pending_expiry_translates_action_store_clock_to_monotonic() -> None:
+    """SQLite wall-clock expiries must not become immortal monotonic deadlines."""
+
+    wall_now = [1_700_000_000.0]
+    monotonic_now = [100.0]
+    service = LocalDevelopmentOperatorApprovalService(
+        config=LocalDevelopmentOperatorApprovalConfig(
+            secret=SecretValue("x" * 48),
+            secret_ref="ACC_TEST_OPERATOR_SECRET",
+            max_pending_actions=1,
+        ),
+        coordinator=cast(ActionCoordinator, object()),
+        authority=cast(InMemoryApprovalAuthority, object()),
+        session_store=cast(InMemoryGatewaySessionStore, object()),
+        clock=lambda: wall_now[0],
+        pending_clock=lambda: monotonic_now[0],
+    )
+
+    await service.observe_prepared(
+        SecretValue("h" * 43),
+        _principal("a"),
+        approval_required=True,
+        expires_at=wall_now[0] + 1,
+    )
+    monotonic_now[0] += 2
+    await service.observe_prepared(
+        SecretValue("i" * 43),
+        _principal("a"),
+        approval_required=True,
+        expires_at=wall_now[0] + 1,
     )
 
 
@@ -301,7 +508,7 @@ def test_action_lifecycle_rejects_a_conflicting_read_tool_name(conflicting_name:
         server.list_tools()
 
 
-def test_gateway_runtime_rejects_action_dependencies_for_a_read_only_pack(
+def test_gateway_runtime_enforces_action_ir_dependency_binding(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import acc_runtime.gateway.runtime as gateway_runtime_module
@@ -365,6 +572,48 @@ def test_gateway_runtime_rejects_action_dependencies_for_a_read_only_pack(
         )
 
     assert captured.value.details == {"reason": "action_ir_binding_mismatch"}
+
+    loaded.ir["capabilities"] = {
+        "orders.update": {"definition": {"kind": "action"}},
+    }
+    with pytest.raises(RuntimeConfigurationError) as missing:
+        create_gateway_runtime(
+            pack_path="action.accpkg",
+            settings=GatewaySettings(allowed_hosts=("gateway.test",)),
+            environment={"SOURCE_BASE_URL": "https://source.test"},
+            audit_deployment_salt=b"test-only-deployment-salt",
+        )
+
+    assert missing.value.details == {"reason": "action_deployment_missing"}
+
+    dependencies, _ = _development_action_dependencies(
+        Namespace(
+            development_actions=True,
+            local_development_action_guards=False,
+            action_capability=["orders.update"],
+            action_effect=["update"],
+            action_max_risk="low",
+        )
+    )
+    operator_config = LocalDevelopmentOperatorApprovalConfig(
+        secret=SecretValue("x" * 48),
+        secret_ref="ACC_TEST_OPERATOR_SECRET",
+    )
+    with pytest.raises(RuntimeConfigurationError) as non_loopback:
+        create_gateway_runtime(
+            pack_path="action.accpkg",
+            settings=GatewaySettings(
+                listen_host="192.0.2.1",
+                tls_enabled=True,
+                allowed_hosts=("gateway.test",),
+            ),
+            environment={"SOURCE_BASE_URL": "https://source.test"},
+            audit_deployment_salt=b"test-only-deployment-salt",
+            action_dependencies=cast(ActionRuntimeDependencies, dependencies),
+            operator_approval=operator_config,
+        )
+
+    assert non_loopback.value.details == {"reason": "operator_approval_loopback_required"}
 
 
 @pytest.mark.anyio
@@ -513,7 +762,6 @@ async def test_official_sdk_executes_action_lifecycle_with_replay_and_owner_isol
             assert PRIVATE_IDEMPOTENCY_KEY not in repr(
                 [prepared_result, owner_denied, first, replay, status]
             )
-
             owner_probe = await gateway_b.probe_raw_mcp_session_owner_rejection(
                 cast(str, client_a.session_id)
             )
@@ -529,3 +777,55 @@ async def test_official_sdk_executes_action_lifecycle_with_replay_and_owner_isol
         assert action_handle not in repr(owner_denied)
         assert approval.get_secret_value() not in leaked
         assert PRIVATE_IDEMPOTENCY_KEY not in leaked
+
+
+@pytest.mark.anyio
+async def test_cli_development_dependencies_execute_no_approval_action_lifecycle() -> None:
+    dependencies, safe_configuration = _development_action_dependencies(
+        Namespace(
+            development_actions=True,
+            action_capability=["orders.update"],
+            action_effect=["update"],
+            action_max_risk="medium",
+        )
+    )
+    assert isinstance(dependencies, ActionRuntimeDependencies)
+    assert dependencies.deployment_policy.action_sandbox_mode == "disabled"
+    assert dependencies.resource_lock is None
+    coordinator, _, executor = _coordinator(
+        approval_required=False,
+        dependencies=dependencies,
+    )
+    app = _build_app(coordinator)
+    transport = httpx.ASGITransport(app=app)
+    async with (
+        app.router.lifespan_context(app),
+        GatewaySessionClient("http://gateway.test", transport=transport) as gateway,
+    ):
+        await gateway.login(
+            identity=SecretValue("a"),
+            password=SecretValue("correct-password"),
+        )
+        async with gateway.mcp_client() as client:
+            prepared = _result(
+                await client.call_tool(
+                    "orders.update.prepare",
+                    {"order_id": "order-1"},
+                )
+            )
+            assert prepared["status"] == "approved"
+            assert prepared["approval_required"] is False
+            action_handle = cast(str, prepared["action_handle"])
+            committed = _result(
+                await client.call_tool("acc_action_commit", {"action_handle": action_handle})
+            )
+            status = _result(
+                await client.call_tool("acc_action_status", {"action_handle": action_handle})
+            )
+
+    assert committed["status"] == "succeeded"
+    assert status["status"] == "succeeded"
+    assert len(executor.commit_calls) == 1
+    action_configuration = cast(dict[str, object], safe_configuration["actions"])
+    assert action_configuration["mode"] == "development_test_only"
+    assert action_configuration["local_development_action_guards"] == "disabled"

@@ -7,9 +7,10 @@ import hashlib
 import json
 import os
 import secrets
-from collections.abc import Collection, Mapping
+import time
+from collections.abc import Awaitable, Callable, Collection, Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, cast
 
 import httpx
 from pydantic import JsonValue, ValidationError
@@ -19,6 +20,8 @@ from acc_core.models import PasswordBearerAuthConfig, load_project_document
 from acc_runtime.actions import (
     ActionRuntimeDependencies,
     ActionStore,
+    InMemoryApprovalAuthority,
+    SQLiteActionStore,
     create_runtime_action_coordinator,
 )
 from acc_runtime.auth import AuthUnauthorizedError, PasswordBearerAuthStrategy
@@ -32,15 +35,23 @@ from acc_runtime.gateway.app import (
 from acc_runtime.gateway.audit import AuditCollector, AuditSink, LoggingAuditSink
 from acc_runtime.gateway.auth import GatewayPrincipalResolver, GatewayTokenVerifier
 from acc_runtime.gateway.models import GatewayRuntimeInfo, GatewaySettings, SessionCreateResponse
+from acc_runtime.gateway.operator import (
+    LocalDevelopmentOperatorApprovalConfig,
+    LocalDevelopmentOperatorApprovalService,
+)
 from acc_runtime.gateway.service import GatewaySessionService
 from acc_runtime.gateway.sessions import InMemoryGatewaySessionStore
+from acc_runtime.gateway.sqlite_vault import (
+    GatewaySessionVaultConfig,
+    SQLiteGatewaySessionVault,
+)
 from acc_runtime.loader import load_pack
 from acc_runtime.mcp import (
     PrincipalCapabilityMcpServer,
     listed_tools_sha256,
     project_mcp_output_schema,
 )
-from acc_runtime.providers import HttpProvider
+from acc_runtime.providers import HttpProvider, JsonApplicationSuccessPolicy
 
 if TYPE_CHECKING:
     from acc_runtime.runtime import GenericRuntime
@@ -105,7 +116,7 @@ class _ReauthCoordinatingRuntime:
 class _OwnedGatewayService:
     """Give the ASGI lifespan sole, idempotent ownership of runtime resources."""
 
-    __slots__ = ("_action_store", "_close_lock", "_closed", "_runtime", "_service")
+    __slots__ = ("_action_resources", "_close_lock", "_closed", "_runtime", "_service")
 
     def __init__(
         self,
@@ -113,15 +124,24 @@ class _OwnedGatewayService:
         runtime: GenericRuntime,
         *,
         action_store: ActionStore | None = None,
+        action_resources: Collection[object] = (),
     ) -> None:
         self._service = service
         self._runtime = runtime
-        self._action_store = action_store
+        resources = ((action_store,) if action_store is not None else ()) + tuple(action_resources)
+        self._action_resources = tuple(
+            resource
+            for index, resource in enumerate(resources)
+            if all(resource is not previous for previous in resources[:index])
+        )
         self._close_lock = asyncio.Lock()
         self._closed = False
 
     async def create_session(self, *, identity: str, password: str) -> SessionCreateResponse:
         return await self._service.create_session(identity=identity, password=password)
+
+    async def startup(self) -> None:
+        await self._service.startup()
 
     async def delete_current(self, token: str) -> None:
         await self._service.delete_current(token)
@@ -131,14 +151,24 @@ class _OwnedGatewayService:
             if self._closed:
                 return
             self._closed = True
-        try:
-            await self._service.aclose()
-        finally:
+        failures: list[BaseException] = []
+        for close in (self._service.aclose, self._runtime.aclose):
             try:
-                await self._runtime.aclose()
-            finally:
-                if self._action_store is not None:
-                    await self._action_store.close()
+                await close()
+            except BaseException as error:
+                failures.append(error)
+        for resource in reversed(self._action_resources):
+            close_action = cast(
+                Callable[[], Awaitable[object]] | None, getattr(resource, "close", None)
+            )
+            if close_action is None:
+                continue
+            try:
+                await close_action()
+            except BaseException as error:
+                failures.append(error)
+        if failures:
+            raise failures[0]
 
 
 class GatewayRuntimeComposition:
@@ -223,6 +253,9 @@ def create_gateway_runtime(
     auth_client_factory: AsyncClientFactory | None = None,
     provider_client: httpx.AsyncClient | None = None,
     action_dependencies: ActionRuntimeDependencies | None = None,
+    operator_approval: LocalDevelopmentOperatorApprovalConfig | None = None,
+    application_success_policy: JsonApplicationSuccessPolicy | None = None,
+    session_vault: GatewaySessionVaultConfig | None = None,
 ) -> GatewayRuntimeComposition:
     """Assemble a verified Gateway and own any supplied Action deployment Store."""
 
@@ -252,16 +285,25 @@ def create_gateway_runtime(
             details={"reason": "authentication_base_url_missing"},
         )
 
+    gateway_clock = time.time if session_vault is not None else time.monotonic
     strategy = PasswordBearerAuthStrategy(
         config=auth,
         base_url=base_url,
         credential_source=None,
         client_factory=auth_client_factory,
+        clock=gateway_clock,
+    )
+    declared_success = project.provider.application_success
+    effective_success_policy = application_success_policy or (
+        JsonApplicationSuccessPolicy.from_config(declared_success)
+        if declared_success is not None
+        else None
     )
     provider = HttpProvider(
         base_url_ref=project.provider.base_url_ref,
         auth_strategy=strategy,
         environment=source,
+        application_success_policy=effective_success_policy,
         client=provider_client,
     )
     collector = AuditCollector(
@@ -285,6 +327,22 @@ def create_gateway_runtime(
             "Action deployment dependencies require an Action Pack.",
             details={"reason": "action_ir_binding_mismatch"},
         )
+    if operator_approval is not None:
+        if action_dependencies is None:
+            raise RuntimeConfigurationError(
+                "Operator approval requires development Action dependencies.",
+                details={"reason": "operator_approval_actions_required"},
+            )
+        if not settings.listen_host.startswith("127.") and settings.listen_host != "::1":
+            raise RuntimeConfigurationError(
+                "Development operator approval requires a loopback listener.",
+                details={"reason": "operator_approval_loopback_required"},
+            )
+        if not isinstance(action_dependencies.approval_authority, InMemoryApprovalAuthority):
+            raise RuntimeConfigurationError(
+                "Development operator approval requires the in-memory authority.",
+                details={"reason": "operator_approval_authority_invalid"},
+            )
     action_coordinator = None
     if action_dependencies is not None:
         action_coordinator = create_runtime_action_coordinator(
@@ -293,9 +351,34 @@ def create_gateway_runtime(
             provider=provider,
             dependencies=action_dependencies,
         )
-    store = InMemoryGatewaySessionStore(
-        max_sessions=settings.max_sessions,
-        ttl_seconds=settings.session_ttl_seconds,
+    scope_mapping_bytes = json.dumps(
+        auth.model_dump(mode="json").get("scope_mapping", {}),
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+    scope_ceiling_bytes = json.dumps(
+        sorted(deployment_scope_ceiling), separators=(",", ":")
+    ).encode()
+    store = (
+        InMemoryGatewaySessionStore(
+            max_sessions=settings.max_sessions,
+            ttl_seconds=settings.session_ttl_seconds,
+        )
+        if session_vault is None
+        else SQLiteGatewaySessionVault(
+            session_vault.db_path,
+            project_id=project.project.id,
+            pack_sha256=loaded.verification.sha256,
+            scope_mapping_sha256=hashlib.sha256(scope_mapping_bytes).hexdigest(),
+            scope_ceiling_sha256=hashlib.sha256(scope_ceiling_bytes).hexdigest(),
+            kek=session_vault.kek,
+            deployment_salt=session_vault.deployment_salt,
+            max_sessions=settings.max_sessions,
+            ttl_seconds=settings.session_ttl_seconds,
+            clock=gateway_clock,
+        )
     )
     service = GatewaySessionService(
         auth_strategy=strategy,
@@ -303,19 +386,47 @@ def create_gateway_runtime(
         store=store,
         target_system_id=project.project.id,
         deployment_scope_ceiling=deployment_scope_ceiling,
+        clock=gateway_clock,
     )
     owned_service = _OwnedGatewayService(
         service,
         runtime,
         action_store=(None if action_dependencies is None else action_dependencies.store),
+        action_resources=(
+            ()
+            if action_dependencies is None
+            else (
+                action_dependencies.approval_authority,
+                action_dependencies.audit_sink,
+            )
+        ),
     )
     resolver = GatewayPrincipalResolver(store=store, project_id=project.project.id)
     token_verifier = GatewayTokenVerifier(store=store, project_id=project.project.id)
     coordinated_runtime = _ReauthCoordinatingRuntime(runtime, service=service)
+    operator_service = (
+        None
+        if operator_approval is None or action_coordinator is None or action_dependencies is None
+        else LocalDevelopmentOperatorApprovalService(
+            config=operator_approval,
+            coordinator=action_coordinator,
+            authority=cast(
+                InMemoryApprovalAuthority,
+                action_dependencies.approval_authority,
+            ),
+            session_store=store,
+            clock=(
+                time.time
+                if isinstance(action_dependencies.store, SQLiteActionStore)
+                else time.monotonic
+            ),
+        )
+    )
     mcp_server = PrincipalCapabilityMcpServer(
         coordinated_runtime,
         resolver=resolver,
         action_coordinator=action_coordinator,
+        action_prepare_observer=operator_service,
     )
     runtime_info = GatewayRuntimeInfo(
         pack_sha256=loaded.verification.sha256,
@@ -333,6 +444,7 @@ def create_gateway_runtime(
         runtime_info=runtime_info,
         max_request_body_size=max_request_body_size,
         mcp_session_idle_timeout_seconds=mcp_session_idle_timeout_seconds,
+        operator_approval_service=operator_service,
     )
     return GatewayRuntimeComposition(
         app=app,

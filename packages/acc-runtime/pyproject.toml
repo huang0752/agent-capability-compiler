@@ -6,6 +6,7 @@ requires-python = ">=3.12,<3.13"
 license = "Apache-2.0"
 dependencies = [
     "acc-core==0.1.0",
+    "cryptography>=45,<51",
     "httpx>=0.28,<1",
     "jsonschema>=4.23,<5",
     "mcp>=1.29,<2",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import subprocess
@@ -14,7 +15,12 @@ import pytest
 import yaml
 from pydantic import JsonValue
 
-from acc_core.cli.main import EXIT_RUNTIME, EXIT_SUCCESS, _run_runtime_eval_report
+from acc_core.cli.main import (
+    EXIT_RUNTIME,
+    EXIT_SUCCESS,
+    _close_untransferred_action_dependencies,
+    _run_runtime_eval_report,
+)
 from acc_core.cli.main import _run_command as run_pack_command
 from acc_core.compiler import compile_project
 from acc_runtime import GenericRuntime
@@ -34,6 +40,7 @@ EXPORTED_SCHEMAS = {
     "scope-inventory.schema.json",
     "source-contract.schema.json",
     "interaction-contract.schema.json",
+    "live-observation-artifact.schema.json",
     "ui-interaction-inventory.schema.json",
     "domain-map.schema.json",
     "capability-candidates.schema.json",
@@ -116,6 +123,32 @@ class _FakeGatewayComposition:
 
     async def aclose(self) -> None:
         self.close_calls += 1
+
+
+class _CloseResource:
+    def __init__(self, name: str, calls: list[str], *, fail: bool = False) -> None:
+        self.name = name
+        self.calls = calls
+        self.fail = fail
+
+    async def close(self) -> None:
+        self.calls.append(self.name)
+        if self.fail:
+            raise RuntimeError("close failed")
+
+
+@pytest.mark.asyncio
+async def test_untransferred_action_dependencies_close_in_reverse_and_continue() -> None:
+    calls: list[str] = []
+    dependencies = SimpleNamespace(
+        store=_CloseResource("store", calls),
+        approval_authority=_CloseResource("approval", calls, fail=True),
+        audit_sink=_CloseResource("audit", calls),
+    )
+
+    await _close_untransferred_action_dependencies(dependencies)
+
+    assert calls == ["audit", "approval", "store"]
 
 
 def _minimal_ir(project: Mapping[str, object]) -> dict[str, object]:
@@ -278,6 +311,27 @@ def _run_arguments(*, json_output: bool) -> Namespace:
         workers=1,
         tls_certfile=None,
         tls_keyfile=None,
+        production_actions=False,
+        development_actions=False,
+        local_development_action_guards=False,
+        development_action_operator_approval=False,
+        action_operator_secret_ref=None,
+        development_action_store="memory",
+        action_store_path=None,
+        action_store_secret_ref=None,
+        action_store_salt_ref=None,
+        session_vault_path=None,
+        session_vault_key_ref=None,
+        session_vault_salt_ref=None,
+        approval_db_path=None,
+        approval_secret_ref=None,
+        approval_salt_ref=None,
+        audit_db_path=None,
+        audit_secret_ref=None,
+        audit_salt_ref=None,
+        action_capability=[],
+        action_effect=[],
+        action_max_risk=None,
         json_output=json_output,
     )
 
@@ -345,6 +399,437 @@ def test_run_dispatches_streamable_http_and_json_only_inspects(
     assert composition.close_calls == 1
 
 
+def test_run_development_actions_injects_explicit_bounded_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from acc_runtime.actions import (
+        ActionRuntimeDependencies,
+        InMemoryActionResourceLock,
+        InMemoryActionStore,
+        InMemoryApprovalAuthority,
+        LoggingActionAuditSink,
+    )
+
+    composition = _FakeGatewayComposition()
+    captured = _patch_scoped_gateway(monkeypatch, composition)
+    arguments = _run_arguments(json_output=True)
+    arguments.allowed_host = ["127.0.0.1:8000"]
+    arguments.development_actions = True
+    arguments.local_development_action_guards = True
+    arguments.action_capability = ["orders.update"]
+    arguments.action_effect = ["update"]
+    arguments.action_max_risk = "medium"
+
+    exit_code, envelope = run_pack_command(arguments)
+
+    assert exit_code == EXIT_SUCCESS
+    dependencies = cast(ActionRuntimeDependencies, captured["action_dependencies"])
+    assert isinstance(dependencies, ActionRuntimeDependencies)
+    assert isinstance(dependencies.store, InMemoryActionStore)
+    assert dependencies.store.is_durable is False
+    assert isinstance(dependencies.approval_authority, InMemoryApprovalAuthority)
+    assert isinstance(dependencies.audit_sink, LoggingActionAuditSink)
+    assert isinstance(dependencies.resource_lock, InMemoryActionResourceLock)
+    assert dependencies.deployment_policy.allowed_effects == frozenset({"update"})
+    assert dependencies.deployment_policy.max_risk == "medium"
+    assert dependencies.deployment_policy.capability_allowlist == frozenset({"orders.update"})
+    assert dependencies.deployment_policy.require_durable_action_store is False
+    assert dependencies.deployment_policy.action_audit_mode == "required"
+    assert dependencies.deployment_policy.action_sandbox_mode == "local_development"
+    assert envelope.result is not None
+    assert envelope.result["actions"] == {
+        "mode": "development_test_only",
+        "store": "in_memory",
+        "store_durable": False,
+        "approval_authority": "in_memory_trusted_host",
+        "audit": "logging_required",
+        "local_development_action_guards": "process_local_only",
+        "allowed_capabilities": ["orders.update"],
+        "allowed_effects": ["update"],
+        "max_risk": "medium",
+    }
+    assert "salt" not in repr(envelope).casefold()
+    assert composition.close_calls == 1
+
+
+def test_run_development_actions_constructs_durable_sqlite_store_and_recovers(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from acc_runtime.actions import (
+        ActionRuntimeDependencies,
+        PreparedActionStatus,
+        SQLiteActionStore,
+    )
+    from acc_runtime.credentials import SecretValue
+
+    composition = _FakeGatewayComposition()
+    captured = _patch_scoped_gateway(monkeypatch, composition)
+    database = tmp_path / "actions.db"
+    monkeypatch.setenv("ACC_TEST_STORE_SECRET", "s" * 48)
+    monkeypatch.setenv("ACC_TEST_STORE_SALT", "t" * 24)
+    monkeypatch.setenv("ACC_TEST_OPERATOR_SECRET", "o" * 48)
+    arguments = _run_arguments(json_output=True)
+    arguments.allowed_host = ["127.0.0.1:8000"]
+    arguments.development_actions = True
+    arguments.development_action_store = "sqlite"
+    arguments.action_store_path = str(database)
+    arguments.action_store_secret_ref = "ACC_TEST_STORE_SECRET"
+    arguments.action_store_salt_ref = "ACC_TEST_STORE_SALT"
+    arguments.development_action_operator_approval = True
+    arguments.action_operator_secret_ref = "ACC_TEST_OPERATOR_SECRET"
+    arguments.action_capability = ["orders.update"]
+    arguments.action_effect = ["update"]
+    arguments.action_max_risk = "low"
+
+    exit_code, envelope = run_pack_command(arguments)
+
+    assert exit_code == EXIT_SUCCESS
+    dependencies = cast(ActionRuntimeDependencies, captured["action_dependencies"])
+    assert isinstance(dependencies.store, SQLiteActionStore)
+    assert dependencies.store.is_durable is True
+    assert dependencies.deployment_policy.require_durable_action_store is True
+    assert captured["operator_approval"] is not None
+    assert envelope.result is not None
+    assert envelope.result["actions"]["store"] == "sqlite"
+    assert envelope.result["actions"]["store_durable"] is True
+    assert str(database) not in repr(envelope)
+    creation = asyncio.run(
+        dependencies.store.create(
+            capability_id="orders.update",
+            principal_id="user-a",
+            session_id="session-a",
+            pack_digest="sha256:" + "a" * 64,
+            input_value={"order_id": "one"},
+            preview_value={"status": "pending"},
+            expires_in_seconds=300,
+        )
+    )
+    asyncio.run(dependencies.store.close())
+    reopened = SQLiteActionStore(
+        database,
+        operator_secret=SecretValue("s" * 48),
+        deployment_salt=("t" * 24).encode(),
+    )
+    recovered = asyncio.run(
+        reopened.resolve(
+            creation.handle,
+            principal_id="user-a",
+            session_id="session-a",
+            pack_digest="sha256:" + "a" * 64,
+        )
+    )
+    assert recovered.record.status is PreparedActionStatus.PREPARED
+    asyncio.run(reopened.close())
+
+
+def _configure_production_actions(
+    monkeypatch: pytest.MonkeyPatch, arguments: Namespace, tmp_path: Path
+) -> None:
+    secret_fields = (
+        ("action_store_secret_ref", "ACC_PROD_STORE_SECRET", "a"),
+        ("action_store_salt_ref", "ACC_PROD_STORE_SALT", "b"),
+        ("session_vault_key_ref", "ACC_PROD_VAULT_KEY", "c"),
+        ("session_vault_salt_ref", "ACC_PROD_VAULT_SALT", "d"),
+        ("approval_secret_ref", "ACC_PROD_APPROVAL_SECRET", "e"),
+        ("approval_salt_ref", "ACC_PROD_APPROVAL_SALT", "f"),
+        ("audit_secret_ref", "ACC_PROD_AUDIT_SECRET", "g"),
+        ("audit_salt_ref", "ACC_PROD_AUDIT_SALT", "h"),
+    )
+    for attribute, reference, marker in secret_fields:
+        setattr(arguments, attribute, reference)
+        monkeypatch.setenv(reference, marker * 48)
+    arguments.production_actions = True
+    arguments.action_store_path = str(tmp_path / "actions.db")
+    arguments.session_vault_path = str(tmp_path / "sessions.db")
+    arguments.approval_db_path = str(tmp_path / "approvals.db")
+    arguments.audit_db_path = str(tmp_path / "audit.db")
+    arguments.action_capability = ["orders.update"]
+    arguments.action_effect = ["update"]
+    arguments.action_max_risk = "medium"
+
+
+def test_run_production_actions_injects_only_durable_single_node_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from acc_runtime.actions import (
+        ActionRuntimeDependencies,
+        SQLiteActionAuditSink,
+        SQLiteActionStore,
+        SQLiteApprovalAuthority,
+    )
+    from acc_runtime.gateway import GatewaySessionVaultConfig
+
+    composition = _FakeGatewayComposition()
+    captured = _patch_scoped_gateway(monkeypatch, composition)
+    arguments = _run_arguments(json_output=True)
+    arguments.allowed_host = ["127.0.0.1:8000"]
+    _configure_production_actions(monkeypatch, arguments, tmp_path)
+
+    exit_code, envelope = run_pack_command(arguments)
+
+    assert exit_code == EXIT_SUCCESS
+    dependencies = cast(ActionRuntimeDependencies, captured["action_dependencies"])
+    assert isinstance(dependencies.store, SQLiteActionStore)
+    assert isinstance(dependencies.approval_authority, SQLiteApprovalAuthority)
+    assert isinstance(dependencies.audit_sink, SQLiteActionAuditSink)
+    assert dependencies.resource_lock is None
+    assert dependencies.deployment_policy.require_durable_action_store is True
+    assert dependencies.deployment_policy.action_audit_mode == "required"
+    assert dependencies.deployment_policy.action_sandbox_mode == "disabled"
+    assert isinstance(captured["session_vault"], GatewaySessionVaultConfig)
+    assert captured["operator_approval"] is None
+    assert envelope.result is not None
+    assert envelope.result["actions"]["mode"] == "production_single_node"
+    assert envelope.result["session_vault"] == {
+        "mode": "sqlite_single_node",
+        "durable": True,
+    }
+    rendered = repr(envelope)
+    assert str(tmp_path) not in rendered
+    assert "ACC_PROD_" not in rendered
+    for marker in "abcdefgh":
+        assert marker * 32 not in rendered
+    asyncio.run(dependencies.audit_sink.close())
+    asyncio.run(dependencies.approval_authority.close())
+    asyncio.run(dependencies.store.close())
+
+
+@pytest.mark.parametrize(
+    "unsafe_change",
+    ("development", "operator", "reused_ref", "reused_value", "missing", "shared_path"),
+)
+def test_run_production_actions_rejects_incomplete_or_development_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    unsafe_change: str,
+) -> None:
+    composition = _FakeGatewayComposition()
+    _patch_scoped_gateway(monkeypatch, composition)
+    arguments = _run_arguments(json_output=True)
+    arguments.allowed_host = ["127.0.0.1:8000"]
+    _configure_production_actions(monkeypatch, arguments, tmp_path)
+    if unsafe_change == "development":
+        arguments.development_actions = True
+    elif unsafe_change == "operator":
+        arguments.development_action_operator_approval = True
+        arguments.action_operator_secret_ref = "ACC_PROD_OPERATOR_SECRET"
+        monkeypatch.setenv("ACC_PROD_OPERATOR_SECRET", "z" * 48)
+    elif unsafe_change == "reused_ref":
+        arguments.audit_salt_ref = arguments.audit_secret_ref
+    elif unsafe_change == "reused_value":
+        monkeypatch.setenv("ACC_PROD_AUDIT_SALT", "g" * 48)
+    elif unsafe_change == "missing":
+        arguments.approval_db_path = None
+    else:
+        arguments.audit_db_path = arguments.approval_db_path
+
+    exit_code, envelope = run_pack_command(arguments)
+
+    assert exit_code == EXIT_RUNTIME
+    assert envelope.ok is False
+    assert composition.close_calls == 0
+
+
+@pytest.mark.parametrize(
+    ("path", "secret_ref", "salt_ref"),
+    [
+        (None, "ACC_TEST_STORE_SECRET", "ACC_TEST_STORE_SALT"),
+        ("actions.db", None, "ACC_TEST_STORE_SALT"),
+        ("actions.db", "ACC_TEST_STORE_SECRET", None),
+        ("actions.db", "ACC_TEST_STORE_SECRET", "ACC_TEST_STORE_SECRET"),
+    ],
+)
+def test_run_development_sqlite_store_rejects_incomplete_or_reused_refs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    path: str | None,
+    secret_ref: str | None,
+    salt_ref: str | None,
+) -> None:
+    composition = _FakeGatewayComposition()
+    _patch_scoped_gateway(monkeypatch, composition)
+    monkeypatch.setenv("ACC_TEST_STORE_SECRET", "s" * 48)
+    monkeypatch.setenv("ACC_TEST_STORE_SALT", "t" * 24)
+    arguments = _run_arguments(json_output=True)
+    arguments.allowed_host = ["127.0.0.1:8000"]
+    arguments.development_actions = True
+    arguments.development_action_store = "sqlite"
+    arguments.action_store_path = None if path is None else str(tmp_path / path)
+    arguments.action_store_secret_ref = secret_ref
+    arguments.action_store_salt_ref = salt_ref
+    arguments.action_capability = ["orders.update"]
+    arguments.action_effect = ["update"]
+    arguments.action_max_risk = "low"
+
+    exit_code, envelope = run_pack_command(arguments)
+
+    assert exit_code == EXIT_RUNTIME
+    assert envelope.ok is False
+    assert composition.close_calls == 0
+
+
+def test_run_development_sqlite_store_rejects_reused_secret_values_and_operator_secret(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    composition = _FakeGatewayComposition()
+    _patch_scoped_gateway(monkeypatch, composition)
+    monkeypatch.setenv("ACC_TEST_STORE_SECRET", "same-secret-value-" + "s" * 32)
+    monkeypatch.setenv("ACC_TEST_STORE_SALT", "same-secret-value-" + "s" * 32)
+    monkeypatch.setenv("ACC_TEST_OPERATOR_SECRET", "same-secret-value-" + "s" * 32)
+    arguments = _run_arguments(json_output=True)
+    arguments.allowed_host = ["127.0.0.1:8000"]
+    arguments.development_actions = True
+    arguments.development_action_store = "sqlite"
+    arguments.action_store_path = str(tmp_path / "actions.db")
+    arguments.action_store_secret_ref = "ACC_TEST_STORE_SECRET"
+    arguments.action_store_salt_ref = "ACC_TEST_STORE_SALT"
+    arguments.development_action_operator_approval = True
+    arguments.action_operator_secret_ref = "ACC_TEST_OPERATOR_SECRET"
+    arguments.action_capability = ["orders.update"]
+    arguments.action_effect = ["update"]
+    arguments.action_max_risk = "low"
+
+    exit_code, envelope = run_pack_command(arguments)
+
+    assert exit_code == EXIT_RUNTIME
+    assert envelope.ok is False
+    assert composition.close_calls == 0
+
+
+@pytest.mark.parametrize(
+    ("enabled", "capabilities", "effects", "risk"),
+    [
+        (False, ["orders.update"], ["update"], "medium"),
+        (True, [], ["update"], "medium"),
+        (True, ["orders.update"], [], "medium"),
+        (True, ["orders.update"], ["update"], None),
+    ],
+)
+def test_run_development_actions_rejects_missing_opt_in_or_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+    enabled: bool,
+    capabilities: list[str],
+    effects: list[str],
+    risk: str | None,
+) -> None:
+    composition = _FakeGatewayComposition()
+    _patch_scoped_gateway(monkeypatch, composition)
+    arguments = _run_arguments(json_output=True)
+    arguments.allowed_host = ["127.0.0.1:8000"]
+    arguments.development_actions = enabled
+    arguments.action_capability = capabilities
+    arguments.action_effect = effects
+    arguments.action_max_risk = risk
+
+    exit_code, envelope = run_pack_command(arguments)
+
+    assert exit_code == EXIT_RUNTIME
+    assert envelope.ok is False
+    assert composition.close_calls == 0
+
+
+def test_run_local_development_action_guards_require_development_actions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    composition = _FakeGatewayComposition()
+    _patch_scoped_gateway(monkeypatch, composition)
+    arguments = _run_arguments(json_output=True)
+    arguments.allowed_host = ["127.0.0.1:8000"]
+    arguments.development_actions = False
+    arguments.local_development_action_guards = True
+    arguments.action_capability = ["orders.update"]
+    arguments.action_effect = ["update"]
+    arguments.action_max_risk = "low"
+
+    exit_code, envelope = run_pack_command(arguments)
+
+    assert exit_code == EXIT_RUNTIME
+    assert envelope.ok is False
+    assert composition.close_calls == 0
+
+
+def test_run_development_operator_approval_uses_env_secret_and_safe_inspection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from acc_runtime.gateway.operator import LocalDevelopmentOperatorApprovalConfig
+
+    composition = _FakeGatewayComposition()
+    captured = _patch_scoped_gateway(monkeypatch, composition)
+    monkeypatch.setenv("ACC_TEST_OPERATOR_SECRET", "o" * 48)
+    arguments = _run_arguments(json_output=True)
+    arguments.allowed_host = ["127.0.0.1:8000"]
+    arguments.development_actions = True
+    arguments.development_action_operator_approval = True
+    arguments.action_operator_secret_ref = "ACC_TEST_OPERATOR_SECRET"
+    arguments.action_capability = ["orders.update"]
+    arguments.action_effect = ["update"]
+    arguments.action_max_risk = "low"
+
+    exit_code, envelope = run_pack_command(arguments)
+
+    assert exit_code == EXIT_SUCCESS
+    config = cast(LocalDevelopmentOperatorApprovalConfig, captured["operator_approval"])
+    assert isinstance(config, LocalDevelopmentOperatorApprovalConfig)
+    assert config.secret_ref == "ACC_TEST_OPERATOR_SECRET"
+    assert envelope.result is not None
+    assert envelope.result["operator_approval"] == {
+        "mode": "local_development_loopback_only",
+        "path": "/operator/actions/approve",
+        "secret_ref": "ACC_TEST_OPERATOR_SECRET",
+        "request_body_limit": 1024,
+    }
+    assert "o" * 48 not in repr(envelope)
+
+
+@pytest.mark.parametrize(
+    ("enabled", "reference"),
+    [(False, "ACC_TEST_OPERATOR_SECRET"), (True, None), (True, "MISSING_OPERATOR_SECRET")],
+)
+def test_run_development_operator_approval_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    enabled: bool,
+    reference: str | None,
+) -> None:
+    composition = _FakeGatewayComposition()
+    _patch_scoped_gateway(monkeypatch, composition)
+    arguments = _run_arguments(json_output=True)
+    arguments.allowed_host = ["127.0.0.1:8000"]
+    arguments.development_actions = True
+    arguments.development_action_operator_approval = enabled
+    arguments.action_operator_secret_ref = reference
+    arguments.action_capability = ["orders.update"]
+    arguments.action_effect = ["update"]
+    arguments.action_max_risk = "low"
+
+    exit_code, envelope = run_pack_command(arguments)
+
+    assert exit_code == EXIT_RUNTIME
+    assert envelope.ok is False
+    assert composition.close_calls == 0
+
+
+def test_run_stdio_rejects_development_operator_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _FakeRuntime()
+    adapter = _FakeAdapter()
+    _patch_run_composition(monkeypatch, runtime=runtime, adapter=adapter)
+    monkeypatch.setenv("ACC_TEST_OPERATOR_SECRET", "o" * 48)
+    arguments = _run_arguments(json_output=True)
+    arguments.development_actions = True
+    arguments.development_action_operator_approval = True
+    arguments.action_operator_secret_ref = "ACC_TEST_OPERATOR_SECRET"
+
+    exit_code, envelope = run_pack_command(arguments)
+
+    assert exit_code == EXIT_RUNTIME
+    assert envelope.ok is False
+    assert runtime.close_calls == 0
+
+
 def test_run_json_dispatches_v2_stdio_pack_with_scope_analysis(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -353,11 +838,18 @@ def test_run_json_dispatches_v2_stdio_pack_with_scope_analysis(
 
     runtime = _FakeRuntime()
     project = _v2_project(transport="stdio")
+    project["provider"]["application_success"] = {
+        "kind": "json_pointer",
+        "pointer": "/code",
+        "allowed_values": [200],
+    }
+    from_pack_kwargs: dict[str, object] = {}
 
     class FakeGenericRuntime:
         @classmethod
         def from_pack(cls, *args: object, **kwargs: object) -> _FakeRuntime:
-            del cls, args, kwargs
+            del cls, args
+            from_pack_kwargs.update(kwargs)
             return runtime
 
     monkeypatch.setattr(acc_runtime, "GenericRuntime", FakeGenericRuntime)
@@ -380,6 +872,7 @@ def test_run_json_dispatches_v2_stdio_pack_with_scope_analysis(
         "conditional": 0,
         "denied": 0,
     }
+    assert "application_success_policy" not in from_pack_kwargs
 
 
 def test_run_json_dispatches_v2_streamable_http_pack(
@@ -1246,6 +1739,10 @@ def test_schema_exports_all_models_as_draft_2020_12(tmp_path: Path) -> None:
     ]
     assert allowlist_schema["uniqueItems"] is True
     assert allowlist_schema["items"]["pattern"].startswith("^tenant_context")
+    application_success = project_schema["$defs"]["ProviderConfig"]["properties"][
+        "application_success"
+    ]
+    assert application_success["anyOf"][0]["$ref"].endswith("/JsonPointerApplicationSuccessConfig")
 
     operation_schema = json.loads((output / "operation.schema.json").read_text(encoding="utf-8"))
     binding_schema = operation_schema["$defs"]["ReadOperationV2"]["properties"]["context_bindings"][

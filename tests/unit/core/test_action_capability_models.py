@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -15,6 +17,9 @@ from acc_core.models.v2 import (
     ReadCapabilityV2,
     ReadOperationV2,
 )
+from acc_core.schemas.export import schema_for
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _evidence() -> list[dict[str, object]]:
@@ -311,6 +316,15 @@ def test_capability_schemas_are_strict_draft_2020_12_documents() -> None:
     document["output_schema"] = {"required": "not-an-array"}
     with pytest.raises(ValidationError, match="Draft 2020-12"):
         ActionCapabilityV2.model_validate(document)
+
+
+def test_checked_in_capability_schema_matches_current_model() -> None:
+    checked_in = json.loads(
+        (REPOSITORY_ROOT / "schemas" / "capability.schema.json").read_text(encoding="utf-8")
+    )
+
+    assert checked_in == schema_for("capability")
+    assert "local_development_state_guard" in json.dumps(checked_in)
 
 
 def test_missing_action_discriminator_or_contract_never_defaults_to_write() -> None:

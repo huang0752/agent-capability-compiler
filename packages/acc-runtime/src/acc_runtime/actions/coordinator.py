@@ -280,7 +280,11 @@ class ActionCoordinator:
         except BaseException as error:
             await span.finish(status=None, result_category=_audit_error_category(error))
             raise
-        await span.finish(status=result.status, result_category="success")
+        await span.finish(
+            status=result.status,
+            result_category="success",
+            action_digest=_action_handle_digest(result.action_handle),
+        )
         return result
 
     async def _prepare(
@@ -394,9 +398,16 @@ class ActionCoordinator:
         principal_context: PrincipalContext,
     ) -> ActionStatusPublic:
         existing = await self._resolve(action_handle, principal_context)
-        span = await self._start_audit("approve", existing.record.capability_id, principal_context)
+        span = await self._start_audit(
+            "approve",
+            existing.record.capability_id,
+            principal_context,
+            action_digest=existing.record.handle_digest,
+        )
         try:
-            result = await self._approve(action_handle, approval_handle, principal_context)
+            result, approval_decision_id = await self._approve(
+                action_handle, approval_handle, principal_context
+            )
         except asyncio.CancelledError:
             await _finish_cancelled_audit(span, status=existing.record.status)
             raise
@@ -406,7 +417,11 @@ class ActionCoordinator:
                 result_category=_audit_error_category(error),
             )
             raise
-        await span.finish(status=result.status, result_category="success")
+        await span.finish(
+            status=result.status,
+            result_category="success",
+            approval_decision_id=approval_decision_id,
+        )
         return result
 
     async def _approve(
@@ -414,7 +429,7 @@ class ActionCoordinator:
         action_handle: str | SecretValue,
         approval_handle: str | SecretValue,
         principal_context: PrincipalContext,
-    ) -> ActionStatusPublic:
+    ) -> tuple[ActionStatusPublic, str]:
         state = await self._resolve(action_handle, principal_context)
         definition = self._definition(state.record.capability_id)
         self._authorize(definition, principal_context)
@@ -422,7 +437,7 @@ class ActionCoordinator:
             raise ActionStateConflictError("Action does not require approval")
         if state.record.status is not PreparedActionStatus.PREPARED:
             raise ActionStateConflictError("Action is not awaiting approval")
-        await self._approval_authority.verify(
+        grant = await self._approval_authority.verify(
             approval_handle,
             ApprovalBinding.from_record(state.record),
         )
@@ -434,7 +449,9 @@ class ActionCoordinator:
             expected=PreparedActionStatus.PREPARED,
             target=PreparedActionStatus.APPROVED,
         )
-        return _public_status(approved, result=None)
+        return _public_status(approved, result=None), (
+            grant.decision_id if grant.decision_id is not None else grant.approval_digest
+        )
 
     async def commit(
         self,
@@ -442,7 +459,12 @@ class ActionCoordinator:
         principal_context: PrincipalContext,
     ) -> ActionCommitResult:
         existing = await self._resolve(action_handle, principal_context)
-        span = await self._start_audit("commit", existing.record.capability_id, principal_context)
+        span = await self._start_audit(
+            "commit",
+            existing.record.capability_id,
+            principal_context,
+            action_digest=existing.record.handle_digest,
+        )
         try:
             result = await self._commit(action_handle, principal_context)
         except asyncio.CancelledError:
@@ -559,7 +581,12 @@ class ActionCoordinator:
         principal_context: PrincipalContext,
     ) -> ActionStatusPublic:
         existing = await self._resolve(action_handle, principal_context)
-        span = await self._start_audit("status", existing.record.capability_id, principal_context)
+        span = await self._start_audit(
+            "status",
+            existing.record.capability_id,
+            principal_context,
+            action_digest=existing.record.handle_digest,
+        )
         try:
             result = await self._status(action_handle, principal_context)
         except asyncio.CancelledError:
@@ -592,6 +619,8 @@ class ActionCoordinator:
         lifecycle: ActionAuditLifecycle,
         capability_id: str,
         principal_context: PrincipalContext,
+        *,
+        action_digest: str | None = None,
     ) -> ActionAuditSpan:
         return await start_action_audit_span(
             sink=self._action_audit_sink,
@@ -602,6 +631,7 @@ class ActionCoordinator:
             pack_digest=self._pack_digest,
             principal_id=principal_context.principal_id,
             session_id=principal_context.gateway_session_id,
+            action_digest=action_digest,
         )
 
     async def _resolved_status_or_none(
@@ -754,6 +784,10 @@ async def _finish_cancelled_audit(
         await asyncio.shield(span.finish(status=status, result_category="cancelled"))
     except BaseException:
         return
+
+
+def _action_handle_digest(handle: SecretValue) -> str:
+    return hashlib.sha256(handle.get_secret_value().encode("ascii")).hexdigest()
 
 
 __all__ = [

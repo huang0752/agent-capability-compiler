@@ -31,6 +31,7 @@ from acc_runtime.gateway.models import (
     SessionCreateRequest,
     SessionCreateResponse,
 )
+from acc_runtime.gateway.operator import LocalDevelopmentOperatorApprovalConfig
 from acc_runtime.gateway.runtime import GatewayRuntimeComposition, create_gateway_runtime
 from acc_runtime.gateway.service import GatewaySessionService
 from acc_runtime.gateway.sessions import (
@@ -41,6 +42,7 @@ from acc_runtime.gateway.sessions import (
     GatewaySessionStore,
     InMemoryGatewaySessionStore,
 )
+from acc_runtime.gateway.sqlite_vault import GatewaySessionVaultConfig, SQLiteGatewaySessionVault
 
 __all__ = [
     "DEFAULT_GATEWAY_BODY_LIMIT",
@@ -64,13 +66,16 @@ __all__ = [
     "GatewaySessionService",
     "GatewaySessionStatus",
     "GatewaySessionStore",
+    "GatewaySessionVaultConfig",
     "GatewaySettings",
     "GatewayTokenVerifier",
     "InMemoryGatewaySessionStore",
+    "LocalDevelopmentOperatorApprovalConfig",
     "LoggingAuditSink",
     "MemoryAuditSink",
     "NoopAuditSink",
     "OperationObserver",
+    "SQLiteGatewaySessionVault",
     "SessionCreateRequest",
     "SessionCreateResponse",
     "create_gateway_app",

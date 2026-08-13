@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import logging
 import traceback
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -17,18 +19,46 @@ from acc_runtime.actions import (
     ActionCommitExecution,
     ActionCoordinator,
     ActionDeploymentConfigurationError,
+    ActionInputInvalidError,
     ActionPreviewExecution,
     ActionStateConflictError,
     ActionWorkflowExecutor,
     CompiledActionDefinition,
     InMemoryActionStore,
     InMemoryApprovalAuthority,
+    LoggingActionAuditSink,
     PreparedActionStatus,
 )
 from acc_runtime.context import PrincipalContext
 from acc_runtime.deployment import DeploymentPolicy
 
 PACK_DIGEST = "sha256:" + "a" * 64
+
+
+@pytest.mark.asyncio
+async def test_logging_action_audit_sink_emits_only_minimized_event(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    logger = logging.getLogger("acc.action.audit.test")
+    sink = LoggingActionAuditSink(logger)
+    event = ActionAuditEvent(
+        lifecycle="status",
+        capability_id="orders.update",
+        status=PreparedActionStatus.SUCCEEDED,
+        result_category="success",
+        pack_digest=PACK_DIGEST,
+        principal_digest="b" * 64,
+        session_digest="c" * 64,
+        action_digest="d" * 64,
+    )
+
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        await sink.emit(event)
+
+    prefix, payload = caplog.messages[-1].split(" ", 1)
+    assert prefix == "ACC_ACTION_AUDIT"
+    assert json.loads(payload) == event.to_dict()
+    assert "order-private" not in payload
 
 
 def _capability() -> ActionCapabilityV2:
@@ -228,6 +258,8 @@ async def test_action_lifecycle_emits_only_minimized_stable_events() -> None:
     for event in sink.events:
         payload = event.to_dict()
         assert set(payload) == {
+            "event_id",
+            "occurred_at",
             "lifecycle",
             "capability_id",
             "status",
@@ -235,6 +267,8 @@ async def test_action_lifecycle_emits_only_minimized_stable_events() -> None:
             "pack_digest",
             "principal_digest",
             "session_digest",
+            "action_digest",
+            "approval_decision_id",
         }
         rendered = repr(event) + repr(payload)
         for secret in (
@@ -248,6 +282,16 @@ async def test_action_lifecycle_emits_only_minimized_stable_events() -> None:
             "z" * 43,
         ):
             assert secret not in rendered
+    assert sink.events[0].action_digest is None
+    assert all(event.action_digest is not None for event in sink.events[1:])
+    approval = next(
+        event
+        for event in sink.events
+        if event.lifecycle == "approve" and event.result_category == "success"
+    )
+    assert approval.approval_decision_id is not None
+    assert len(approval.approval_decision_id) == 64
+    assert "y" * 43 not in repr(approval.to_dict())
 
 
 @pytest.mark.asyncio
@@ -353,3 +397,20 @@ async def test_required_audit_error_and_traceback_never_echo_sink_secret() -> No
     rendered = str(captured.value) + "".join(traceback.format_exception(captured.value))
     assert "audit-private" not in rendered
     assert business_secret not in rendered
+
+
+@pytest.mark.asyncio
+async def test_rejected_prepare_is_audited_without_inventing_action_digest() -> None:
+    sink = _Sink()
+    coordinator = _coordinator(
+        policy=_development_policy(audit_mode="required"),
+        sink=sink,
+    )
+
+    with pytest.raises(ActionInputInvalidError):
+        await coordinator.prepare("orders.update", {}, _principal())
+
+    assert [(event.result_category, event.action_digest) for event in sink.events] == [
+        ("started", None),
+        ("invalid", None),
+    ]

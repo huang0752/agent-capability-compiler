@@ -123,7 +123,22 @@ def _capability(
     commit: list[dict[str, object]] | None = None,
     approval: str = "required",
     execution_mode: str = "single",
+    local_development_guard: bool = False,
 ) -> ActionCapabilityV2:
+    action: dict[str, object] = {
+        "execution_mode": execution_mode,
+        "approval": {"mode": approval},
+        "expires_in_seconds": 300,
+    }
+    if local_development_guard:
+        action["local_development_state_guard"] = {
+            "mode": "local_development_runtime_guard",
+            "resource_key_pointer": "/order_id",
+            "read_operation_id": "orders.get",
+            "state_pointer": "/status",
+            "allowed_values": ["pending"],
+            "terminal_values": ["approved"],
+        }
     return ActionCapabilityV2.model_validate(
         {
             "schema_version": "2",
@@ -138,11 +153,7 @@ def _capability(
                 "required": ["order_id"],
             },
             "output_schema": {"type": "object"},
-            "action": {
-                "execution_mode": execution_mode,
-                "approval": {"mode": approval},
-                "expires_in_seconds": 300,
-            },
+            "action": action,
             "preview_workflow": preview
             or [
                 _call("orders.get", "$.input.order_id"),
@@ -248,6 +259,20 @@ def _valid_operations() -> Mapping[str, OperationV2]:
     }
 
 
+def _local_guard_read_operation() -> ReadOperationV2:
+    operation = _operation("orders.get", effect="read")
+    assert isinstance(operation, ReadOperationV2)
+    return operation.model_copy(
+        update={
+            "output_schema": {
+                "type": "object",
+                "properties": {"status": {"type": "string"}},
+                "required": ["status"],
+            }
+        }
+    )
+
+
 def test_legal_single_action_produces_deterministic_derived_inventory() -> None:
     report = prove_action_capability(_capability(), _valid_operations())
 
@@ -258,6 +283,77 @@ def test_legal_single_action_produces_deterministic_derived_inventory() -> None:
     assert report.maximum_risk == "low"
     assert report.required_scopes == ("orders.read", "orders.write")
     assert report.approval_required is True
+
+
+def test_local_development_guard_keeps_source_concurrency_unsupported() -> None:
+    mutation = _operation(
+        "orders.update",
+        effect="update",
+        risk="low",
+        retry_mode="never",
+        idempotency="unsupported",
+        idempotency_contract={"mode": "runtime_deduplicate"},
+        concurrency="not_supported",
+    )
+    operations = {
+        "orders.get": _local_guard_read_operation(),
+        "orders.update": mutation,
+    }
+
+    proof = prove_action_capability(
+        _capability(local_development_guard=True),
+        operations,
+        policy=_policy(readable_fields=["status"]),
+    )
+
+    assert proof.ok
+    assert mutation.http.safety.concurrency.mode == "not_supported"
+    assert proof.strategy_operation_ids == ("orders.get",)
+
+
+@pytest.mark.parametrize(
+    ("risk", "retry_mode", "idempotency_contract", "expected_code"),
+    [
+        (
+            "medium",
+            "never",
+            {"mode": "runtime_deduplicate"},
+            "ACC_COMPILE_ACTION_LOCAL_DEVELOPMENT_SAFETY_INVALID",
+        ),
+        (
+            "low",
+            "never",
+            {"mode": "unsupported"},
+            "ACC_COMPILE_ACTION_LOCAL_DEVELOPMENT_SAFETY_INVALID",
+        ),
+    ],
+)
+def test_local_development_guard_rejects_unsafe_mutation_contracts(
+    risk: str,
+    retry_mode: str,
+    idempotency_contract: dict[str, object],
+    expected_code: str,
+) -> None:
+    operations = {
+        "orders.get": _local_guard_read_operation(),
+        "orders.update": _operation(
+            "orders.update",
+            effect="update",
+            risk=risk,
+            retry_mode=retry_mode,
+            idempotency_contract=idempotency_contract,
+            concurrency="not_supported",
+        ),
+    }
+
+    proof = prove_action_capability(
+        _capability(local_development_guard=True),
+        operations,
+        policy=_policy(readable_fields=["status"]),
+    )
+
+    assert expected_code in _codes(proof)
+    assert "ACC_COMPILE_ACTION_CONCURRENCY_REQUIRED" in _codes(proof)
 
 
 def test_server_serialized_transition_requires_preview_status_and_trusted_semantics() -> None:

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Protocol, cast, runtime_checkable
+from typing import Any, Literal, Protocol, cast, runtime_checkable
 
 from jsonschema import Draft202012Validator
 from pydantic import JsonValue, ValidationError
@@ -40,6 +41,7 @@ from acc_runtime.actions.coordinator import (
 )
 from acc_runtime.actions.errors import ActionStateConflictError
 from acc_runtime.actions.models import canonical_json_bytes
+from acc_runtime.actions.resource_lock import ActionResourceLock
 from acc_runtime.context import PrincipalContext, resolve_context_binding
 from acc_runtime.credentials import SecretValue
 from acc_runtime.errors import RuntimeError as AccRuntimeError
@@ -217,13 +219,21 @@ class RuntimeActionWorkflowExecutor:
         compiled_ir: Mapping[str, Any],
         *,
         provider: ActionOperationProvider,
+        action_sandbox_mode: Literal["disabled", "local_development"] = "disabled",
+        resource_lock: ActionResourceLock | None = None,
     ) -> None:
         if not isinstance(compiled_ir, Mapping):
             raise TypeError("compiled_ir must be a mapping")
         if not isinstance(provider, ActionOperationProvider):
             raise TypeError("provider must implement ActionOperationProvider")
+        if action_sandbox_mode not in {"disabled", "local_development"}:
+            raise ValueError("action_sandbox_mode is invalid")
+        if resource_lock is not None and not isinstance(resource_lock, ActionResourceLock):
+            raise TypeError("resource_lock must implement ActionResourceLock")
         self._ir = copy.deepcopy(dict(compiled_ir))
         self._provider = provider
+        self._action_sandbox_mode = action_sandbox_mode
+        self._resource_lock = resource_lock
 
     async def preview(
         self,
@@ -252,6 +262,7 @@ class RuntimeActionWorkflowExecutor:
         idempotent_terminal = _validate_server_serialized_preview(loaded, raw_preview)
         token = _capture_concurrency_token(loaded, raw_preview, caller.response_headers)
         public_preview = PolicyEnforcer().filter_output(loaded.policy, raw_preview)
+        _validate_local_development_preview(loaded, public_preview)
         return ActionPreviewExecution(
             value=public_preview,
             concurrency_token=token,
@@ -269,6 +280,57 @@ class RuntimeActionWorkflowExecutor:
         loaded = self._load(capability, principal_context)
         if not isinstance(execution, ActionCommitExecution):
             raise TypeError("execution must be ActionCommitExecution")
+        guard = loaded.capability.action.local_development_state_guard
+        if guard is not None:
+            if not isinstance(execution.input_value, Mapping) or self._resource_lock is None:
+                raise ActionRuntimeConfigurationError(
+                    "Local development Action state guard is not safely configured"
+                )
+            found, resource_key = _resolve_json_pointer(
+                execution.input_value,
+                guard.resource_key_pointer,
+            )
+            if (
+                not found
+                or not isinstance(resource_key, (str, int))
+                or isinstance(resource_key, bool)
+            ):
+                raise ActionRuntimeConfigurationError(
+                    "Local development Action resource key is invalid"
+                )
+            lock_digest = hashlib.sha256(canonical_json_bytes(resource_key)).hexdigest()
+            lock_key = f"{loaded.capability.id}:sha256:{lock_digest}"
+            async with self._resource_lock.hold(lock_key):
+                # The input comes exclusively from the sealed prepared record;
+                # no commit-time Agent arguments participate in this fresh read.
+                fresh = await self.preview(
+                    loaded.capability,
+                    cast(Mapping[str, JsonValue], copy.deepcopy(execution.input_value)),
+                    principal_context,
+                )
+                classification = _validate_local_development_recheck(
+                    loaded,
+                    execution.preview_value,
+                    fresh.value,
+                )
+                if classification == "terminal":
+                    _validate_action_output(loaded, fresh.value)
+                    return copy.deepcopy(fresh.value)
+                refreshed = ActionCommitExecution(
+                    input_value=copy.deepcopy(execution.input_value),
+                    preview_value=copy.deepcopy(fresh.value),
+                    concurrency_token=copy.deepcopy(execution.concurrency_token),
+                    idempotency_key=execution.idempotency_key,
+                )
+                return await self._commit_loaded(loaded, refreshed, principal_context)
+        return await self._commit_loaded(loaded, execution, principal_context)
+
+    async def _commit_loaded(
+        self,
+        loaded: _LoadedAction,
+        execution: ActionCommitExecution,
+        principal_context: PrincipalContext,
+    ) -> JsonValue:
         if execution.idempotent_terminal:
             result = copy.deepcopy(execution.idempotent_result)
             if not _is_terminal_result(loaded, result):
@@ -331,15 +393,7 @@ class RuntimeActionWorkflowExecutor:
                 self._provider,
             )
         public_result = PolicyEnforcer().filter_output(loaded.policy, raw_result)
-        if next(
-            Draft202012Validator(loaded.capability.output_schema).iter_errors(public_result),
-            None,
-        ):
-            raise ExecutionError(
-                "ACC_RUNTIME_OUTPUT_INVALID",
-                "Policy-filtered Action output does not match its schema.",
-                details={"capability_id": loaded.capability.id},
-            )
+        _validate_action_output(loaded, public_result)
         return public_result
 
     def _load(
@@ -415,6 +469,13 @@ class RuntimeActionWorkflowExecutor:
             )
             if not proof.ok:
                 raise ValueError
+            guard = stored.action.local_development_state_guard
+            if guard is not None and (
+                self._action_sandbox_mode != "local_development"
+                or self._resource_lock is None
+                or self._resource_lock.development_only is not True
+            ):
+                raise ValueError
             expected_proof: dict[str, Any] = {
                 "approval_required": proof.approval_required,
                 "effects": list(proof.effects),
@@ -447,6 +508,69 @@ class RuntimeActionWorkflowExecutor:
             raise ActionRuntimeConfigurationError(
                 "Compiled Action IR failed runtime validation"
             ) from None
+
+
+def _validate_local_development_recheck(
+    loaded: _LoadedAction,
+    prepared_preview: JsonValue,
+    fresh_preview: JsonValue,
+) -> Literal["allowed", "terminal"]:
+    """Validate a local re-read without claiming source-side serialization.
+
+    The surrounding process-local lock only coordinates callers using this ACC
+    runtime. An external writer can still race after the read because the source
+    exposes no atomic precondition; this mode is therefore development-only.
+    """
+
+    guard = loaded.capability.action.local_development_state_guard
+    if guard is None:
+        raise ActionRuntimeConfigurationError("Local development Action state guard is unavailable")
+    prepared_found, prepared_state = _resolve_json_pointer(
+        prepared_preview,
+        guard.state_pointer,
+    )
+    fresh_found, fresh_state = _resolve_json_pointer(fresh_preview, guard.state_pointer)
+    if not prepared_found or not fresh_found:
+        raise ActionStateConflictError("Action state cannot be safely rechecked before commit")
+    allowed = {canonical_json_bytes(value) for value in guard.allowed_values}
+    terminal = {canonical_json_bytes(value) for value in guard.terminal_values}
+    prepared_encoded = canonical_json_bytes(prepared_state)
+    fresh_encoded = canonical_json_bytes(fresh_state)
+    if prepared_encoded not in allowed | terminal:
+        raise ActionStateConflictError(
+            "Prepared Action state does not permit the requested mutation"
+        )
+    if fresh_encoded in terminal:
+        return "terminal"
+    if fresh_encoded not in allowed or fresh_encoded != prepared_encoded:
+        raise ActionStateConflictError("Action state changed after prepare")
+    return "allowed"
+
+
+def _validate_local_development_preview(loaded: _LoadedAction, preview: JsonValue) -> None:
+    guard = loaded.capability.action.local_development_state_guard
+    if guard is None:
+        return
+    found, state = _resolve_json_pointer(preview, guard.state_pointer)
+    permitted = {
+        canonical_json_bytes(value) for value in (*guard.allowed_values, *guard.terminal_values)
+    }
+    if not found or canonical_json_bytes(state) not in permitted:
+        raise ActionStateConflictError(
+            "Action preview state does not permit the requested mutation"
+        )
+
+
+def _validate_action_output(loaded: _LoadedAction, value: JsonValue) -> None:
+    if next(
+        Draft202012Validator(loaded.capability.output_schema).iter_errors(value),
+        None,
+    ):
+        raise ExecutionError(
+            "ACC_RUNTIME_OUTPUT_INVALID",
+            "Policy-filtered Action output does not match its schema.",
+            details={"capability_id": loaded.capability.id},
+        )
 
 
 def _mapping(value: object) -> Mapping[str, Any]:

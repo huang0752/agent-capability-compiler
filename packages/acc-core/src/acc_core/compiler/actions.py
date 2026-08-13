@@ -685,6 +685,66 @@ def prove_action_capability(
     semantics_by_operation = action_semantics or {}
     preview_operation_ids = {site.operation_id for site in preview_sites}
     preview_schema = _preview_result_schema(capability, operations)
+    local_guard = capability.action.local_development_state_guard
+    local_guard_valid = local_guard is not None
+    if local_guard is not None:
+        resource_schema = _schema_at_data_pointer(
+            capability.input_schema,
+            local_guard.resource_key_pointer,
+        )
+        if (
+            resource_schema is None
+            or not _schema_pointer_is_guaranteed(
+                capability.input_schema,
+                local_guard.resource_key_pointer,
+            )
+            or resource_schema.get("type") not in {"string", "integer"}
+        ):
+            local_guard_valid = False
+            _diagnostic(
+                diagnostics,
+                code="ACC_COMPILE_ACTION_LOCAL_DEVELOPMENT_RESOURCE_KEY_INVALID",
+                message=(
+                    "A local development state guard requires a required scalar "
+                    "resource key in the sealed capability input."
+                ),
+                path=diagnostic_path,
+                pointer="/action/local_development_state_guard/resource_key_pointer",
+            )
+        read_operation = operations.get(local_guard.read_operation_id)
+        if local_guard.read_operation_id not in preview_operation_ids or not isinstance(
+            read_operation, ReadOperationV2
+        ):
+            local_guard_valid = False
+            _diagnostic(
+                diagnostics,
+                code="ACC_COMPILE_ACTION_LOCAL_DEVELOPMENT_PREVIEW_READ_REQUIRED",
+                message=(
+                    "A local development state guard requires its declared Read "
+                    "Operation in preview."
+                ),
+                path=diagnostic_path,
+                pointer="/preview_workflow",
+            )
+        else:
+            strategy_operation_ids.add(local_guard.read_operation_id)
+        if (
+            preview_schema is None
+            or not _schema_pointer_is_guaranteed(preview_schema, local_guard.state_pointer)
+            or policy is None
+            or not _policy_discloses_unmodified(policy, local_guard.state_pointer)
+        ):
+            local_guard_valid = False
+            _diagnostic(
+                diagnostics,
+                code="ACC_COMPILE_ACTION_LOCAL_DEVELOPMENT_STATE_INVALID",
+                message=(
+                    "A local development state guard requires a guaranteed, "
+                    "unmodified public preview state."
+                ),
+                path=diagnostic_path,
+                pointer="/action/local_development_state_guard/state_pointer",
+            )
     for operation in mutation_operations:
         safety = operation.http.safety
         semantics = semantics_by_operation.get(operation.id)
@@ -720,10 +780,32 @@ def prove_action_capability(
                 path=diagnostic_path,
                 pointer="/commit_workflow",
             )
-        if safety.effect in {"update", "delete", "transition"} and safety.concurrency.mode not in {
-            "required",
-            "server_serialized_state_predicate",
-        }:
+        uses_local_development_guard = (
+            local_guard_valid
+            and local_guard is not None
+            and safety.effect in {"update", "delete", "transition"}
+            and safety.risk == "low"
+            and safety.retry.mode == "never"
+            and safety.idempotency.mode == "runtime_deduplicate"
+            and safety.concurrency.mode == "not_supported"
+        )
+        if local_guard is not None and not uses_local_development_guard:
+            _diagnostic(
+                diagnostics,
+                code="ACC_COMPILE_ACTION_LOCAL_DEVELOPMENT_SAFETY_INVALID",
+                message=(
+                    "A local development state guard supports only low-risk update, "
+                    "delete, or transition Operations with runtime_deduplicate, "
+                    "retry never, and explicitly unsupported source concurrency."
+                ),
+                path=diagnostic_path,
+                pointer="/action/local_development_state_guard",
+            )
+        if (
+            safety.effect in {"update", "delete", "transition"}
+            and safety.concurrency.mode not in {"required", "server_serialized_state_predicate"}
+            and not uses_local_development_guard
+        ):
             _diagnostic(
                 diagnostics,
                 code="ACC_COMPILE_ACTION_CONCURRENCY_REQUIRED",

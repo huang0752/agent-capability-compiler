@@ -13,6 +13,7 @@ from acc_runtime.actions.audit import (
     ActionAuditSink,
     ActionAuditSpan,
     ActionAuditUnavailableError,
+    LoggingActionAuditSink,
 )
 from acc_runtime.actions.coordinator import (
     ActionCommitExecution,
@@ -36,12 +37,18 @@ from acc_runtime.actions.errors import (
     ActionExpiredError,
     ActionHandleInvalidError,
     ActionStateConflictError,
+    ApprovalAuthorityIntegrityError,
 )
 from acc_runtime.actions.models import (
     PreparedActionCreation,
     PreparedActionRecord,
     PreparedActionState,
     PreparedActionStatus,
+)
+from acc_runtime.actions.resource_lock import (
+    ActionResourceLock,
+    ActionResourceLockCapacityError,
+    InMemoryActionResourceLock,
 )
 from acc_runtime.actions.runtime import (
     ActionRuntimeDependencies,
@@ -53,6 +60,13 @@ from acc_runtime.actions.runtime_executor import (
     ActionRuntimeConfigurationError,
     RuntimeActionWorkflowExecutor,
 )
+from acc_runtime.actions.sqlite_approval import (
+    ApprovalDecisionRecord,
+    ApprovalDecisionStatus,
+    SQLiteApprovalAuthority,
+)
+from acc_runtime.actions.sqlite_audit import DurableActionAuditRecord, SQLiteActionAuditSink
+from acc_runtime.actions.sqlite_store import SQLiteActionStore
 from acc_runtime.actions.store import ActionStore, InMemoryActionStore
 
 __all__ = [
@@ -77,6 +91,8 @@ __all__ = [
     "ActionPreviewExecution",
     "ActionPreviewInvalidError",
     "ActionReadResult",
+    "ActionResourceLock",
+    "ActionResourceLockCapacityError",
     "ActionRuntimeConfigurationError",
     "ActionRuntimeDependencies",
     "ActionScopeDeniedError",
@@ -85,16 +101,25 @@ __all__ = [
     "ActionStore",
     "ActionWorkflowExecutor",
     "ApprovalAuthority",
+    "ApprovalAuthorityIntegrityError",
     "ApprovalBinding",
+    "ApprovalDecisionRecord",
+    "ApprovalDecisionStatus",
     "ApprovalGrant",
     "CompiledActionDefinition",
+    "DurableActionAuditRecord",
+    "InMemoryActionResourceLock",
     "InMemoryActionStore",
     "InMemoryApprovalAuthority",
+    "LoggingActionAuditSink",
     "PreparedActionCreation",
     "PreparedActionPublic",
     "PreparedActionRecord",
     "PreparedActionState",
     "PreparedActionStatus",
     "RuntimeActionWorkflowExecutor",
+    "SQLiteActionAuditSink",
+    "SQLiteActionStore",
+    "SQLiteApprovalAuthority",
     "create_runtime_action_coordinator",
 ]

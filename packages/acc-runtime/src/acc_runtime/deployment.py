@@ -15,6 +15,7 @@ type DeploymentDenialReason = Literal[
     "capability_not_allowed",
 ]
 type ActionAuditMode = Literal["required", "best_effort"]
+type ActionSandboxMode = Literal["disabled", "local_development"]
 
 _EFFECTS: frozenset[str] = frozenset(
     {"read", "create", "update", "delete", "transition", "execute"}
@@ -26,6 +27,7 @@ _RISK_ORDER: dict[str, int] = {
     "critical": 3,
 }
 _AUDIT_MODES = frozenset({"required", "best_effort"})
+_ACTION_SANDBOX_MODES = frozenset({"disabled", "local_development"})
 
 
 def _exact_identifier(value: object, *, field_name: str) -> str:
@@ -78,6 +80,7 @@ class DeploymentPolicy:
     capability_allowlist: frozenset[str] | None = None
     require_durable_action_store: bool = True
     action_audit_mode: ActionAuditMode = "required"
+    action_sandbox_mode: ActionSandboxMode = "disabled"
 
     def __post_init__(self) -> None:
         if not isinstance(self.allowed_effects, frozenset):
@@ -96,6 +99,11 @@ class DeploymentPolicy:
             or self.action_audit_mode not in _AUDIT_MODES
         ):
             raise ValueError("action_audit_mode must be required or best_effort")
+        if (
+            not isinstance(self.action_sandbox_mode, str)
+            or self.action_sandbox_mode not in _ACTION_SANDBOX_MODES
+        ):
+            raise ValueError("action_sandbox_mode must be disabled or local_development")
 
     def evaluate(
         self,
@@ -149,6 +157,7 @@ class DeploymentPolicy:
 
 __all__ = [
     "ActionAuditMode",
+    "ActionSandboxMode",
     "DeploymentDecision",
     "DeploymentDenialReason",
     "DeploymentPolicy",
