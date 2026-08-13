@@ -15,9 +15,9 @@
 4. 扫描交付物中的 Secret、生产地址、Token、完整上游响应和生产数据；发现即停止并清理。
 5. 给出人工复核顺序，但不自动提交、push、部署或访问生产环境。
 6. 明确记录 Provider auth 类型、`stdio` 或 `streamable_http` 验证边界、`PrincipalContext` 来源及 `context_bindings` 是否实际使用；没有绑定的示例不得表述为绑定验收。
-7. Coverage 报告逐轴交付 `route_disposition`、`operation_trace`、`scenario_coverage`、`constructability`、`discoverability_graph`、`composition`、`schema_fidelity`、`output_budget`、`live_observations`；明确“不生成总分”，并区分静态上界与 live observation。
+7. Coverage 报告逐轴交付 `route_disposition`、`operation_trace`、`scenario_coverage`、`constructability`、`discoverability_graph`、`composition`、`tool_portfolio`、`schema_fidelity`、`output_budget`、`live_observations`；明确“不生成总分”，记录 portfolio budget/overlap/orphan/under-coverage findings，并区分静态上界与 live observation。
 8. 同时逐轴交付 `surface_disposition`、`interaction_trace`、`input_binding_fidelity`、`default_provenance`、`option_resolution`、`condition_coverage`、`related_data_graph`、`state_scenarios`、`presentation_projection`、`client_adapter_evidence`；不生成总分。`source_connected_verified` 不代表 `client_adapter_verified`。
-9. 按领域交付 `DomainMap`、Candidate Ledger、每个版本化 `DomainDecision`、active dependency refs 和十二个 Domain/Action 独立轴；明确 accepted、deferred、blocked、rejected，绝不附一份全部 route 让用户重新选择。
+9. 按领域交付 `DomainMap`、Candidate Ledger、每个版本化 `DomainDecision`、active dependency refs 和十二个 Domain/Action 独立轴；明确 accepted、deferred、blocked、rejected，并逐项对账 Read/Create/Update/Delete/transition/execute/composite 业务表面，绝不附一份全部 route 让用户重新选择。
 10. 记录领域处理顺序、当前完成领域和下一依赖已就绪领域；源 JWT 最终裁决、Scope 只能收窄、approval 不是授权三条边界必须原样保留。
 
 ## 门禁
@@ -30,6 +30,7 @@
 - HANDOFF、Test Report 与 candidate diff 使用同一次候选的 IR/Pack 摘要和带日期门禁计数，不保留旧版本成功声明。
 - 验证等级必须诚实：Fake Runtime、Gateway、headless、source-connected 与 real client adapter 证据分别记录，任何一级都不自动证明下一级。warning 不降低 `ok`，但必须进入两份风险交付物。
 - 每个 completed 领域都有精确 active `DomainDecision` 与用户确认；历史完成记录不能冒充当前激活决策。
+- `system_complete` 交付的 `blocked_on_evidence` 必须为零，且无 eligible Action intent 被 excluded/deferred。缺写沙箱授权、幂等/并发/审批/outcome Evidence 或 Action 测试时只能交付“未完成/阻断”报告，不能使用 complete 措辞。
 
 ## 输出
 

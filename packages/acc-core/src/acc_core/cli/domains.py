@@ -449,6 +449,15 @@ def analyze_domain_changes(
                 )
             )
         written = _write_change_requests(project, requests) if write else []
+    except ProjectIOError:
+        return None, [
+            _diagnostic(
+                "ACC_DOMAIN_IMPACT_PROJECT_INVALID",
+                "Domain impact output must remain inside the project without links.",
+                path="domain-change-requests",
+                pointer=None,
+            )
+        ]
     except (OSError, ValueError):
         return None, [
             _diagnostic(

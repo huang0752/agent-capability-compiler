@@ -138,6 +138,12 @@ def is_sensitive_path(relative: str) -> bool:
     )
 
 
+def is_path_link(path: Path) -> bool:
+    """Treat Windows junctions as links as well as symbolic links."""
+
+    return path.is_symlink() or bool(getattr(path, "is_junction", lambda: False)())
+
+
 def reject_symlink_components(path: Path, *, allow_missing_leaf: bool = False) -> None:
     absolute = path if path.is_absolute() else Path.cwd() / path
     current = Path(absolute.anchor)
@@ -152,7 +158,7 @@ def reject_symlink_components(path: Path, *, allow_missing_leaf: bool = False) -
             raise SafePathError(
                 "ACC_SKILL_PATH_INVALID", "path component does not exist", path=str(path)
             ) from None
-        if stat.S_ISLNK(metadata.st_mode):
+        if stat.S_ISLNK(metadata.st_mode) or is_path_link(current):
             raise SafePathError(
                 "ACC_SKILL_SYMLINK_REJECTED",
                 "symlink path components are not allowed",
@@ -211,14 +217,19 @@ def iter_workspace(root: Path, include_paths: list[str] | None = None) -> Iterat
             ) from exc
         for entry in entries:
             relative = f"{prefix}/{entry.name}" if prefix else entry.name
-            if entry.is_symlink():
+            if entry.is_symlink() or bool(getattr(entry, "is_junction", lambda: False)()):
                 yield relative, None, None
                 continue
             try:
                 if entry.is_dir(follow_symlinks=False):
                     yield from visit(Path(entry.path), relative)
                 elif entry.is_file(follow_symlinks=False):
-                    yield relative, Path(entry.path), entry.stat(follow_symlinks=False)
+                    # ``DirEntry.stat()`` reports zero-valued file identities on
+                    # some Windows filesystems while ``fstat()`` reports the real
+                    # volume/file index.  Take the pre-open snapshot through the
+                    # path API so the later handle identity comparison remains a
+                    # meaningful TOCTOU check on every platform.
+                    yield relative, Path(entry.path), os.stat(entry.path, follow_symlinks=False)
             except OSError as exc:
                 raise SafePathError(
                     "ACC_SKILL_WORKSPACE_UNREADABLE",
@@ -253,7 +264,7 @@ def read_file_bytes(
             "file exceeds the configured read limit",
             path=relative,
         )
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
     try:
         descriptor = os.open(path, flags)
     except OSError as exc:

@@ -8,6 +8,11 @@ from acc_core.quality.models import (
     LongTextDisclosure,
     OutputBudget,
 )
+from acc_core.quality.portfolio import (
+    PortfolioOverlap,
+    ToolPortfolioAnalysis,
+    analyze_tool_portfolio,
+)
 
 __all__ = [
     "CapabilityInputQuality",
@@ -16,4 +21,7 @@ __all__ = [
     "CompositionQuality",
     "LongTextDisclosure",
     "OutputBudget",
+    "PortfolioOverlap",
+    "ToolPortfolioAnalysis",
+    "analyze_tool_portfolio",
 ]

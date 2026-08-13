@@ -533,6 +533,51 @@
       "title": "InteractionDefault",
       "type": "object"
     },
+    "InteractionDimension": {
+      "enum": [
+        "input_bindings",
+        "defaults",
+        "option_sources",
+        "conditions",
+        "related_data",
+        "result_consumption",
+        "states"
+      ],
+      "type": "string"
+    },
+    "InteractionDimensionDisposition": {
+      "additionalProperties": false,
+      "description": "Prove whether one platform-neutral interaction dimension applies.",
+      "properties": {
+        "applicability": {
+          "enum": [
+            "applicable",
+            "not_applicable"
+          ],
+          "title": "Applicability",
+          "type": "string"
+        },
+        "dimension": {
+          "$ref": "#/$defs/InteractionDimension"
+        },
+        "evidence": {
+          "$ref": "#/$defs/Evidence"
+        },
+        "rationale": {
+          "minLength": 1,
+          "title": "Rationale",
+          "type": "string"
+        }
+      },
+      "required": [
+        "dimension",
+        "applicability",
+        "rationale",
+        "evidence"
+      ],
+      "title": "InteractionDimensionDisposition",
+      "type": "object"
+    },
     "InteractionEvidenceClaim": {
       "additionalProperties": false,
       "description": "Bind one inventory claim to immutable source evidence.",
@@ -1348,6 +1393,13 @@
           "title": "Defaults",
           "type": "array"
         },
+        "dimension_dispositions": {
+          "items": {
+            "$ref": "#/$defs/InteractionDimensionDisposition"
+          },
+          "title": "Dimension Dispositions",
+          "type": "array"
+        },
         "evidence_claims": {
           "items": {
             "$ref": "#/$defs/InteractionEvidenceClaim"
@@ -1449,6 +1501,17 @@
           "title": "Business Purpose",
           "type": "string"
         },
+        "entry_evidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Evidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "evidence_sources": {
           "items": {
             "minLength": 1,
@@ -1478,6 +1541,19 @@
           "minLength": 1,
           "title": "Route Or Entry",
           "type": "string"
+        },
+        "usage_context": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Usage Context"
         }
       },
       "required": [

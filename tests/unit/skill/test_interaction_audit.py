@@ -4,7 +4,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import yaml
 
@@ -27,6 +27,7 @@ def _evidence(source_id: str = "customer-page") -> dict[str, object]:
 def _scope_inventory(*, interaction_ids: list[str] | None = None) -> dict[str, object]:
     return {
         "schema_version": "2",
+        "scope": {"mode": "system_complete"},
         "routes": [
             {
                 "id": "customer.search",
@@ -48,8 +49,10 @@ def _ui_inventory() -> dict[str, object]:
                 "id": "customers",
                 "kind": "page",
                 "route_or_entry": "/customers",
+                "usage_context": "customers-list-page",
                 "business_purpose": "Manage customers",
                 "evidence_sources": ["customer-page"],
+                "entry_evidence": _evidence(),
             }
         ],
         "interactions": [
@@ -67,6 +70,23 @@ def _ui_inventory() -> dict[str, object]:
                 "related_data": [],
                 "result_consumption": [],
                 "states": [],
+                "dimension_dispositions": [
+                    {
+                        "dimension": dimension,
+                        "applicability": "not_applicable",
+                        "rationale": f"The initial load has no {dimension} behavior.",
+                        "evidence": _evidence(),
+                    }
+                    for dimension in (
+                        "conditions",
+                        "defaults",
+                        "input_bindings",
+                        "option_sources",
+                        "related_data",
+                        "result_consumption",
+                        "states",
+                    )
+                ],
                 "evidence_claims": [
                     {
                         "target_pointer": "/interactions/0",
@@ -156,6 +176,64 @@ def test_interaction_audit_accepts_closed_normalized_documents_and_writes_report
         "unresolved": 0,
     }
     assert json.loads((project / "interaction-audit-report.json").read_text()) == payload
+
+
+def test_complete_interaction_rejects_empty_dimensions_without_dispositions(
+    tmp_path: Path,
+) -> None:
+    inventory = _ui_inventory()
+    inventory["interactions"][0]["dimension_dispositions"] = []  # type: ignore[index]
+    project = _write_project(tmp_path, inventory=inventory)
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert "ACC_UI_DIMENSION_DISPOSITION_REQUIRED" in {
+        item["code"] for item in payload["diagnostics"]
+    }
+
+
+def test_complete_interaction_rejects_orphan_dimension_evidence(tmp_path: Path) -> None:
+    inventory = _ui_inventory()
+    dispositions = inventory["interactions"][0]["dimension_dispositions"]  # type: ignore[index]
+    dispositions[0]["evidence"]["source_id"] = "orphan-source"
+    project = _write_project(tmp_path, inventory=inventory)
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert "ACC_UI_DIMENSION_EVIDENCE_UNRESOLVED" in {
+        item["code"] for item in payload["diagnostics"]
+    }
+
+
+def test_complete_interaction_rejects_duplicate_surface_usage_context(
+    tmp_path: Path,
+) -> None:
+    inventory = _ui_inventory()
+    duplicate = dict(inventory["surfaces"][0])  # type: ignore[index]
+    duplicate["id"] = "customers-mobile"
+    cast(list[object], inventory["surfaces"]).append(duplicate)
+    inventory["summary"]["surfaces"] = 2  # type: ignore[index]
+    project = _write_project(tmp_path, inventory=inventory)
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert "ACC_UI_SURFACE_CONTEXT_DUPLICATE" in {item["code"] for item in payload["diagnostics"]}
+
+
+def test_system_complete_frontend_denominator_rejects_discovered_ui_scope(
+    tmp_path: Path,
+) -> None:
+    inventory = _ui_inventory()
+    inventory["scope"]["mode"] = "discovered"  # type: ignore[index]
+    project = _write_project(tmp_path, inventory=inventory)
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert "ACC_UI_SYSTEM_SCOPE_INCOMPLETE" in {item["code"] for item in payload["diagnostics"]}
 
 
 def test_interaction_audit_rejects_interaction_route_unknown_to_scope(tmp_path: Path) -> None:

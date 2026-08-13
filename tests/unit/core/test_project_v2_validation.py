@@ -411,6 +411,23 @@ def _write_action_interaction_sidecars(project: Path, *, lifecycle: bool) -> Non
                 "related_data": [],
                 "result_consumption": [],
                 "states": [],
+                "dimension_dispositions": [
+                    {
+                        "dimension": dimension,
+                        "applicability": "not_applicable",
+                        "rationale": f"No {dimension} behavior applies to this route interaction.",
+                        "evidence": interaction_evidence,
+                    }
+                    for dimension in (
+                        "conditions",
+                        "defaults",
+                        "input_bindings",
+                        "option_sources",
+                        "related_data",
+                        "result_consumption",
+                        "states",
+                    )
+                ],
                 "evidence_claims": [
                     {
                         "target_pointer": f"/interactions/{index}",
@@ -448,8 +465,10 @@ def _write_action_interaction_sidecars(project: Path, *, lifecycle: bool) -> Non
                     "id": "orders",
                     "kind": "page",
                     "route_or_entry": "/orders",
+                    "usage_context": "orders-inspect-and-approve-page",
                     "business_purpose": "Inspect and approve orders",
                     "evidence_sources": inventory_evidence_sources,
+                    "entry_evidence": interaction_evidence,
                 }
             ],
             "interactions": interactions,
@@ -522,6 +541,20 @@ def test_proven_action_interaction_lifecycle_reaches_compiler(tmp_path: Path) ->
 
     assert "ACC_UI_ACTION_LIFECYCLE_REQUIRED" not in {item.code for item in validation.diagnostics}
     assert compilation.ir is not None, compilation.diagnostics
+    interactions = cast(dict[str, Any], compilation.ir["interactions"])
+    interaction_attestation = cast(dict[str, Any], interactions["inventory"])
+    assert interaction_attestation["surface_contexts"]["orders"]["usage_context"] == (
+        "orders-inspect-and-approve-page"
+    )
+    assert set(interaction_attestation["dimension_dispositions"]["orders.inspect"]) == {
+        "conditions",
+        "defaults",
+        "input_bindings",
+        "option_sources",
+        "related_data",
+        "result_consumption",
+        "states",
+    }
 
 
 def test_validate_project_loads_a_closed_v2_quality_project(tmp_path: Path) -> None:

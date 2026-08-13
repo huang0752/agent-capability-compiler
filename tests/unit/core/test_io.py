@@ -22,6 +22,7 @@ from acc_core.io import (
     read_project_text,
     resolve_project_path,
 )
+from fs_links import create_link
 
 
 def test_diagnostic_has_a_stable_strict_payload() -> None:
@@ -129,7 +130,7 @@ def test_resolve_project_path_rejects_non_relative_or_traversing_paths(
 def test_resolve_project_path_rejects_file_symlink(tmp_path: Path) -> None:
     outside = tmp_path.parent / "outside.json"
     outside.write_text('{"secret": true}', encoding="utf-8")
-    (tmp_path / "linked.json").symlink_to(outside)
+    create_link(tmp_path / "linked.json", outside)
 
     with pytest.raises(ProjectSymlinkError) as caught:
         resolve_project_path(tmp_path, "linked.json")
@@ -141,7 +142,7 @@ def test_resolve_project_path_rejects_symlinked_parent_directory(tmp_path: Path)
     outside = tmp_path.parent / "outside-directory"
     outside.mkdir()
     (outside / "data.json").write_text("{}", encoding="utf-8")
-    (tmp_path / "linked").symlink_to(outside, target_is_directory=True)
+    create_link(tmp_path / "linked", outside, target_is_directory=True)
 
     with pytest.raises(ProjectSymlinkError):
         resolve_project_path(tmp_path, "linked/data.json")

@@ -18,6 +18,7 @@ from verify_read_only_workspace import (
     bounded_size,
     diagnostic,
     emit,
+    is_path_link,
     is_sensitive_path,
     read_file_bytes,
     reject_parent_segments,
@@ -65,7 +66,7 @@ def validate_evidence_root(project: Path) -> Path:
         metadata = evidence.lstat()
     except FileNotFoundError:
         return evidence
-    if stat.S_ISLNK(metadata.st_mode):
+    if stat.S_ISLNK(metadata.st_mode) or is_path_link(evidence):
         raise SafePathError(
             "ACC_SKILL_SYMLINK_REJECTED",
             "ACC evidence directory must not be a symlink",
@@ -92,7 +93,7 @@ def create_safe_parents(evidence: Path, relative_parent: Path) -> Path:
         except FileNotFoundError:
             current.mkdir(mode=0o700)
             continue
-        if stat.S_ISLNK(metadata.st_mode):
+        if stat.S_ISLNK(metadata.st_mode) or is_path_link(current):
             raise SafePathError(
                 "ACC_SKILL_SYMLINK_REJECTED",
                 "evidence output parent must not be a symlink",
@@ -129,14 +130,18 @@ def atomic_write_json(target: Path, value: dict[str, object]) -> None:
     ).encode("utf-8")
     descriptor, temporary = tempfile.mkstemp(prefix=".acc-evidence-", dir=target.parent)
     try:
-        os.fchmod(descriptor, 0o600)
+        # Windows does not expose descriptor chmod.  ``mkstemp`` still creates
+        # the file exclusively; POSIX additionally receives restrictive mode
+        # hardening before any bytes are written.
+        if hasattr(os, "fchmod"):
+            os.fchmod(descriptor, 0o600)
         offset = 0
         while offset < len(payload):
             offset += os.write(descriptor, payload[offset:])
         os.fsync(descriptor)
         os.close(descriptor)
         descriptor = -1
-        if target.is_symlink():
+        if is_path_link(target):
             raise SafePathError(
                 "ACC_SKILL_SYMLINK_REJECTED",
                 "evidence output became a symlink",

@@ -17,7 +17,11 @@ from acc_core.coverage.models import (
     SurfaceDispositionCoverage,
 )
 from acc_core.interactions.compile import InteractionCompilationError, compile_interactions
-from acc_core.interactions.models import CapabilityInteractionContract, UIInteraction
+from acc_core.interactions.models import (
+    CapabilityInteractionContract,
+    InteractionDimension,
+    UIInteraction,
+)
 from acc_core.interactions.validate import analyze_interaction_fidelity
 from acc_core.models import Evidence
 from acc_core.scope import ScopeInventory
@@ -122,6 +126,7 @@ def _fidelity_axis(
     source_items: Callable[[UIInteraction], Sequence[object]],
     contract_items: Callable[[CapabilityInteractionContract], Sequence[object]],
     broken_capability_ids: set[str],
+    dimension: InteractionDimension,
 ) -> InteractionFidelityAxisCoverage:
     declared: list[str] = []
     proven: list[str] = []
@@ -130,7 +135,11 @@ def _fidelity_axis(
         contracts = contracts_by_interaction.get(interaction_id, [])
         source = tuple(source_items(interaction))
         contract_values = tuple(item for contract in contracts for item in contract_items(contract))
-        if not source and not contract_values:
+        disposition = next(
+            (item for item in interaction.dimension_dispositions if item.dimension == dimension),
+            None,
+        )
+        if not source and not contract_values and disposition is None:
             continue
         declared.append(interaction_id)
         source_facts = {key for item in source if (key := _semantic_fact_key(item)) is not None}
@@ -140,7 +149,15 @@ def _fidelity_axis(
         contract_broken = any(
             contract.capability_id in broken_capability_ids for contract in contracts
         )
-        if contracts and source_facts <= contract_facts and not contract_broken:
+        if (
+            contracts
+            and source_facts <= contract_facts
+            and not contract_broken
+            and (
+                disposition is None
+                or disposition.applicability == ("applicable" if source else "not_applicable")
+            )
+        ):
             proven.append(interaction_id)
         else:
             unproven.append(interaction_id)
@@ -261,6 +278,7 @@ def analyze_interaction_coverage(
             *contract.trusted_input_bindings,
         ],
         broken_capability_ids=broken_by_code.get("ACC_UI_INPUT_SOURCE_UNRESOLVED", set()),
+        dimension="input_bindings",
     )
     default_axis = _fidelity_axis(
         interactions=interactions,
@@ -268,6 +286,7 @@ def analyze_interaction_coverage(
         source_items=lambda item: item.defaults,
         contract_items=lambda contract: contract.defaults,
         broken_capability_ids=broken_by_code.get("ACC_UI_DEFAULT_AUTHORITY_UNPROVEN", set()),
+        dimension="defaults",
     )
     option_axis = _fidelity_axis(
         interactions=interactions,
@@ -275,6 +294,7 @@ def analyze_interaction_coverage(
         source_items=lambda item: item.option_sources,
         contract_items=lambda contract: contract.option_sources,
         broken_capability_ids=broken_by_code.get("ACC_UI_OPTION_SOURCE_UNTRACED", set()),
+        dimension="option_sources",
     )
     condition_axis = _fidelity_axis(
         interactions=interactions,
@@ -285,6 +305,7 @@ def analyze_interaction_coverage(
             broken_by_code.get("ACC_UI_CONDITION_AUTHORITY_UNPROVEN", set())
             | broken_by_code.get("ACC_UI_CONDITION_CYCLE", set())
         ),
+        dimension="conditions",
     )
     related_axis = _fidelity_axis(
         interactions=interactions,
@@ -292,6 +313,7 @@ def analyze_interaction_coverage(
         source_items=lambda item: item.related_data,
         contract_items=lambda contract: contract.related_data,
         broken_capability_ids=broken_by_code.get("ACC_UI_RELATED_DATA_DEPENDENCY_BROKEN", set()),
+        dimension="related_data",
     )
     edges = sorted(
         (
@@ -317,6 +339,7 @@ def analyze_interaction_coverage(
         source_items=lambda item: item.result_consumption,
         contract_items=lambda contract: contract.result_consumption,
         broken_capability_ids=broken_by_code.get("ACC_UI_PRESENTATION_FIELD_UNPROVEN", set()),
+        dimension="result_consumption",
     )
     required_scenarios = sorted(
         scenario

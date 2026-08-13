@@ -8,6 +8,7 @@ from pathlib import Path
 from pydantic import BaseModel, TypeAdapter
 
 from acc_core.contracts import SourceContract
+from acc_core.coverage.live_artifact import LiveObservationArtifact
 from acc_core.domains import (
     CapabilityCandidateLedger,
     DomainChangeRequest,
@@ -43,6 +44,7 @@ MODEL_SCHEMAS: dict[str, type[BaseModel] | TypeAdapter[object]] = {
     "eval": Eval,
     "evidence": Evidence,
     "interaction-contract": CapabilityInteractionContract,
+    "live-observation-artifact": LiveObservationArtifact,
     "operation": TypeAdapter(Operation),
     "policy": Policy,
     "project": Project,

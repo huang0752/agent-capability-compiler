@@ -12,6 +12,7 @@ from acc_core.domains import (
     domain_decision_digest,
 )
 from acc_core.validation import validate_project
+from fs_links import create_link
 
 
 def _write(path: Path, value: object) -> None:
@@ -866,13 +867,13 @@ def test_domain_collections_reject_duplicate_symlink_and_oversized_documents(
     outside = tmp_path / "outside.yaml"
     _write(outside, _ledger())
     (symlink / "domain-decisions").mkdir()
-    (symlink / "domain-decisions" / "linked.yaml").symlink_to(outside)
+    create_link(symlink / "domain-decisions" / "linked.yaml", outside)
     assert "ACC_IO_SYMLINK_REJECTED" in _codes(symlink)
 
     linked_directory = _project(tmp_path / "linked-directory")
     _write_domain_set(linked_directory, with_decision=False)
     missing_directory = tmp_path / "missing-decisions"
-    (linked_directory / "domain-decisions").symlink_to(missing_directory)
+    create_link(linked_directory / "domain-decisions", missing_directory)
     assert "ACC_IO_SYMLINK_REJECTED" in _codes(linked_directory)
 
     oversized = _project(tmp_path / "oversized")

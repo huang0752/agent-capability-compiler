@@ -24,6 +24,7 @@ Outputs are confined to `acc_project`. The source checkout is evidence, never an
 7. Permission, tenant, disclosure, timeout, and response-size controls are testable contracts.
 8. Failures remain visible in diagnostics and handoff artifacts.
 9. Default unspecified existing-system scope to `system_complete`; use `pilot` only after explicit user MVP confirmation is recorded.
+9a. `system_complete` covers the full business surface: Read, Create, Update, Delete, transition, execute, and composite intents. It is not synonymous with every route being classified or with a Read-only delivery.
 10. Separate 浅层全局发现 from bounded deep Evidence includes, and never use `--include` as the discovery denominator.
 11. Authentication belongs to `provider.auth`: `none`, `bearer_secret`, or `password_bearer`; Operation 不得保存 `credential_ref`, and account/password/JWT values never enter project files.
 12. Request identity comes only from immutable `PrincipalContext`. `context_bindings` inject trusted principal/tenant values into evidenced path/query inputs and cannot be supplied by an Agent or Workflow.
@@ -33,6 +34,8 @@ Outputs are confined to `acc_project`. The source checkout is evidence, never an
 16. Every Capability plan records selector acquisition, an empty success path where list/search can legitimately return nothing, failure isolation, and output budget. Producer edges must make required selectors constructible.
 17. Coverage keeps route disposition, Operation trace, scenarios, constructability, discoverability, composition, schema fidelity, output budget, and live observations independent; it does not generate an aggregate score or equate route closure with usability.
 18. An Action uses `prepare → approve → commit → status`, complete safety contracts, trusted approval handles, and isolated sandbox validation; 不得简单放开 POST.
+18a. Missing sandbox authorization or Action safety Evidence forces `eligibility=undetermined` and `disposition=blocked_on_evidence`. It blocks domain and system completion; it does not justify `excluded`, `ineligible`, or disappearance from the denominator.
+18b. In `system_complete`, an eligible Action intent cannot be completed by exclusion. Route composition is valid only when the replacement preserves the same mutation intent and full Action lifecycle; otherwise choose an explicitly confirmed `pilot` or report the system as incomplete.
 19. Client discovery records surfaces, events, bindings, defaults, options, conditions, related data, states, and unknowns. A hidden/disabled control 不是授权；前端默认值和前端条件不得冒充 `SourceContract`。
 20. 全局浅扫先建立 Candidate Ledger、`DomainMap` 和依赖顺序；领域深扫不能反向缩小全局分母。
 21. 一次只激活一个依赖已就绪的领域。先确认业务目标和 `DomainPolicy`，再深扫并自动处理证据清晰候选；绝不把全部 route 交给用户选择。
@@ -50,13 +53,13 @@ PREFLIGHT -> GLOBAL_ANALYZE -> DOMAIN_POLICY -> DOMAIN_DEEP_SCAN -> DOMAIN_REVIE
           -> VALIDATE -> TEST -> REFINE -> HANDOFF -> STOP
 ```
 
-On a safety or evidence failure, transition to `STOP` and report the blocker. On a validation or test failure, stay in that phase, fix only the ACC project, and rerun the focused gate before later gates.
+On path separation, source immutability, secret, or production-access safety failure, transition to `STOP` and report the blocker. On candidate Evidence or sandbox-authorization failure, keep that candidate `blocked_on_evidence`, stop its Implement/Test path, and continue only safe discovery; do not advance the affected domain or claim system completion. On a validation or test failure, stay in that phase, fix only the ACC project, and rerun the focused gate before later gates.
 
 ## Phase protocol
 
 ### 0. Preflight
 
-Canonicalize both paths with `pwd -P` or `realpath`. Declare `system_complete` by default; `pilot` requires explicit user MVP wording and recorded confirmation. For a new target, create the distinct project directory with `acc init <acc_project>`, enter it, then run `acc doctor --json`; do not run Doctor against an uninitialized empty directory. Run the bundled preflight and read-only verification scripts with Python 3.12. Confirm checkout identity, separate paths, route discovery inputs, test discoverability, and absence of likely production secrets. Record a source snapshot. Stop on ambiguity or risk.
+Canonicalize both paths with `pwd -P` or `realpath`. Declare `system_complete` by default; `pilot` requires explicit user MVP wording and recorded confirmation. Record that the default denominator includes Read/Create/Update/Delete/transition/execute/composite intents. For a new target, create the distinct project directory with `acc init <acc_project>`, enter it, then run `acc doctor --json`; do not run Doctor against an uninitialized empty directory. Run the bundled preflight and read-only verification scripts with Python 3.12. Confirm checkout identity, separate paths, route discovery inputs, test discoverability, and absence of likely production secrets. Record a source snapshot. Missing write-sandbox authorization blocks discovered Actions but does not stop read-only global discovery or remove them from the denominator. Stop only the unsafe Action implementation/test path on that blocker.
 
 ### 1. Analyze
 
@@ -68,7 +71,7 @@ Normalize only the active, policy-confirmed domain: entities, relations, Read an
 
 ### 3. Plan
 
-Present the active domain's independent axes and versioned candidate dispositions. Confirm its `DomainDecision`; user deferral remains distinct from an evidence blocker. Only accepted, evidenced candidates enter Capability Plan. After a domain is confirmed, continue with the next dependency-ready domain; never batch all route decisions into one prompt. The final Plan closes both route and interaction denominators and keeps credentials, tenant identity, and server-derived values out of agent inputs.
+Present the active domain's independent axes and versioned candidate dispositions. Confirm its `DomainDecision`; user deferral remains distinct from an evidence blocker. Only accepted, evidenced candidates enter Capability Plan. A system-complete DomainDecision cannot be completed while an Action is deferred, excluded, or blocked; lack of write-sandbox authorization remains `blocked_on_evidence`. After a domain is confirmed, continue with the next dependency-ready domain; never batch all route decisions into one prompt. The final Plan closes the Read/Create/Update/Delete/transition/execute/composite business surface plus both route and interaction denominators, and keeps credentials, tenant identity, and server-derived values out of agent inputs.
 
 ### 4. Implement
 
@@ -84,11 +87,11 @@ Run contract and direct Fake Runtime suites as `offline_candidate`; record `head
 
 ### 7. Refine
 
-Compare the nine existing axes and ten interaction axes independently: `surface_disposition`, `interaction_trace`, `input_binding_fidelity`, `default_provenance`, `option_resolution`, `condition_coverage`, `related_data_graph`, `state_scenarios`, `presentation_projection`, and `client_adapter_evidence`. Do not generate a total score. Detect orphaned interactions, unproven defaults, unsafe conditions, broken related-data graphs, frontend-used exclusions, and denominator distortion. Rerun both audits, validation, and tests after each material change.
+Compare the ten core axes, including `tool_portfolio`, and ten interaction axes independently: `surface_disposition`, `interaction_trace`, `input_binding_fidelity`, `default_provenance`, `option_resolution`, `condition_coverage`, `related_data_graph`, `state_scenarios`, `presentation_projection`, and `client_adapter_evidence`. Do not generate a total score. Detect portfolio explosion, same-intent overlap, isolated mutations, under-covered materialized routes, orphaned interactions, unproven defaults, unsafe conditions, broken related-data graphs, frontend-used exclusions, and denominator distortion. Rerun both audits, validation, and tests after each material change.
 
 ### 8. Handoff
 
-Verify the source snapshot is unchanged. Build the pack twice and compare digests. State route scope, interaction scope, and each independently proven verification level. A source-connected result never becomes client-adapter proof. Produce review artifacts with exact commands/results, limitations, and risks. Do not commit or push unless separately requested; stop for human review.
+Verify the source snapshot is unchanged. Build the pack twice and compare digests. State route scope, interaction scope, full business-surface disposition, and each independently proven verification level. Never label `system_complete` complete when any eligible Action/composite intent is excluded, deferred, or `blocked_on_evidence`. A source-connected result never becomes client-adapter proof. Produce review artifacts with exact commands/results, limitations, and risks. Do not commit or push unless separately requested; stop for human review.
 
 ## Handoff truth rules
 
@@ -97,5 +100,6 @@ Verify the source snapshot is unchanged. Build the pack twice and compare digest
 - `test-report.json` identifies each suite and real pass/fail counts.
 - `risk-report.json` includes unresolved evidence, auth, tenant, schema, runtime, deployment risks, and every scope-audit warning; `HANDOFF.md` repeats those warnings for human review.
 - A Git `candidate.diff` contains only ACC project changes; a non-Git `artifact-manifest.json` records sorted file hashes without file content. Neither substitutes for source verification.
+- `system_complete` is a completion claim only when every discovered business intent is materialized or objectively ineligible. Read closure, structured exclusions, or a user choice not to authorize write testing cannot substitute for unresolved Action evidence.
 
 Never label a skipped test as passed, a placeholder digest as evidence, or a local result as production proof.

@@ -28,6 +28,7 @@ from acc_core.interactions.expressions import (
 from acc_core.interactions.models import (
     CapabilityInteractionContract,
     InteractionCondition,
+    InteractionDimension,
     RelatedDataBinding,
     ResultConsumption,
     UIInteraction,
@@ -476,6 +477,7 @@ def analyze_interaction_fidelity(
     dependency_edges: set[tuple[str, str]] = set()
     routes = {route.id: route for route in scope_inventory.routes}
     interactions = {interaction.id: interaction for interaction in ui_inventory.interactions}
+    surfaces = {surface.id: surface for surface in ui_inventory.surfaces}
     interaction_positions = {
         interaction.id: index for index, interaction in enumerate(ui_inventory.interactions)
     }
@@ -487,6 +489,109 @@ def analyze_interaction_fidelity(
     declared_source_ids = set(ui_inventory.scope.evidence_sources) | {
         source_id for surface in ui_inventory.surfaces for source_id in surface.evidence_sources
     }
+    dimension_fields: tuple[InteractionDimension, ...] = (
+        "conditions",
+        "defaults",
+        "input_bindings",
+        "option_sources",
+        "related_data",
+        "result_consumption",
+        "states",
+    )
+    if (
+        scope_inventory.scope.mode == "system_complete"
+        and ui_inventory.interactions
+        and ui_inventory.scope.mode != "complete"
+    ):
+        _diagnostic(
+            diagnostics,
+            "ACC_UI_SYSTEM_SCOPE_INCOMPLETE",
+            "System-complete route scope with a client denominator requires complete "
+            "interaction scope.",
+            path="ui-interaction-inventory.yaml",
+            pointer="/scope/mode",
+        )
+    if ui_inventory.scope.mode == "complete":
+        context_keys: set[str] = set()
+        for surface_index, surface in enumerate(ui_inventory.surfaces):
+            if surface.usage_context is None or surface.entry_evidence is None:
+                _diagnostic(
+                    diagnostics,
+                    "ACC_UI_SURFACE_ENTRY_EVIDENCE_REQUIRED",
+                    "Complete interaction scope requires an evidenced surface usage context.",
+                    path="ui-interaction-inventory.yaml",
+                    pointer=f"/surfaces/{surface_index}",
+                )
+            else:
+                context_key = surface.usage_context
+                if context_key in context_keys:
+                    _diagnostic(
+                        diagnostics,
+                        "ACC_UI_SURFACE_CONTEXT_DUPLICATE",
+                        "Surface usage contexts must remain distinct instead of folding "
+                        "by endpoint.",
+                        path="ui-interaction-inventory.yaml",
+                        pointer=f"/surfaces/{surface_index}/usage_context",
+                    )
+                context_keys.add(context_key)
+                if surface.entry_evidence.source_id not in surface.evidence_sources:
+                    _diagnostic(
+                        diagnostics,
+                        "ACC_UI_SURFACE_ENTRY_EVIDENCE_REQUIRED",
+                        "Surface entry evidence must resolve through its declared "
+                        "evidence sources.",
+                        path="ui-interaction-inventory.yaml",
+                        pointer=f"/surfaces/{surface_index}/entry_evidence/source_id",
+                    )
+        for interaction_index, interaction in enumerate(ui_inventory.interactions):
+            interaction_claim_sources = {
+                claim.evidence.source_id for claim in interaction.evidence_claims
+            }
+            linked_surface = surfaces.get(interaction.surface_id)
+            surface_source_ids = (
+                set(linked_surface.evidence_sources) if linked_surface is not None else set()
+            )
+            dispositions = {
+                disposition.dimension: disposition
+                for disposition in interaction.dimension_dispositions
+            }
+            if set(dispositions) != set(dimension_fields):
+                _diagnostic(
+                    diagnostics,
+                    "ACC_UI_DIMENSION_DISPOSITION_REQUIRED",
+                    "Complete interaction scope requires an evidenced disposition for every "
+                    "platform-neutral interaction dimension.",
+                    path="ui-interaction-inventory.yaml",
+                    pointer=f"/interactions/{interaction_index}/dimension_dispositions",
+                )
+            for field_name in dimension_fields:
+                disposition = dispositions.get(field_name)
+                if disposition is None:
+                    continue
+                populated = bool(getattr(interaction, field_name))
+                if (disposition.applicability == "applicable") != populated:
+                    _diagnostic(
+                        diagnostics,
+                        "ACC_UI_DIMENSION_DISPOSITION_MISMATCH",
+                        "Interaction dimension content must match its evidenced applicability.",
+                        path="ui-interaction-inventory.yaml",
+                        pointer=f"/interactions/{interaction_index}/{field_name}",
+                    )
+                if (
+                    disposition.evidence.source_id not in interaction_claim_sources
+                    or disposition.evidence.source_id not in surface_source_ids
+                ):
+                    _diagnostic(
+                        diagnostics,
+                        "ACC_UI_DIMENSION_EVIDENCE_UNRESOLVED",
+                        "Dimension disposition evidence must resolve through both the "
+                        "interaction claims and its surface evidence sources.",
+                        path="ui-interaction-inventory.yaml",
+                        pointer=(
+                            f"/interactions/{interaction_index}/dimension_dispositions/"
+                            f"{field_name}/evidence/source_id"
+                        ),
+                    )
     if ui_inventory.interactions and (
         set(ui_inventory.scope.evidence_sources) - claim_source_ids
         or claim_source_ids - declared_source_ids

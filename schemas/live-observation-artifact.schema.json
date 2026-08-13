@@ -1,0 +1,116 @@
+{
+  "$defs": {
+    "LiveObservationSample": {
+      "additionalProperties": false,
+      "description": "One successful source-connected capability invocation.",
+      "properties": {
+        "capability_id": {
+          "minLength": 1,
+          "title": "Capability Id",
+          "type": "string"
+        },
+        "case_id": {
+          "minLength": 1,
+          "title": "Case Id",
+          "type": "string"
+        },
+        "response_bytes": {
+          "minimum": 0,
+          "title": "Response Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "capability_id",
+        "case_id",
+        "response_bytes"
+      ],
+      "title": "LiveObservationSample",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Canonical output emitted by ``acc test live``, never by coverage summaries.",
+  "properties": {
+    "artifact_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Artifact Sha256",
+      "type": "string"
+    },
+    "compiled_ir_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Compiled Ir Sha256",
+      "type": "string"
+    },
+    "expires_at": {
+      "format": "date-time",
+      "title": "Expires At",
+      "type": "string"
+    },
+    "kind": {
+      "const": "acc.live_observations",
+      "default": "acc.live_observations",
+      "title": "Kind",
+      "type": "string"
+    },
+    "observed_at": {
+      "format": "date-time",
+      "title": "Observed At",
+      "type": "string"
+    },
+    "pack_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Pack Sha256",
+      "type": "string"
+    },
+    "profile_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Profile Sha256",
+      "type": "string"
+    },
+    "project_id": {
+      "minLength": 1,
+      "title": "Project Id",
+      "type": "string"
+    },
+    "project_version": {
+      "minLength": 1,
+      "title": "Project Version",
+      "type": "string"
+    },
+    "report_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Report Sha256",
+      "type": "string"
+    },
+    "samples": {
+      "items": {
+        "$ref": "#/$defs/LiveObservationSample"
+      },
+      "minItems": 1,
+      "title": "Samples",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "1",
+      "default": "1",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "project_id",
+    "project_version",
+    "pack_sha256",
+    "compiled_ir_sha256",
+    "profile_sha256",
+    "report_sha256",
+    "observed_at",
+    "expires_at",
+    "samples",
+    "artifact_sha256"
+  ],
+  "title": "LiveObservationArtifact",
+  "type": "object"
+}

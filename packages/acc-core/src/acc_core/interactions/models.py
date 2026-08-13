@@ -26,6 +26,15 @@ type InteractionTriggerKind = Literal[
     "navigate",
     "system_event",
 ]
+type InteractionDimension = Literal[
+    "input_bindings",
+    "defaults",
+    "option_sources",
+    "conditions",
+    "related_data",
+    "result_consumption",
+    "states",
+]
 
 
 def _validate_unique_sorted(values: list[str], *, field_name: str) -> list[str]:
@@ -81,8 +90,10 @@ class UISurface(InteractionModel):
     id: NonEmptyString
     kind: Literal["page", "dialog", "panel", "mobile_screen", "command", "embedded_flow"]
     route_or_entry: NonEmptyString
+    usage_context: NonEmptyString | None = None
     business_purpose: NonEmptyString
     evidence_sources: list[NonEmptyString]
+    entry_evidence: Evidence | None = None
 
     @field_validator("evidence_sources")
     @classmethod
@@ -387,6 +398,15 @@ class InteractionOmission(InteractionModel):
     evidence: Evidence
 
 
+class InteractionDimensionDisposition(InteractionModel):
+    """Prove whether one platform-neutral interaction dimension applies."""
+
+    dimension: InteractionDimension
+    applicability: Literal["applicable", "not_applicable"]
+    rationale: NonEmptyString
+    evidence: Evidence
+
+
 class UIInteraction(InteractionModel):
     """One business-relevant source-client transition or data consumption path."""
 
@@ -403,6 +423,7 @@ class UIInteraction(InteractionModel):
     related_data: list[RelatedDataBinding]
     result_consumption: list[ResultConsumption]
     states: list[InteractionState]
+    dimension_dispositions: list[InteractionDimensionDisposition] = Field(default_factory=list)
     evidence_claims: list[InteractionEvidenceClaim]
     unknowns: list[NonEmptyString]
 
@@ -433,6 +454,15 @@ class UIInteraction(InteractionModel):
     ) -> list[InteractionEvidenceClaim]:
         pointers = [claim.target_pointer for claim in value]
         _validate_unique_sorted(pointers, field_name="evidence_claim target pointers")
+        return value
+
+    @field_validator("dimension_dispositions")
+    @classmethod
+    def validate_dimension_dispositions(
+        cls, value: list[InteractionDimensionDisposition]
+    ) -> list[InteractionDimensionDisposition]:
+        dimensions: list[str] = [item.dimension for item in value]
+        _validate_unique_sorted(dimensions, field_name="dimension disposition dimensions")
         return value
 
     @model_validator(mode="after")
@@ -638,6 +668,8 @@ __all__ = [
     "InputMapping",
     "InteractionCondition",
     "InteractionDefault",
+    "InteractionDimension",
+    "InteractionDimensionDisposition",
     "InteractionEvidenceClaim",
     "InteractionOmission",
     "InteractionOverride",

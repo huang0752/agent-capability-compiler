@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from fs_links import create_link
+
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = ROOT / "skills" / "acc-engineer" / "scripts" / "inventory.py"
 
@@ -30,7 +32,7 @@ def test_inventory_is_sorted_and_never_reads_or_outputs_secret_files(tmp_path: P
     (workspace / ".env.production").write_text(secret, encoding="utf-8")
     outside = tmp_path / "outside.txt"
     outside.write_text("outside-secret-never-output", encoding="utf-8")
-    (workspace / "linked.txt").symlink_to(outside)
+    create_link(workspace / "linked.txt", outside)
 
     completed, payload = _run("--workspace", str(workspace))
 

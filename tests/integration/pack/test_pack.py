@@ -23,6 +23,7 @@ from acc_core.packaging import (
     load_pack_manifest,
     verify_pack,
 )
+from fs_links import create_link
 
 FIXED_ZIP_TIME = (1980, 1, 1, 0, 0, 0)
 
@@ -241,6 +242,10 @@ def _add_domain_documents(project: Path, *, rationale: str = "Accepted.") -> Non
 
 def _zip_info(name: str, *, mode: int = stat.S_IFREG | 0o644) -> zipfile.ZipInfo:
     info = zipfile.ZipInfo(name, FIXED_ZIP_TIME)
+    # ZipInfo's Windows constructor rewrites backslashes before the archive is
+    # written.  Restore the requested spelling so unsafe-path tests exercise
+    # the verifier rather than the stdlib's platform normalization.
+    info.filename = name
     info.create_system = 3
     info.external_attr = mode << 16
     info.compress_type = zipfile.ZIP_STORED
@@ -464,7 +469,7 @@ def test_build_pack_rejects_domain_collection_symlinks(tmp_path: Path) -> None:
     outside.write_text("secret: true\n", encoding="utf-8")
     directory = project / "domain-decisions"
     directory.mkdir()
-    (directory / "linked.yaml").symlink_to(outside)
+    create_link(directory / "linked.yaml", outside)
 
     with pytest.raises(PackSymlinkError) as caught:
         build_pack(project, tmp_path / "linked-domain.accpkg")
@@ -474,7 +479,11 @@ def test_build_pack_rejects_domain_collection_symlinks(tmp_path: Path) -> None:
 
 def test_build_pack_rejects_broken_domain_collection_directory_symlink(tmp_path: Path) -> None:
     project = _make_project(tmp_path)
-    (project / "domain-decisions").symlink_to(tmp_path / "missing-domain-decisions")
+    create_link(
+        project / "domain-decisions",
+        tmp_path / "missing-domain-decisions",
+        target_is_directory=True,
+    )
 
     with pytest.raises(PackSymlinkError) as caught:
         build_pack(project, tmp_path / "broken-domain-directory.accpkg")
@@ -615,7 +624,7 @@ def test_build_pack_rejects_project_symlinks(tmp_path: Path) -> None:
     project = _make_project(tmp_path)
     outside = tmp_path / "outside.yaml"
     outside.write_text("secret: true\n", encoding="utf-8")
-    (project / "operations" / "linked.yaml").symlink_to(outside)
+    create_link(project / "operations" / "linked.yaml", outside)
 
     with pytest.raises(PackSymlinkError):
         build_pack(project, tmp_path / "project.accpkg")

@@ -336,6 +336,35 @@ def _documents(profile_dir: Path) -> tuple[ValidationReport, ScopeInventory, dic
         "related_data": [],
         "result_consumption": presentation,
         "states": states,
+        "dimension_dispositions": [
+            {
+                "dimension": dimension,
+                "applicability": (
+                    "applicable"
+                    if {
+                        "conditions": [],
+                        "defaults": defaults,
+                        "input_bindings": public_bindings,
+                        "option_sources": options,
+                        "related_data": [],
+                        "result_consumption": presentation,
+                        "states": states,
+                    }[dimension]
+                    else "not_applicable"
+                ),
+                "rationale": f"Profile evidence determines {dimension} applicability.",
+                "evidence": evidence,
+            }
+            for dimension in (
+                "conditions",
+                "defaults",
+                "input_bindings",
+                "option_sources",
+                "related_data",
+                "result_consumption",
+                "states",
+            )
+        ],
         "evidence_claims": claims,
         "unknowns": [],
     }
@@ -348,8 +377,10 @@ def _documents(profile_dir: Path) -> tuple[ValidationReport, ScopeInventory, dic
                     "id": profile["surface"],
                     "kind": "page",
                     "route_or_entry": f"/{profile['surface']}",
+                    "usage_context": f"{profile['id']}-profile-context",
                     "business_purpose": f"Exercise {profile['id']} semantics",
                     "evidence_sources": [evidence["source_id"]],
+                    "entry_evidence": evidence,
                 }
             ],
             "interactions": [interaction],

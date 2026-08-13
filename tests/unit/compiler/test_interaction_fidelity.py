@@ -234,8 +234,10 @@ def _inventory() -> UIInteractionInventory:
                     "id": "customers",
                     "kind": "page",
                     "route_or_entry": "/customers",
+                    "usage_context": "customer-selection-page",
                     "business_purpose": "Manage customers",
                     "evidence_sources": ["customer-page"],
+                    "entry_evidence": _evidence(),
                 }
             ],
             "interactions": [
@@ -255,6 +257,25 @@ def _inventory() -> UIInteractionInventory:
                     "related_data": [],
                     "result_consumption": [],
                     "states": [],
+                    "dimension_dispositions": [
+                        {
+                            "dimension": dimension,
+                            "applicability": (
+                                "applicable" if dimension == "input_bindings" else "not_applicable"
+                            ),
+                            "rationale": f"Selection context disposition for {dimension}.",
+                            "evidence": _evidence(),
+                        }
+                        for dimension in (
+                            "conditions",
+                            "defaults",
+                            "input_bindings",
+                            "option_sources",
+                            "related_data",
+                            "result_consumption",
+                            "states",
+                        )
+                    ],
                     "evidence_claims": [
                         {
                             "target_pointer": "/interactions/0",
@@ -549,8 +570,60 @@ def test_valid_interaction_contract_is_deterministic_and_clean() -> None:
     report = analyze_interaction_fidelity(**_valid_documents())
 
     assert report.diagnostics == ()
+
+
+def test_complete_legacy_wrapper_inventory_gets_stable_migration_diagnostics() -> None:
+    documents = _valid_documents()
+    inventory = documents["ui_inventory"]
+    legacy_surface = inventory.surfaces[0].model_copy(
+        update={"usage_context": None, "entry_evidence": None}
+    )
+    legacy_interaction = inventory.interactions[0].model_copy(update={"dimension_dispositions": []})
+    documents["ui_inventory"] = inventory.model_copy(
+        update={"surfaces": [legacy_surface], "interactions": [legacy_interaction]}
+    )
+
+    report = analyze_interaction_fidelity(**documents)
+
+    assert {
+        "ACC_UI_DIMENSION_DISPOSITION_REQUIRED",
+        "ACC_UI_SURFACE_ENTRY_EVIDENCE_REQUIRED",
+    } <= {diagnostic.code for diagnostic in report.diagnostics}
     assert report.interaction_ids == ("customers.select",)
     assert report.dependency_edges == ()
+
+
+def test_dimension_disposition_evidence_must_close_through_interaction_and_surface() -> None:
+    documents = _valid_documents()
+    inventory = documents["ui_inventory"]
+    interaction = inventory.interactions[0]
+    orphan = interaction.dimension_dispositions[0].model_copy(
+        update={
+            "evidence": interaction.dimension_dispositions[0].evidence.model_copy(
+                update={"source_id": "orphan-source"}
+            )
+        }
+    )
+    documents["ui_inventory"] = inventory.model_copy(
+        update={
+            "interactions": [
+                interaction.model_copy(
+                    update={
+                        "dimension_dispositions": [
+                            orphan,
+                            *interaction.dimension_dispositions[1:],
+                        ]
+                    }
+                )
+            ]
+        }
+    )
+
+    report = analyze_interaction_fidelity(**documents)
+
+    assert "ACC_UI_DIMENSION_EVIDENCE_UNRESOLVED" in {
+        diagnostic.code for diagnostic in report.diagnostics
+    }
 
 
 def test_condition_reference_and_type_must_match_capability_input_schema() -> None:

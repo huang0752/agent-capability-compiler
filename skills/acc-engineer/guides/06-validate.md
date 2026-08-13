@@ -15,9 +15,9 @@
 4. 修复 ACC 定义或事实来源后，每次都从 scope audit 重新验证；不得放宽 Schema 掩盖错误。
 5. 复核原系统只读基线及 Secret 扫描结果。
 6. 检查 `provider.auth`/transport 组合、Operation 禁止凭据、`context_binding_allowlist` 与全部 `context_bindings` 编译诊断；不要把 Schema 可验证误写为 `streamable_http` Gateway 已运行。
-7. 分别检查 `route_disposition`、`operation_trace`、`scenario_coverage`、`constructability`、`discoverability_graph`、`composition`、`schema_fidelity`、`output_budget`、`live_observations`。Coverage 不生成总分，route closure 也不代表 usable。
+7. 分别检查 `route_disposition`、`operation_trace`、`scenario_coverage`、`constructability`、`discoverability_graph`、`composition`、`tool_portfolio`、`schema_fidelity`、`output_budget`、`live_observations`。Coverage 不生成总分，route closure 也不代表 usable。`tool_portfolio` 的 budget/overlap/orphan warning 必须解释或整改，under-covered materialized route 是错误；blocked denominator 仍保留为未完成事实。
 8. 另外逐项检查十个交互轴：`surface_disposition`、`interaction_trace`、`input_binding_fidelity`、`default_provenance`、`option_resolution`、`condition_coverage`、`related_data_graph`、`state_scenarios`、`presentation_projection`、`client_adapter_evidence`。不生成总分，源连接不能填充 client adapter 证据。
-9. 对每个已处理领域逐项检查十二个 Domain/Action 独立轴；Read route closure 不得掩盖 blocked Action，`source_connected_verified` 不得升级安全或源授权证明。
+9. 对每个已处理领域逐项检查十二个 Domain/Action 独立轴；Read route closure 不得掩盖 blocked/excluded/deferred Action，`source_connected_verified` 不得升级安全或源授权证明。
 10. 校验当前版本 `DomainDecision`、candidate ledger digest、active dependency refs 与用户确认绑定；未激活领域的历史 completed decision 不能填充依赖或确认轴。
 
 ## 门禁
@@ -29,6 +29,8 @@
 - 任何失败、警告或未运行项都被如实保留。
 - 任一 error 都阻断后续命令；只有 warning 时可以继续，但不得丢弃 warning。
 - 当前领域必须可由独立轴复核；没有总分或“整体可用”字段可替代逐轴失败。
+- `system_complete` 必须对账 Read/Create/Update/Delete/transition/execute/composite 业务表面，且 `blocked_on_evidence=0`、无 eligible Action exclusion 或 deferred Action；否则即使 validate/compile 返回 `ok: true` 也不得进入完成态。
+- 当 system-complete 项目发现 frontend denominator 时，UI scope 必须是 `complete`；每个 surface 有全局唯一 usage context 与 entry Evidence，每个 interaction 七维 disposition 完整，其 Evidence 必须同时闭合到 interaction claims 和所属 surface sources，且全部 interaction 被 adopted 或以 immutable Evidence 明确 omitted。`ACC_UI_DIMENSION_DISPOSITION_REQUIRED`、`ACC_UI_DIMENSION_EVIDENCE_UNRESOLVED`、`ACC_UI_SURFACE_ENTRY_EVIDENCE_REQUIRED` 和 `ACC_UI_SYSTEM_SCOPE_INCOMPLETE` 是旧 wrapper 清单的迁移诊断，不能忽略。
 
 ## 输出
 

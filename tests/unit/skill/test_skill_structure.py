@@ -182,6 +182,43 @@ def test_skill_requires_explicit_scope_audit_and_validation_level() -> None:
     assert (SKILL / "scripts" / "artifact_manifest.py").is_file()
 
 
+def test_system_complete_contract_cannot_collapse_to_read_only() -> None:
+    skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+    harness = (SKILL / "HARNESS.md").read_text(encoding="utf-8")
+    preflight = (SKILL / "guides" / "01-preflight.md").read_text(encoding="utf-8")
+    validate = (SKILL / "guides" / "06-validate.md").read_text(encoding="utf-8")
+    handoff = (SKILL / "guides" / "09-handoff.md").read_text(encoding="utf-8")
+    scope_audit = (SKILL / "scripts" / "scope_audit.py").read_text(encoding="utf-8")
+    public = (ROOT / "README.md").read_text(encoding="utf-8")
+    contract = "\n".join((skill, harness, preflight, validate, handoff, public))
+
+    for surface in (
+        "Read",
+        "Create",
+        "Update",
+        "Delete",
+        "transition",
+        "execute",
+        "composite",
+    ):
+        assert surface in contract
+    for gate in (
+        "blocked_on_evidence",
+        "write-sandbox",
+        "idempotency",
+        "concurrency",
+        "approval",
+        "system_complete",
+    ):
+        assert gate in skill + harness
+    assert "Read-only subset" in skill + harness
+    assert "eligible Action intent cannot be completed by exclusion" in harness
+    assert "只有用户明确要求 Action 时" not in preflight
+    assert "blocked_on_evidence=0" in validate
+    assert "不能使用 complete 措辞" in handoff
+    assert "ACC_SCOPE_ACTION_EXCLUSION_FORBIDDEN" in scope_audit
+
+
 def test_guides_reserve_mvp_language_for_explicit_pilot_scope() -> None:
     guides = "\n".join(path.read_text(encoding="utf-8") for path in (SKILL / "guides").glob("*.md"))
     for stale in (

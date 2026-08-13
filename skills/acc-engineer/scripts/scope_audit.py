@@ -271,15 +271,18 @@ def load_candidate_ledger(
         return None, diagnostics
 
 
-def load_evidence_ids(project: Path) -> tuple[set[str], list[dict[str, object]]]:
+def load_evidence_ids(
+    project: Path,
+) -> tuple[set[str], set[str], list[dict[str, object]]]:
     """Load independently materialized Evidence identifiers without trusting snapshots."""
 
     evidence_dir = project / "evidence"
     if not evidence_dir.exists() and not evidence_dir.is_symlink():
-        return set(), []
+        return set(), set(), []
     safe_directory = safe_existing_path(str(evidence_dir), kind="directory")
     core_fields = set(Evidence.model_fields)
     result: set[str] = set()
+    objective_source_result: set[str] = set()
     seen: set[str] = set()
     diagnostics: list[dict[str, object]] = []
     for child in sorted(safe_directory.iterdir(), key=lambda item: item.name):
@@ -295,23 +298,31 @@ def load_evidence_ids(project: Path) -> tuple[set[str], list[dict[str, object]]]
                 diagnostics,
                 "ACC_SCOPE_EVIDENCE_ARTIFACT_INVALID",
                 "declared Evidence artifact does not satisfy the Core contract",
-                path=str(child.relative_to(project)),
+                path=child.relative_to(project).as_posix(),
                 pointer="/",
             )
             continue
         if evidence.source_id in seen:
             result.discard(evidence.source_id)
+            objective_source_result.discard(evidence.source_id)
             add_issue(
                 diagnostics,
                 "ACC_SCOPE_EVIDENCE_SOURCE_ID_DUPLICATE",
                 "Evidence source_id must be unique before it can be trusted",
-                path=str(child.relative_to(project)),
+                path=child.relative_to(project).as_posix(),
                 pointer="/source_id",
             )
             continue
         seen.add(evidence.source_id)
         result.add(evidence.source_id)
-    return result, diagnostics
+        if evidence.kind in {
+            "source_file",
+            "json_document",
+            "openapi",
+            "openapi_operation",
+        }:
+            objective_source_result.add(evidence.source_id)
+    return result, objective_source_result, diagnostics
 
 
 def claim_is_evidence_proven(
@@ -396,6 +407,7 @@ def audit_candidate_routes(
     *,
     ledger: CapabilityCandidateLedger | None,
     evidence_ids: set[str],
+    objective_source_evidence_ids: set[str],
 ) -> list[dict[str, object]]:
     """Bind unknown/Action routes to candidates and enforce Action evidence states."""
 
@@ -447,7 +459,7 @@ def audit_candidate_routes(
         if kind != "action":
             continue
         objective_ineligibility = action_ineligibility_is_proven(
-            candidate, evidence_ids=evidence_ids
+            candidate, evidence_ids=objective_source_evidence_ids
         )
         if string_at(route, "eligibility") == "ineligible" and not objective_ineligibility:
             add_issue(
@@ -1091,6 +1103,20 @@ def audit_inventory(
                 diagnostics,
                 "ACC_SCOPE_INELIGIBLE_DISPOSITION",
                 "ineligible routes cannot be planned or composed",
+                path=path,
+                pointer=f"{pointer}/disposition",
+            )
+
+        if (
+            mode == "system_complete"
+            and string_at(route, "kind") == "action"
+            and eligibility == "eligible"
+            and disposition == "excluded"
+        ):
+            add_issue(
+                diagnostics,
+                "ACC_SCOPE_ACTION_EXCLUSION_FORBIDDEN",
+                "system-complete scope cannot exclude an eligible business action",
                 path=path,
                 pointer=f"{pointer}/disposition",
             )
@@ -1799,7 +1825,9 @@ def main(argv: list[str] | None = None) -> int:
         system_map = load_document(system_map_path)
         capability_plan = load_document(capability_plan_path)
         candidate_ledger, candidate_diagnostics = load_candidate_ledger(project)
-        evidence_ids, evidence_diagnostics = load_evidence_ids(project)
+        evidence_ids, objective_source_evidence_ids, evidence_diagnostics = load_evidence_ids(
+            project
+        )
         result, diagnostics = audit_inventory(inventory, path="scope-inventory.yaml")
         diagnostics.extend(candidate_diagnostics)
         diagnostics.extend(evidence_diagnostics)
@@ -1808,6 +1836,7 @@ def main(argv: list[str] | None = None) -> int:
                 inventory,
                 ledger=candidate_ledger,
                 evidence_ids=evidence_ids,
+                objective_source_evidence_ids=objective_source_evidence_ids,
             )
         )
         diagnostics.extend(
