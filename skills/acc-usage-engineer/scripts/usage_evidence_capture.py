@@ -125,7 +125,7 @@ def reject_symlink_components(path: Path, *, allow_missing: bool = False) -> Non
             raise SafeUsageError(
                 "ACC_SKILL_PATH_INVALID", "path component does not exist", path=str(path)
             ) from None
-        if stat.S_ISLNK(metadata.st_mode):
+        if stat.S_ISLNK(metadata.st_mode) or is_path_link(current):
             raise SafeUsageError(
                 "ACC_SKILL_SYMLINK_REJECTED",
                 "symlink path components are not allowed",
@@ -177,6 +177,10 @@ def is_sensitive_path(relative: str) -> bool:
     )
 
 
+def is_path_link(path: Path) -> bool:
+    return path.is_symlink() or bool(getattr(path, "is_junction", lambda: False)())
+
+
 def read_regular_file(path: Path, relative: str, max_bytes: int) -> tuple[bytes, os.stat_result]:
     reject_symlink_components(path)
     try:
@@ -195,7 +199,7 @@ def read_regular_file(path: Path, relative: str, max_bytes: int) -> tuple[bytes,
             "file exceeds the configured read limit",
             path=relative,
         )
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
     try:
         descriptor = os.open(path, flags)
     except OSError as exc:
@@ -274,7 +278,7 @@ def safe_output_parent(usage_root: Path, source_layer: str, parent: Path) -> Pat
         except FileNotFoundError:
             current.mkdir(mode=0o700)
             continue
-        if stat.S_ISLNK(metadata.st_mode):
+        if stat.S_ISLNK(metadata.st_mode) or is_path_link(current):
             raise SafeUsageError(
                 "ACC_SKILL_SYMLINK_REJECTED",
                 "Usage Evidence output directories must not be symlinks",
@@ -294,7 +298,7 @@ def atomic_write_json(target: Path, value: Mapping[str, object]) -> None:
         metadata = target.lstat()
     except FileNotFoundError:
         metadata = None
-    if metadata is not None and stat.S_ISLNK(metadata.st_mode):
+    if metadata is not None and (stat.S_ISLNK(metadata.st_mode) or is_path_link(target)):
         raise SafeUsageError(
             "ACC_SKILL_SYMLINK_REJECTED", "Usage Evidence output must not be a symlink"
         )
@@ -307,14 +311,15 @@ def atomic_write_json(target: Path, value: Mapping[str, object]) -> None:
     ).encode()
     descriptor, temporary = tempfile.mkstemp(prefix=".acc-usage-evidence-", dir=target.parent)
     try:
-        os.fchmod(descriptor, 0o600)
+        if hasattr(os, "fchmod"):
+            os.fchmod(descriptor, 0o600)
         offset = 0
         while offset < len(payload):
             offset += os.write(descriptor, payload[offset:])
         os.fsync(descriptor)
         os.close(descriptor)
         descriptor = -1
-        if target.is_symlink():
+        if is_path_link(target):
             raise SafeUsageError(
                 "ACC_SKILL_SYMLINK_REJECTED", "Usage Evidence output became a symlink"
             )

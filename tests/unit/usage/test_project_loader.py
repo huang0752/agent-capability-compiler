@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 from acc_core.usage import UsageProjectReport, validate_usage_project
+from fs_links import create_link
 
 
 def _write_usage_project(root: Path) -> None:
@@ -36,7 +36,7 @@ def test_missing_usage_project_has_stable_diagnostic(tmp_path: Path) -> None:
 
 def test_collection_rejects_broken_directory_symlink(tmp_path: Path) -> None:
     _write_usage_project(tmp_path)
-    os.symlink(tmp_path / "missing", tmp_path / "usage-evidence")
+    create_link(tmp_path / "usage-evidence", tmp_path / "missing")
 
     report = validate_usage_project(tmp_path)
 
@@ -51,7 +51,7 @@ def test_collection_rejects_broken_file_symlink(tmp_path: Path) -> None:
     collection.mkdir()
     client = collection / "client"
     client.mkdir()
-    os.symlink(tmp_path / "missing.json", client / "broken.json")
+    create_link(client / "broken.json", tmp_path / "missing.json")
 
     report = validate_usage_project(tmp_path)
 

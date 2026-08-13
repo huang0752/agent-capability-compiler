@@ -11,3 +11,22 @@
 构建前校验所有 Capability/Tool/step/binding/default/option_source/condition/related_data/result_consumption/error_branch/action_lifecycle 闭包。模板中的 `<replace-with-sha256>` 是故意不可发布的占位符，必须替换成实际摘要。
 
 构建只写 `usage_project`，不得触发 `acc compile`、修改 `.accpkg` 或连接源系统。
+
+正式构建示例：
+
+```powershell
+acc usage release --domain <id> --project <usage_project> --check `
+  --verification-artifact <runner-artifact.json> `
+  --verification-trust-store <independent-trust-store.json> `
+  --accepted-pack <release.accpkg> --accepted-tools <tools.json> `
+  --accepted-test-report <test-report.json>
+
+acc usage build --domain <id> --project <usage_project> --output dist/<id>.accusage `
+  --verification-artifact <runner-artifact.json> `
+  --verification-trust-store <independent-trust-store.json> `
+  --accepted-pack <release.accpkg> --accepted-tools <tools.json> `
+  --accepted-test-report <test-report.json> `
+  --package-signing-secret-env ACC_USAGE_PACKAGE_SIGNING_SECRET
+```
+
+trust-store 由独立管理域配置，不能放在 source、ACC 或 Usage 三根目录内。verification artifact 最长有效 24 小时；任何过期、篡改、错误摘要或非 canonical 输入都必须重新运行受信验证，而不是手工修改 artifact。

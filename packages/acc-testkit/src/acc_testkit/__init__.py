@@ -28,6 +28,7 @@ from acc_testkit.live import (
     LiveGatewayRunner,
     LiveStepResult,
     LiveStepStatus,
+    OperatorApprovalConfig,
     SecretRef,
 )
 from acc_testkit.mcp_client import (
@@ -70,6 +71,7 @@ __all__ = [
     "OperationCallLike",
     "OperationCallRecord",
     "OperationProvider",
+    "OperatorApprovalConfig",
     "RecordedOperationCall",
     "RecordingConfigurationError",
     "RecordingOperationProvider",

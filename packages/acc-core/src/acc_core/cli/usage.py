@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -14,7 +15,8 @@ from typing import Any
 from pydantic import TypeAdapter, ValidationError
 
 from acc_core.diagnostics import Diagnostic, ResultEnvelope
-from acc_core.io import ProjectIOError, load_project_object
+from acc_core.io import ProjectIOError, is_path_link, load_project_object
+from acc_core.usage.acceptance import verify_mcp_release_acceptance
 from acc_core.usage.impact import UsageImpactReport, UsageSnapshot, analyze_usage_impact
 from acc_core.usage.models import (
     AgentUsageRelease,
@@ -24,7 +26,13 @@ from acc_core.usage.models import (
     McpReleaseAcceptance,
     UsageDomainDecision,
 )
+from acc_core.usage.packaging import UsagePackageSigner, build_usage_package
 from acc_core.usage.project import UsageProjectReport, validate_usage_project
+from acc_core.usage.verification import VerifiedUsageReleaseBundle
+from acc_core.usage.verification_artifact import (
+    UsageVerificationArtifactError,
+    load_usage_verification_artifact,
+)
 
 EXIT_SUCCESS = 0
 EXIT_INPUT = 3
@@ -89,7 +97,7 @@ def _contains_symlink(path: Path) -> bool:
     current = Path(absolute.anchor)
     for part in absolute.parts[1:]:
         current /= part
-        if current.is_symlink():
+        if is_path_link(current):
             return True
         if not current.exists():
             return False
@@ -557,6 +565,84 @@ def _unsafe_output(command: str) -> tuple[int, ResultEnvelope]:
     )
 
 
+def _external_regular_path(value: object) -> Path | None:
+    path = Path(str(value)).expanduser().absolute()
+    if _contains_symlink(path) or not path.is_file():
+        return None
+    return path
+
+
+def _within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _verified_usage_bundle(
+    arguments: argparse.Namespace,
+    *,
+    command: str,
+    root: Path,
+    domain_id: str,
+    report: UsageProjectReport,
+) -> tuple[VerifiedUsageReleaseBundle | None, Diagnostic | None]:
+    artifact = _external_regular_path(arguments.verification_artifact)
+    trust_store = _external_regular_path(arguments.verification_trust_store)
+    pack = _external_regular_path(arguments.accepted_pack)
+    tools_path = _external_regular_path(arguments.accepted_tools)
+    test_report = _external_regular_path(arguments.accepted_test_report)
+    if None in (artifact, trust_store, pack, tools_path, test_report):
+        return None, _diagnostic(
+            "ACC_USAGE_VERIFICATION_INPUT_INVALID",
+            "Verification inputs must be stable regular non-link files.",
+        )
+    assert artifact is not None
+    assert trust_store is not None
+    assert pack is not None
+    assert tools_path is not None
+    assert test_report is not None
+    source_root = root
+    if report.project is not None:
+        source_root = (root / report.project.source_workspace.path).absolute()
+    acc_root = pack.parent.parent if pack.parent.name == "dist" else pack.parent
+    if any(_within(trust_store, item) for item in (root, source_root, acc_root)):
+        return None, _diagnostic(
+            "ACC_USAGE_VERIFICATION_TRUST_LOCATION_INVALID",
+            "Verification trust store must be outside Usage, source, and ACC project roots.",
+        )
+    if report.acceptance is None:
+        return None, _diagnostic(
+            "ACC_USAGE_VERIFICATION_ACCEPTANCE_MISSING", "Accepted MCP release is missing."
+        )
+    try:
+        tools = json.loads(tools_path.read_bytes())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None, _diagnostic(
+            "ACC_USAGE_VERIFICATION_INPUT_INVALID", "Accepted tool snapshot is invalid."
+        )
+    accepted = verify_mcp_release_acceptance(
+        acceptance=report.acceptance,
+        pack_path=pack,
+        tool_snapshot=tools,
+        test_report_path=test_report,
+    )
+    if not accepted.ok or not accepted.trusted:
+        return None, _diagnostic(accepted.code, accepted.message)
+    try:
+        bundle = load_usage_verification_artifact(
+            artifact,
+            trust_store=trust_store,
+            report=report,
+            acceptance=report.acceptance,
+            domain_id=domain_id,
+        )
+    except UsageVerificationArtifactError as exc:
+        return None, _diagnostic(exc.code, str(exc))
+    return bundle, None
+
+
 def _build_usage(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope]:
     command = "usage build"
     root = _project_root(arguments.project)
@@ -564,13 +650,54 @@ def _build_usage(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope]:
     output = _confined_path(root, arguments.output)
     if output is None:
         return _unsafe_output(command)
-    del root, domain_id, output
-    return _failure(
+    required_inputs = (
+        "verification_artifact",
+        "verification_trust_store",
+        "accepted_pack",
+        "accepted_tools",
+        "accepted_test_report",
+        "package_signing_secret_env",
+    )
+    if any(not getattr(arguments, name, None) for name in required_inputs):
+        return _failure(
+            command,
+            _diagnostic(
+                "ACC_USAGE_BUILD_EVIDENCE_NOT_PROVISIONED",
+                "Usage build requires a trusted verification artifact and configured signer.",
+            ),
+        )
+    report = validate_usage_project(root)
+    if not report.ok:
+        return _failure(
+            command,
+            _diagnostic("ACC_USAGE_BUILD_PROJECT_INVALID", "Usage project is invalid."),
+        )
+    bundle, diagnostic = _verified_usage_bundle(
+        arguments, command=command, root=root, domain_id=domain_id, report=report
+    )
+    if diagnostic is not None or bundle is None:
+        return _failure(
+            command,
+            diagnostic
+            or _diagnostic("ACC_USAGE_VERIFICATION_UNTRUSTED", "Untrusted verification."),
+        )
+    secret_name = str(arguments.package_signing_secret_env)
+    encoded_secret = os.environ.get(secret_name)
+    try:
+        secret = base64.b64decode(encoded_secret or "", validate=True)
+        signer = UsagePackageSigner(secret)
+        result = build_usage_package(root, output[0], verified_releases=(bundle,), signer=signer)
+    except (OSError, TypeError, ValueError):
+        return _failure(
+            command,
+            _diagnostic(
+                "ACC_USAGE_BUILD_SIGNING_FAILED",
+                "Usage package signing secret or output is invalid.",
+            ),
+        )
+    return _success(
         command,
-        _diagnostic(
-            "ACC_USAGE_BUILD_EVIDENCE_NOT_PROVISIONED",
-            "Usage build requires a live verified release bundle and configured signer.",
-        ),
+        {"domain_id": domain_id, "output": output[1], "sha256": result.sha256},
     )
 
 
@@ -719,15 +846,37 @@ def _release_usage(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope]:
                 "Usage release requires every independent required verification gate.",
             ),
         )
-    # The project loader intentionally treats release documents as serialized
-    # claims. Until trace-derived axis reports have a dedicated trusted loader,
-    # this command cannot reconstruct the private verification provenance.
-    return _failure(
+    required_inputs = (
+        "verification_artifact",
+        "verification_trust_store",
+        "accepted_pack",
+        "accepted_tools",
+        "accepted_test_report",
+    )
+    if any(not getattr(arguments, name, None) for name in required_inputs):
+        return _failure(
+            command,
+            _diagnostic(
+                "ACC_USAGE_RELEASE_EVIDENCE_NOT_PROVISIONED",
+                "Trace-derived Usage release evidence is not provisioned for CLI verification.",
+            ),
+        )
+    bundle, diagnostic = _verified_usage_bundle(
+        arguments, command=command, root=root, domain_id=domain_id, report=report
+    )
+    if diagnostic is not None or bundle is None:
+        return _failure(
+            command,
+            diagnostic
+            or _diagnostic("ACC_USAGE_VERIFICATION_UNTRUSTED", "Untrusted verification."),
+        )
+    return _success(
         command,
-        _diagnostic(
-            "ACC_USAGE_RELEASE_EVIDENCE_NOT_PROVISIONED",
-            "Trace-derived Usage release evidence is not provisioned for CLI verification.",
-        ),
+        {
+            "domain_id": domain_id,
+            "release_id": bundle.release.usage_release_id,
+            "verification": "trusted_artifact",
+        },
     )
 
 

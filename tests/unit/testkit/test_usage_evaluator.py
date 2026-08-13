@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import pickle
 import zipfile
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 from types import MappingProxyType
 
+import httpx
 import pytest
 import yaml
 from mcp.client.stdio import StdioServerParameters
@@ -40,11 +42,14 @@ from acc_core.usage.acceptance import (
 from acc_core.usage.analyze import UsageAnalysisReport, analyze_usage_contract
 from acc_core.usage.models import McpReleaseAcceptance
 from acc_core.usage.project import UsageProjectReport, validate_usage_project
+from acc_runtime.credentials import SecretValue
 from acc_testkit.mcp_client import McpStdioTestClient
 from acc_testkit.usage import (
     AgentUsageReleaseVerifier,
     HeadlessUsageEvaluator,
+    LoopbackOperatorApprovalHook,
     RealMcpUsageRunner,
+    TrustedOperatorApproval,
     UsageAttestation,
     UsageCallerError,
     UsageEvaluationError,
@@ -978,6 +983,81 @@ async def test_action_approval_policy_controls_approve_phase_only(
     )
 
     assert [entry.phase for entry in report.trace] == expected_phases
+
+
+@pytest.mark.asyncio
+async def test_explicit_operator_hook_replaces_approve_tool_without_leaking_handle() -> None:
+    contract = _action_contract("always")
+    scenario = _action_scenario()
+    caller = FakeUsageCaller(
+        {
+            "action.prepare": [UsageToolOutcome.success({"action_handle": "opaque-private"})],
+            "action.approve": [UsageToolOutcome.success({"approval": "must-not-run"})],
+            "action.commit": [UsageToolOutcome.success({"accepted": True})],
+        }
+    )
+
+    class Hook:
+        async def approve(
+            self, *, capability_id: str, action_handle: SecretValue
+        ) -> TrustedOperatorApproval:
+            assert capability_id == "cap.approve"
+            assert action_handle.get_secret_value() == "opaque-private"
+            return TrustedOperatorApproval(
+                capability_id=capability_id,
+                approval_mechanism="loopback_operator_http_v1",
+                origin_sha256="a" * 64,
+                endpoint_path_sha256="b" * 64,
+            )
+
+    report = await HeadlessUsageEvaluator().run(
+        contract=contract,
+        scenario=scenario,
+        caller=caller,
+        attestation=_attestation(contract, scenario),
+        operator_approval_hook=Hook(),
+    )
+
+    assert report.status == "passed"
+    assert [name for name, _ in caller.calls] == ["action.prepare", "action.commit"]
+    approve = next(entry for entry in report.trace if entry.phase == "approve")
+    assert approve.tool_name == "operator:loopback_operator_http_v1"
+    prepare = next(entry for entry in report.trace if entry.phase == "prepare")
+    assert prepare.result_sha256 is None
+    direct_handle_digest = hashlib.sha256(b'{"action_handle":"opaque-private"}').hexdigest()
+    assert direct_handle_digest not in report.model_dump_json()
+    assert "opaque-private" not in report.model_dump_json()
+
+
+def test_trusted_operator_result_is_not_serializable() -> None:
+    result = TrustedOperatorApproval(
+        capability_id="cap.approve",
+        approval_mechanism="loopback_operator_http_v1",
+        origin_sha256="a" * 64,
+        endpoint_path_sha256="b" * 64,
+    )
+    with pytest.raises(TypeError, match="not serializable"):
+        pickle.dumps(result)
+
+
+@pytest.mark.asyncio
+async def test_builtin_operator_hook_rejects_redirects_and_cross_origin() -> None:
+    secret = SecretValue("s" * 40)
+    with pytest.raises(ValueError, match="same-origin loopback"):
+        LoopbackOperatorApprovalHook(
+            gateway_url="http://127.0.0.1:8000",
+            endpoint_url="http://127.0.0.1:8001/operator/actions/approve",
+            secret=secret,
+        )
+
+    hook = LoopbackOperatorApprovalHook(
+        gateway_url="http://127.0.0.1:8000",
+        endpoint_url="http://127.0.0.1:8000/operator/actions/approve",
+        secret=secret,
+        transport=httpx.MockTransport(lambda _request: httpx.Response(307)),
+    )
+    with pytest.raises(UsageEvaluationError, match="approval failed"):
+        await hook.approve(capability_id="cap.approve", action_handle=SecretValue("opaque-private"))
 
 
 @pytest.mark.asyncio

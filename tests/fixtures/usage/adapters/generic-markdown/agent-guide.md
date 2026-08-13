@@ -8,9 +8,9 @@ The source API remains authoritative for authentication and authorization on eve
 - Usage release: finance-usage-1
 - Domain: finance
 - Release status: released
-- Package digest: 8db7e7aa26527cb1e5efbe98575fcd1ace350795382b4ea7babde014101b3fb7
-- Contract digest: sha256:89fc506deac1f9041a0013d24fe84427d0f3fc342e31f11d209dea840c99f3c2
-- Decision digest: sha256:c71906661dd7d3ee26cf84a618498f8a03e7f3444abe8a0464490fb1a08f6250
+- Package digest: 2e56c75a246b67d9eaedca5dfc9988a86b15a973c92400101dfb589f839247ad
+- Contract digest: sha256:d8dc8581d38f7300273b3067b05b1994ca223904728d55c2fc3c667ce821e9d6
+- Decision digest: sha256:04916b844241e885c56a48060d5c3845f9d1d4b0e94032aba5a8f04b945deeeb
 - Tool schema digest: sha256:84df295e8436ba50e3a7cac397a3be92850b6f419225900b19741ebf3ebfeb12
 
 ## Verification limits

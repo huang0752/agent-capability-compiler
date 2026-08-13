@@ -5,11 +5,14 @@ from __future__ import annotations
 import asyncio
 import copy
 import hashlib
+import ipaddress
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Protocol, cast
+from typing import Any, Protocol, cast
+from urllib.parse import urlsplit
 
+import httpx
 from pydantic import JsonValue
 
 from acc_core.usage import (
@@ -37,6 +40,7 @@ from acc_core.usage.verification import (
     UsageAxisReport,
     UsageVerificationTraceEntry,
 )
+from acc_runtime.credentials import SecretValue
 from acc_testkit.interactions import evaluate_condition
 from acc_testkit.mcp_client.stdio import McpStdioTestClient
 from acc_testkit.mcp_client.stdio import _inspect_live_transport as _stdio_live
@@ -101,6 +105,94 @@ class UsageToolCaller(Protocol):
     ) -> UsageToolOutcome: ...
 
 
+class TrustedOperatorApproval:
+    """Non-serializable success token returned only by an injected operator hook."""
+
+    __slots__ = ("approval_mechanism", "capability_id", "endpoint_path_sha256", "origin_sha256")
+
+    def __init__(
+        self,
+        *,
+        capability_id: str,
+        approval_mechanism: str,
+        origin_sha256: str,
+        endpoint_path_sha256: str,
+    ) -> None:
+        if approval_mechanism != "loopback_operator_http_v1":
+            raise ValueError("unsupported operator approval mechanism")
+        self.capability_id = capability_id
+        self.approval_mechanism = approval_mechanism
+        self.origin_sha256 = origin_sha256
+        self.endpoint_path_sha256 = endpoint_path_sha256
+
+    def __reduce__(self) -> str | tuple[Any, ...]:
+        raise TypeError("trusted operator approval tokens are not serializable")
+
+
+class TrustedOperatorApprovalHook(Protocol):
+    async def approve(
+        self, *, capability_id: str, action_handle: SecretValue
+    ) -> TrustedOperatorApproval: ...
+
+
+class LoopbackOperatorApprovalHook:
+    """Built-in fixed-path HTTP hook; credentials remain runtime-only."""
+
+    __slots__ = ("_endpoint_url", "_secret", "_transport")
+
+    def __init__(
+        self,
+        *,
+        gateway_url: str,
+        endpoint_url: str,
+        secret: SecretValue,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        gateway_origin = _operator_origin(gateway_url)
+        endpoint = urlsplit(endpoint_url)
+        if (
+            endpoint.path != "/operator/actions/approve"
+            or endpoint.query
+            or endpoint.fragment
+            or endpoint.username is not None
+            or endpoint.password is not None
+            or not _operator_loopback(endpoint.hostname)
+            or _operator_origin(endpoint_url) != gateway_origin
+        ):
+            raise ValueError("operator hook requires the fixed same-origin loopback endpoint")
+        if len(secret.get_secret_value().encode()) < 32:
+            raise ValueError("operator hook secret must contain at least 32 bytes")
+        self._endpoint_url = endpoint_url
+        self._secret = secret
+        self._transport = transport
+
+    async def approve(
+        self, *, capability_id: str, action_handle: SecretValue
+    ) -> TrustedOperatorApproval:
+        async with httpx.AsyncClient(
+            transport=self._transport, follow_redirects=False, timeout=5.0
+        ) as client:
+            response = await client.post(
+                self._endpoint_url,
+                headers={
+                    "X-ACC-Operator-Authorization": (f"Bearer {self._secret.get_secret_value()}")
+                },
+                json={"action_handle": action_handle.get_secret_value()},
+            )
+        if response.status_code != 200:
+            raise UsageEvaluationError("operator approval failed")
+        payload = response.json()
+        if payload != {"capability_id": capability_id, "status": "approved"}:
+            raise UsageEvaluationError("operator approval returned an invalid minimized response")
+        endpoint = urlsplit(self._endpoint_url)
+        return TrustedOperatorApproval(
+            capability_id=capability_id,
+            approval_mechanism="loopback_operator_http_v1",
+            origin_sha256=hashlib.sha256(_operator_origin(self._endpoint_url).encode()).hexdigest(),
+            endpoint_path_sha256=hashlib.sha256(endpoint.path.encode()).hexdigest(),
+        )
+
+
 class RealMcpUsageClient(UsageToolCaller, Protocol):
     async def list_tools(self) -> list[dict[str, object]]: ...
 
@@ -115,6 +207,7 @@ class RealMcpUsageRunner:
         attestation: UsageAttestation,
         public_inputs: Mapping[str, JsonValue] | None = None,
         trusted_context: Mapping[str, JsonValue] | None = None,
+        operator_approval_hook: TrustedOperatorApprovalHook | None = None,
     ) -> RealMcpUsageScenarioResult:
         if attestation.execution_mode != "real_mcp":
             raise ValueError("real MCP runner requires a real_mcp attestation")
@@ -145,6 +238,7 @@ class RealMcpUsageRunner:
             attestation=attestation,
             public_inputs=public_inputs,
             trusted_context=trusted_context,
+            operator_approval_hook=operator_approval_hook,
         )
         observed = RealMcpUsageScenarioResult(
             result=result, runtime_tool_schema_digest=runtime_digest
@@ -194,6 +288,7 @@ class UsageScenarioVerification:
     real_mcp_client: RealMcpUsageClient | _OfficialMcpClient
     public_inputs: Mapping[str, JsonValue] = field(default_factory=dict)
     trusted_context: Mapping[str, JsonValue] = field(default_factory=dict)
+    real_mcp_operator_hook: TrustedOperatorApprovalHook | None = None
 
 
 class AgentUsageReleaseVerifier:
@@ -237,6 +332,16 @@ class AgentUsageReleaseVerifier:
         real_attestations: dict[str, UsageAttestation] = {}
         for scenario in scenarios:
             execution = executions[scenario.scenario_id]
+            route = _select_route(contract, scenario)
+            lifecycle = _lifecycle(contract, route)
+            if (
+                lifecycle is not None
+                and lifecycle.approval != "never"
+                and execution.real_mcp_operator_hook is None
+            ):
+                raise UsageEvaluationError(
+                    "real MCP Action approval requires an explicit trusted operator hook"
+                )
             common = {
                 "pack_digest": contract.pack_digest,
                 "ir_digest": contract.ir_digest,
@@ -265,6 +370,7 @@ class AgentUsageReleaseVerifier:
                 attestation=real_attestation,
                 public_inputs=execution.public_inputs,
                 trusted_context=execution.trusted_context,
+                operator_approval_hook=execution.real_mcp_operator_hook,
             )
             if real_result.result.status != "passed":
                 raise UsageEvaluationError("a required real MCP Usage scenario did not pass")
@@ -321,6 +427,7 @@ class HeadlessUsageEvaluator:
         public_inputs: Mapping[str, JsonValue] | None = None,
         trusted_context: Mapping[str, JsonValue] | None = None,
         requested_behavior: str | None = None,
+        operator_approval_hook: TrustedOperatorApprovalHook | None = None,
     ) -> UsageScenarioResult:
         if not _attestation_matches(contract, scenario, attestation):
             return _result(
@@ -340,8 +447,9 @@ class HeadlessUsageEvaluator:
         trusted = copy.deepcopy(dict(trusted_context or {}))
         lifecycle = _lifecycle(contract, route)
         trusted_bindings_allowed = _trusted_bindings_are_allowed(contract)
-        approval_provisioned = _trusted_approval_is_provisioned(
-            contract, lifecycle, inputs, trusted
+        approval_provisioned = (
+            operator_approval_hook is not None
+            or _trusted_approval_is_provisioned(contract, lifecycle, inputs, trusted)
         )
         if not trusted_bindings_allowed or not approval_provisioned:
             return _result(
@@ -366,6 +474,7 @@ class HeadlessUsageEvaluator:
             if (
                 step.action_phase == "approve"
                 and lifecycle is not None
+                and operator_approval_hook is None
                 and not _approval_handle_is_available(contract, lifecycle, trusted)
             ):
                 return _result(
@@ -385,6 +494,12 @@ class HeadlessUsageEvaluator:
                 step=step,
                 arguments=arguments,
                 trace=trace,
+                operator_approval_hook=operator_approval_hook,
+                action_handle=(
+                    _action_handle_from_prepare(step_results, lifecycle)
+                    if step.action_phase == "approve" and lifecycle is not None
+                    else None
+                ),
             )
             if outcome.outcome == "success":
                 step_results[step.id] = copy.deepcopy(outcome.result)
@@ -459,10 +574,42 @@ async def _call_step(
     step: UsageToolStep,
     arguments: dict[str, JsonValue],
     trace: list[UsageTraceEntry],
+    operator_approval_hook: TrustedOperatorApprovalHook | None = None,
+    action_handle: SecretValue | None = None,
 ) -> UsageToolOutcome:
     for attempt in (1, 2):
+        trace_arguments: JsonValue | Mapping[str, JsonValue] = _secret_free_trace_arguments(
+            step, arguments
+        )
+        trace_tool_name = step.tool_name
         try:
-            outcome = await caller.call(step.tool_name, copy.deepcopy(arguments))
+            if step.action_phase == "approve" and operator_approval_hook is not None:
+                if action_handle is None:
+                    raise UsageEvaluationError(
+                        "operator approval requires a prepared action handle"
+                    )
+                approved = await operator_approval_hook.approve(
+                    capability_id=step.capability_id,
+                    action_handle=action_handle,
+                )
+                if (
+                    type(approved) is not TrustedOperatorApproval
+                    or approved.capability_id != step.capability_id
+                ):
+                    raise UsageEvaluationError("operator hook returned an invalid trusted result")
+                outcome = UsageToolOutcome.success(
+                    {"capability_id": approved.capability_id, "status": "approved"}
+                )
+                trace_arguments = {
+                    "approval_mechanism": approved.approval_mechanism,
+                    "capability_id": approved.capability_id,
+                    "endpoint_path_sha256": approved.endpoint_path_sha256,
+                    "origin_sha256": approved.origin_sha256,
+                }
+                trace_tool_name = "operator:loopback_operator_http_v1"
+            else:
+                outcome = await caller.call(step.tool_name, copy.deepcopy(arguments))
+                trace_arguments = _secret_free_trace_arguments(step, arguments)
         except asyncio.CancelledError:
             raise
         except UsageCallerError as exc:
@@ -474,13 +621,15 @@ async def _call_step(
                 scenario_id=scenario.scenario_id,
                 route_id=route.id,
                 step_id=step.id,
-                tool_name=step.tool_name,
+                tool_name=trace_tool_name,
                 phase=step.action_phase,
                 attempt=attempt,
                 outcome=outcome.outcome,
-                arguments_sha256=_json_digest(arguments),
+                arguments_sha256=_json_digest(trace_arguments),
                 result_sha256=(
-                    _json_digest(outcome.result) if outcome.outcome == "success" else None
+                    _json_digest(outcome.result)
+                    if outcome.outcome == "success" and step.action_phase != "prepare"
+                    else None
                 ),
             )
         )
@@ -488,6 +637,47 @@ async def _call_step(
             continue
         return outcome
     raise AssertionError("bounded retry loop must return")
+
+
+def _action_handle_from_prepare(
+    step_results: Mapping[str, JsonValue], lifecycle: UsageActionLifecycle
+) -> SecretValue | None:
+    prepared = step_results.get(lifecycle.prepare_step_id)
+    value = _read_pointer(prepared, "/action_handle") if prepared is not None else _MISSING
+    return SecretValue(value) if isinstance(value, str) and value else None
+
+
+def _secret_free_trace_arguments(
+    step: UsageToolStep, arguments: Mapping[str, JsonValue]
+) -> Mapping[str, JsonValue]:
+    if step.action_phase not in {"approve", "commit", "status"}:
+        return arguments
+    redacted = copy.deepcopy(dict(arguments))
+    for name in ("action_handle", "approval_handle"):
+        if name in redacted:
+            redacted[name] = "<runtime-handle>"
+    return redacted
+
+
+def _operator_loopback(host: str | None) -> bool:
+    if host is None:
+        return False
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _operator_origin(value: str) -> str:
+    parsed = urlsplit(value)
+    if parsed.scheme not in {"http", "https"} or parsed.hostname is None:
+        raise ValueError("operator hook URL must be absolute HTTP(S)")
+    host = parsed.hostname.lower()
+    rendered_host = f"[{host}]" if ":" in host else host
+    port = parsed.port or (80 if parsed.scheme == "http" else 443)
+    return f"{parsed.scheme.lower()}://{rendered_host}:{port}"
 
 
 def _retry_allowed(
@@ -913,8 +1103,11 @@ def _write_pointer(document: dict[str, JsonValue], pointer: str, value: JsonValu
 __all__ = [
     "AgentUsageReleaseVerifier",
     "HeadlessUsageEvaluator",
+    "LoopbackOperatorApprovalHook",
     "RealMcpUsageClient",
     "RealMcpUsageRunner",
+    "TrustedOperatorApproval",
+    "TrustedOperatorApprovalHook",
     "UsageCallerError",
     "UsageEvaluationError",
     "UsageScenarioVerification",

@@ -19,6 +19,7 @@ from acc_core.usage.acceptance import (
 )
 from acc_core.usage.models import McpReleaseAcceptance
 from acc_runtime.mcp import listed_tools_sha256
+from fs_links import create_link
 
 
 def test_hand_authored_acceptance_verification_is_not_trusted() -> None:
@@ -343,7 +344,7 @@ def test_usage_acceptance_rejects_symlinked_report_without_leaking_target(
     target = tmp_path / secret
     target.write_text("private", encoding="utf-8")
     report.unlink()
-    report.symlink_to(target)
+    create_link(report, target)
 
     result = verify_mcp_release_acceptance(
         acceptance=acceptance,

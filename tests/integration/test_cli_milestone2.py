@@ -427,7 +427,8 @@ def _live_profile(pack_sha256: str) -> dict[str, object]:
             {
                 "id": "generic-read",
                 "account": "a",
-                "tool": "records.current",
+                "tool": "get_customer",
+                "capability_id": "get_customer",
                 "arguments": {},
             }
         ],
@@ -450,6 +451,7 @@ def _live_arguments(
     gateway_url: str = "http://127.0.0.1:8765",
     allow_source_connect: bool = True,
     allowed_gateway_host: str | None = None,
+    observations_output: Path | None = None,
 ) -> argparse.Namespace:
     arguments = [
         "test",
@@ -465,6 +467,8 @@ def _live_arguments(
         arguments.append("--allow-source-connect")
     if allowed_gateway_host is not None:
         arguments.extend(["--allowed-gateway-host", allowed_gateway_host])
+    if observations_output is not None:
+        arguments.extend(["--observations-output", str(observations_output)])
     return _parser().parse_args(arguments)
 
 
@@ -588,6 +592,81 @@ def test_live_cli_invokes_runner_and_returns_structured_verification_report(
     assert envelope.command == "test live"
     assert envelope.result == expected.model_dump(mode="json")
     assert called == ["LiveGatewayProfile"]
+
+
+def test_live_cli_artifact_is_consumed_by_coverage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pack_path, profile_path = _make_live_pack_and_profile(tmp_path)
+    for name in (
+        "LIVE_A_IDENTITY",
+        "LIVE_A_PASSWORD",
+        "LIVE_B_IDENTITY",
+        "LIVE_B_PASSWORD",
+    ):
+        monkeypatch.setenv(name, f"{name}-private")
+    expected = LiveGatewayReport.from_steps(
+        [
+            LiveStepResult(
+                id="runtime.attestation",
+                required=True,
+                status=LiveStepStatus.PASSED,
+            ),
+            LiveStepResult(
+                id="case.generic-read",
+                required=True,
+                status=LiveStepStatus.PASSED,
+                evidence={"response_bytes": 321},
+            ),
+        ],
+        pack_sha256=verify_pack(pack_path).sha256,
+    )
+
+    async def fake_execute(profile: object, environment: object) -> LiveGatewayReport:
+        del profile, environment
+        return expected
+
+    monkeypatch.setattr("acc_core.cli.live._execute_live_profile", fake_execute)
+    artifact_path = tmp_path / "live-observations.json"
+    live_arguments = _live_arguments(
+        pack_path,
+        profile_path,
+        observations_output=artifact_path,
+    )
+
+    live_exit, live_envelope = live_arguments.handler(live_arguments)
+    coverage_arguments = _parser().parse_args(
+        [
+            "coverage",
+            str(pack_path.parent),
+            "--live-observations",
+            str(artifact_path),
+            "--live-pack",
+            str(pack_path),
+            "--json",
+        ]
+    )
+    coverage_exit, coverage_envelope = coverage_arguments.handler(coverage_arguments)
+
+    assert live_exit == 0
+    assert live_envelope.ok is True
+    assert artifact_path.is_file()
+    assert coverage_exit == 0
+    assert coverage_envelope.ok is True
+    assert coverage_envelope.result is not None
+    observations = coverage_envelope.result["live_observations"]
+    assert observations["status"] == "observed"
+    assert observations["observations"] == [
+        {
+            "capability_id": "get_customer",
+            "verification_level": "source_connected_verified",
+            "sample_count": 1,
+            "response_bytes_p50": 321,
+            "response_bytes_p95": 321,
+            "response_bytes_max": 321,
+        }
+    ]
 
 
 def test_live_cli_unverified_report_is_a_failed_envelope(

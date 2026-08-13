@@ -828,6 +828,10 @@ class _LiveBundleChecker(Protocol):
     def __call__(self, bundle: VerifiedUsageReleaseBundle) -> bool: ...
 
 
+class _AuthenticatedBundleRegistrar(Protocol):
+    def __call__(self, bundle: VerifiedUsageReleaseBundle) -> VerifiedUsageReleaseBundle: ...
+
+
 def build_agent_usage_release(
     *,
     release_document: Mapping[str, object],
@@ -884,7 +888,7 @@ class _AttestationLike(Protocol):
 
 def _make_live_bundle_finalizer(
     register_execution_axis_report: Callable[[UsageAxisReport], UsageAxisReport],
-) -> tuple[_ReleaseBundleFinalizer, _LiveBundleChecker]:
+) -> tuple[_ReleaseBundleFinalizer, _LiveBundleChecker, _AuthenticatedBundleRegistrar]:
     live: dict[int, tuple[weakref.ReferenceType[VerifiedUsageReleaseBundle], str]] = {}
 
     def finalize_verified_usage_release(
@@ -1142,12 +1146,27 @@ def _make_live_bundle_finalizer(
             and record[1] == bundle._public_fingerprint()
         )
 
-    return finalize_verified_usage_release, is_live_bundle
+    def register_authenticated_bundle(
+        bundle: VerifiedUsageReleaseBundle,
+    ) -> VerifiedUsageReleaseBundle:
+        """Register a bundle only after an external authenticity verifier succeeds."""
+
+        identity = id(bundle)
+
+        def discard(_reference: object) -> None:
+            live.pop(identity, None)
+
+        live[identity] = (weakref.ref(bundle, discard), bundle._public_fingerprint())
+        return bundle
+
+    return finalize_verified_usage_release, is_live_bundle, register_authenticated_bundle
 
 
-finalize_verified_usage_release, _is_live_bundle = _make_live_bundle_finalizer(
-    _register_execution_axis_report
-)
+(
+    finalize_verified_usage_release,
+    _is_live_bundle,
+    _register_authenticated_bundle,
+) = _make_live_bundle_finalizer(_register_execution_axis_report)
 del _make_live_bundle_finalizer
 del _register_execution_axis_report
 

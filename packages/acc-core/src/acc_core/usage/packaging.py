@@ -52,6 +52,10 @@ _SIGNING_ALGORITHM = "hmac-sha256"
 _MIN_SIGNING_KEY_BYTES = 32
 
 
+def _is_path_link(path: Path) -> bool:
+    return path.is_symlink() or bool(getattr(path, "is_junction", lambda: False)())
+
+
 class _EvidenceClaimBound(Protocol):
     evidence_claim_ids: list[str]
 
@@ -838,9 +842,9 @@ def build_usage_package(
     root = Path(project_root)
     destination = Path(output_path)
     _validate_package_path(destination)
-    if root.is_symlink():
+    if _is_path_link(root):
         raise UsagePackageSymlinkError("Agent Usage project root cannot be a symbolic link")
-    if destination.is_symlink():
+    if _is_path_link(destination):
         raise UsagePackageSymlinkError(
             "Agent Usage package output cannot be a symbolic link", path=str(destination)
         )
@@ -866,7 +870,7 @@ def build_usage_package(
         with zipfile.ZipFile(temporary_path, "w", compression=zipfile.ZIP_STORED) as archive:
             for path in sorted(payloads):
                 archive.writestr(_zip_info(path), payloads[path])
-        if destination.is_symlink():
+        if _is_path_link(destination):
             raise UsagePackageSymlinkError(
                 "Agent Usage package output became a symbolic link", path=str(destination)
             )
@@ -1424,16 +1428,16 @@ def _verify_usage_package_impl(
     _validate_limits(max_member_bytes, max_total_bytes)
     path = Path(package_path)
     _validate_package_path(path)
-    if path.is_symlink():
+    if _is_path_link(path):
         raise UsagePackageSymlinkError("Agent Usage package cannot be a symbolic link")
     if not path.is_file():
         raise UsagePackageFormatError("Agent Usage package is not a regular file")
     try:
         with zipfile.ZipFile(path) as archive:
             infos = archive.infolist()
+            for info in infos:
+                _validate_member_path(info.orig_filename)
             names = [info.filename for info in infos]
-            for name in names:
-                _validate_member_path(name)
             if len(names) != len(set(names)):
                 duplicate = next(name for name in names if names.count(name) > 1)
                 raise UsagePackageDuplicateEntryError(
@@ -1559,7 +1563,7 @@ def _make_verified_package_api() -> tuple[_VerifiedPackageVerifier, _VerifiedPac
             return False
         try:
             return (
-                not value.path.is_symlink()
+                not _is_path_link(value.path)
                 and value.path.is_file()
                 and _file_sha256(value.path) == value.sha256
                 and record[1] == _verified_package_fingerprint(value)

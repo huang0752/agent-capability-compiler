@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 import os
@@ -19,6 +20,7 @@ import yaml
 from mcp.client.stdio import StdioServerParameters
 
 import acc_core.usage.packaging as packaging_module
+from acc_core.cli.main import main
 from acc_core.packaging import build_pack
 from acc_core.quality.output_size import canonical_json_bytes
 from acc_core.usage.acceptance import (
@@ -50,12 +52,18 @@ from acc_core.usage.packaging import (
 )
 from acc_core.usage.project import validate_usage_project
 from acc_core.usage.verification import VerifiedUsageReleaseBundle
+from acc_core.usage.verification_artifact import (
+    UsageVerificationArtifactError,
+    load_usage_verification_artifact,
+    write_usage_verification_artifact,
+)
 from acc_testkit import McpStdioTestClient
 from acc_testkit.usage import (
     AgentUsageReleaseVerifier,
     UsageScenarioVerification,
     UsageToolOutcome,
 )
+from fs_links import create_link
 
 FIXTURE = Path("tests/fixtures/usage/finance")
 _SIGNING_KEY = b"package-test-signing-key-material-32-bytes-minimum"
@@ -328,6 +336,193 @@ def _canonical(value: object) -> bytes:
     return (
         json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
     ).encode()
+
+
+def test_signed_usage_verification_artifact_round_trip_and_fail_closed(tmp_path: Path) -> None:
+    root = _project(tmp_path)
+    report = validate_usage_project(root)
+    assert report.ok and report.acceptance is not None
+    bundle = _trusted_bundle(root)
+    key = b"independent-verification-key-material-32-bytes"
+    artifact = tmp_path / "verification.json"
+    trust = tmp_path / "trust.json"
+    key_id = write_usage_verification_artifact(
+        artifact,
+        report=report,
+        acceptance=report.acceptance,
+        bundle=bundle,
+        signing_key=key,
+        observed_at=100,
+        expires_in_seconds=60,
+    )
+    trust.write_bytes(
+        canonical_json_bytes(
+            {"schema_version": "2", "keys": {key_id: base64.b64encode(key).decode("ascii")}}
+        )
+        + b"\n"
+    )
+    restored = load_usage_verification_artifact(
+        artifact,
+        trust_store=trust,
+        report=report,
+        acceptance=report.acceptance,
+        domain_id="finance",
+        now=120,
+    )
+    assert restored.trusted
+
+    document = json.loads(artifact.read_bytes())
+    document["nonce"] = "0" * 64
+    artifact.write_bytes(canonical_json_bytes(document) + b"\n")
+    with pytest.raises(UsageVerificationArtifactError, match="invalid, expired"):
+        load_usage_verification_artifact(
+            artifact,
+            trust_store=trust,
+            report=report,
+            acceptance=report.acceptance,
+            domain_id="finance",
+            now=120,
+        )
+
+    write_usage_verification_artifact(
+        artifact,
+        report=report,
+        acceptance=report.acceptance,
+        bundle=bundle,
+        signing_key=key,
+        observed_at=100,
+        expires_in_seconds=1,
+    )
+    with pytest.raises(UsageVerificationArtifactError, match="invalid, expired"):
+        load_usage_verification_artifact(
+            artifact,
+            trust_store=trust,
+            report=report,
+            acceptance=report.acceptance,
+            domain_id="finance",
+            now=120,
+        )
+
+
+def test_usage_verification_artifact_rejects_linked_parent(tmp_path: Path) -> None:
+    root = _project(tmp_path)
+    report = validate_usage_project(root)
+    assert report.ok and report.acceptance is not None
+    real = tmp_path / "real-output"
+    real.mkdir()
+    linked = tmp_path / "linked-output"
+    create_link(linked, real, target_is_directory=True)
+    with pytest.raises(UsageVerificationArtifactError, match="output path is linked"):
+        write_usage_verification_artifact(
+            linked / "verification.json",
+            report=report,
+            acceptance=report.acceptance,
+            bundle=_trusted_bundle(root),
+            signing_key=b"independent-verification-key-material-32-bytes",
+        )
+
+
+def test_usage_verification_artifact_validity_is_bounded(tmp_path: Path) -> None:
+    root = _project(tmp_path)
+    report = validate_usage_project(root)
+    assert report.ok and report.acceptance is not None
+    with pytest.raises(UsageVerificationArtifactError, match="live trusted bundle"):
+        write_usage_verification_artifact(
+            tmp_path / "too-long.json",
+            report=report,
+            acceptance=report.acceptance,
+            bundle=_trusted_bundle(root),
+            signing_key=b"independent-verification-key-material-32-bytes",
+            expires_in_seconds=86_401,
+        )
+
+
+def test_usage_cli_release_and_build_require_trusted_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _project(tmp_path)
+    report = validate_usage_project(root)
+    assert report.ok and report.acceptance is not None
+    bundle = _trusted_bundle(root)
+    key = b"independent-verification-key-material-32-bytes"
+    artifact = root / "runner-verification.json"
+    trust = tmp_path.parent / f"{tmp_path.name}-independent-trust.json"
+    tools = tmp_path / "accepted-tools.json"
+    key_id = write_usage_verification_artifact(
+        artifact,
+        report=report,
+        acceptance=report.acceptance,
+        bundle=bundle,
+        signing_key=key,
+    )
+    trust.write_bytes(
+        canonical_json_bytes(
+            {"schema_version": "2", "keys": {key_id: base64.b64encode(key).decode("ascii")}}
+        )
+        + b"\n"
+    )
+    tools.write_bytes(canonical_json_bytes({"tools": _FixtureMcpClient().tools}) + b"\n")
+    common = [
+        "--domain",
+        "finance",
+        "--project",
+        str(root),
+        "--verification-artifact",
+        str(artifact),
+        "--verification-trust-store",
+        str(trust),
+        "--accepted-pack",
+        str(tmp_path / "finance.accpkg"),
+        "--accepted-tools",
+        str(tools),
+        "--accepted-test-report",
+        str(tmp_path / "test-report.json"),
+        "--json",
+    ]
+    assert main(["usage", "release", *common, "--check"]) == 0
+    monkeypatch.setenv("USAGE_PACKAGE_SECRET", base64.b64encode(_SIGNING_KEY).decode("ascii"))
+    assert (
+        main(
+            [
+                "usage",
+                "build",
+                *common,
+                "--output",
+                "dist/finance.accusage",
+                "--package-signing-secret-env",
+                "USAGE_PACKAGE_SECRET",
+            ]
+        )
+        == 0
+    )
+
+    document = json.loads(artifact.read_bytes())
+    document["nonce"] = "0" * 64
+    artifact.write_bytes(canonical_json_bytes(document) + b"\n")
+    assert main(["usage", "release", *common, "--check"]) == 3
+
+    write_usage_verification_artifact(
+        artifact,
+        report=report,
+        acceptance=report.acceptance,
+        bundle=bundle,
+        signing_key=key,
+        observed_at=1,
+        expires_in_seconds=1,
+    )
+    assert main(["usage", "release", *common, "--check"]) == 3
+
+    trust_inside = root / "trust.json"
+    trust_inside.write_bytes(trust.read_bytes())
+    inside = list(common)
+    inside[inside.index(str(trust))] = str(trust_inside)
+    assert main(["usage", "release", *inside, "--check"]) == 3
+
+    wrong_pack = tmp_path / "wrong.accpkg"
+    wrong_pack.write_bytes((tmp_path / "finance.accpkg").read_bytes() + b"\n")
+    mismatch = list(common)
+    mismatch[mismatch.index(str(tmp_path / "finance.accpkg"))] = str(wrong_pack)
+    assert main(["usage", "release", *mismatch, "--check"]) == 3
 
 
 def _rewrite_archive(
@@ -677,7 +872,7 @@ def test_build_rejects_wrong_suffix_invalid_project_and_symlink_output(tmp_path:
     target = tmp_path / "target.accusage"
     target.write_bytes(b"existing")
     link = tmp_path / "link.accusage"
-    link.symlink_to(target)
+    create_link(link, target)
     with pytest.raises(UsagePackageSymlinkError):
         build_usage_package(root, link)
 
@@ -760,7 +955,7 @@ def test_build_rejects_symlinked_parent(tmp_path: Path) -> None:
     real_parent = tmp_path / "real"
     real_parent.mkdir()
     linked_parent = tmp_path / "linked"
-    linked_parent.symlink_to(real_parent, target_is_directory=True)
+    create_link(linked_parent, real_parent, target_is_directory=True)
     with pytest.raises(UsagePackageSymlinkError):
         build_usage_package(root, linked_parent / "usage.accusage")
 
