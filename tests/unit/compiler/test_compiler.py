@@ -242,6 +242,55 @@ def test_compiler_emits_independent_interaction_digest_for_current_ir(tmp_path: 
     }
 
 
+def test_compiler_carries_provider_application_success_into_ir(tmp_path: Path) -> None:
+    project = _make_project(tmp_path)
+    project_path = project / "project.yaml"
+    document = yaml.safe_load(project_path.read_text(encoding="utf-8"))
+    document["provider"]["application_success"] = {
+        "kind": "json_pointer",
+        "pointer": "/code",
+        "allowed_values": [200],
+    }
+    _write_yaml(project_path, document)
+
+    report = compile_project(project)
+
+    assert report.ir is not None, report.diagnostics
+    assert report.ir["project"]["provider"]["application_success"] == {
+        "kind": "json_pointer",
+        "pointer": "/code",
+        "allowed_values": [200],
+    }
+
+
+def test_application_success_rejects_an_operation_that_may_return_no_json(
+    tmp_path: Path,
+) -> None:
+    project = _make_project(tmp_path)
+    project_path = project / "project.yaml"
+    project_document = yaml.safe_load(project_path.read_text(encoding="utf-8"))
+    project_document["provider"]["application_success"] = {
+        "kind": "json_pointer",
+        "pointer": "/code",
+        "allowed_values": [200],
+    }
+    _write_yaml(project_path, project_document)
+    operation_path = project / "operations" / "crm.get_customer.yaml"
+    operation_document = yaml.safe_load(operation_path.read_text(encoding="utf-8"))
+    operation_document["http"]["success"]["body"] = "json_or_empty"
+    _write_yaml(operation_path, operation_document)
+
+    report = compile_project(project)
+
+    assert report.ir is None
+    assert any(
+        item.code == "ACC_APPLICATION_SUCCESS_BODY_INCOMPATIBLE"
+        and item.path == "operations/crm.get_customer.yaml"
+        and item.pointer == "/http/success/body"
+        for item in report.diagnostics
+    )
+
+
 def _write_capability(project: Path, capability: dict[str, Any]) -> None:
     _write_yaml(project / "capabilities" / "get_customer.yaml", capability)
 

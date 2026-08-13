@@ -1444,6 +1444,29 @@ def _validate_auth_contract(report: ValidationReport) -> None:
         )
 
 
+def _validate_application_success_contract(report: ValidationReport) -> None:
+    """Reject operations whose success body cannot satisfy a provider envelope contract."""
+
+    project = report.project
+    if project is None or project.provider.application_success is None:
+        return
+    for operation_id in sorted(report.operations):
+        operation = report.operations[operation_id]
+        if operation.http.success.body == "json":
+            continue
+        report.diagnostics.append(
+            Diagnostic(
+                code="ACC_APPLICATION_SUCCESS_BODY_INCOMPATIBLE",
+                severity="error",
+                message=(
+                    "provider application_success requires every operation success body to be json"
+                ),
+                path=report.operation_paths.get(operation_id),
+                pointer="/http/success/body",
+            )
+        )
+
+
 def _validate_interaction_sidecar_closure(report: ValidationReport) -> None:
     """Require exact Capability and interaction closure for a declared UI denominator."""
 
@@ -1667,6 +1690,7 @@ def validate_project(project_root: str | Path = ".") -> ValidationReport:
         report.diagnostics,
     )
     _validate_auth_contract(report)
+    _validate_application_success_contract(report)
     if report.ui_interaction_inventory is not None and report.scope_inventory is None:
         report.diagnostics.append(
             Diagnostic(

@@ -69,6 +69,72 @@
       "title": "GatewaySessionCredentials",
       "type": "object"
     },
+    "JsonPointerApplicationSuccessConfig": {
+      "additionalProperties": false,
+      "description": "Declare exact application-level success for a JSON envelope.",
+      "properties": {
+        "allowed_values": {
+          "items": {
+            "$ref": "#/$defs/JsonScalar"
+          },
+          "minItems": 1,
+          "title": "Allowed Values",
+          "type": "array"
+        },
+        "kind": {
+          "const": "json_pointer",
+          "title": "Kind",
+          "type": "string"
+        },
+        "pointer": {
+          "minLength": 1,
+          "title": "Pointer",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "pointer",
+        "allowed_values"
+      ],
+      "title": "JsonPointerApplicationSuccessConfig",
+      "type": "object"
+    },
+    "JsonScalar": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "integer"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "LoginRequestConfig": {
+      "additionalProperties": false,
+      "description": "Public, non-secret scalar fields added to a password login JSON object.",
+      "properties": {
+        "static_fields": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonScalar"
+          },
+          "maxProperties": 32,
+          "title": "Static Fields",
+          "type": "object"
+        }
+      },
+      "title": "LoginRequestConfig",
+      "type": "object"
+    },
     "NoAuthConfig": {
       "additionalProperties": false,
       "description": "Explicitly declare that the provider requires no authentication.",
@@ -120,6 +186,9 @@
           "title": "Login Path",
           "type": "string"
         },
+        "login_request": {
+          "$ref": "#/$defs/LoginRequestConfig"
+        },
         "max_response_bytes": {
           "default": 65536,
           "maximum": 1048576,
@@ -150,6 +219,17 @@
           "title": "Retry On Unauthorized",
           "type": "boolean"
         },
+        "scope_discovery": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScopeDiscoveryConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "scope_mapping": {
           "additionalProperties": {
             "items": {
@@ -164,6 +244,15 @@
           },
           "title": "Scope Mapping",
           "type": "object"
+        },
+        "scopes_format": {
+          "default": "json_array",
+          "enum": [
+            "json_array",
+            "space_delimited"
+          ],
+          "title": "Scopes Format",
+          "type": "string"
         },
         "scopes_pointer": {
           "anyOf": [
@@ -292,6 +381,17 @@
       "additionalProperties": false,
       "description": "Reference to the target REST provider without embedding its URL.",
       "properties": {
+        "application_success": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JsonPointerApplicationSuccessConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "auth": {
           "anyOf": [
             {
@@ -372,6 +472,70 @@
         "transport"
       ],
       "title": "RuntimeConfig",
+      "type": "object"
+    },
+    "ScopeDiscoveryConfig": {
+      "additionalProperties": false,
+      "description": "Discover source-authorized scopes with one bounded bearer GET.",
+      "properties": {
+        "application_success": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JsonPointerApplicationSuccessConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "max_response_bytes": {
+          "default": 65536,
+          "maximum": 262144,
+          "minimum": 1,
+          "title": "Max Response Bytes",
+          "type": "integer"
+        },
+        "path": {
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "scopes_format": {
+          "default": "json_array",
+          "enum": [
+            "json_array",
+            "space_delimited"
+          ],
+          "title": "Scopes Format",
+          "type": "string"
+        },
+        "scopes_pointer": {
+          "minLength": 1,
+          "title": "Scopes Pointer",
+          "type": "string"
+        },
+        "static_query_fields": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonScalar"
+          },
+          "maxProperties": 16,
+          "title": "Static Query Fields",
+          "type": "object"
+        },
+        "timeout_seconds": {
+          "default": 5,
+          "maximum": 30,
+          "minimum": 1,
+          "title": "Timeout Seconds",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "scopes_pointer"
+      ],
+      "title": "ScopeDiscoveryConfig",
       "type": "object"
     },
     "SourceWorkspace": {

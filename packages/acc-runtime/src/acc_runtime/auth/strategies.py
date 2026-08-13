@@ -11,7 +11,7 @@ import re
 import time
 from collections.abc import Callable, Mapping
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Literal, Never, Protocol, cast
 from urllib.parse import urlsplit
@@ -46,6 +46,16 @@ from acc_runtime.credentials import (
 LOGGER = logging.getLogger(__name__)
 _MISSING = object()
 _BEARER_TOKEN_TYPE = re.compile(r"bearer", re.IGNORECASE)
+_MAX_LOGIN_REQUEST_BYTES = 65_536
+_MAX_SCOPE_DISCOVERY_REQUEST_BYTES = 8_192
+_MAX_SPACE_DELIMITED_SCOPE_BYTES = 8_192
+_MAX_SPACE_DELIMITED_SCOPES = 1_024
+_ASCII_SCOPE_WHITESPACE = re.compile(r"[ \t\r\n\v\f]+")
+
+
+class _LoginRequestTooLargeError(Exception):
+    pass
+
 
 type AsyncClientFactory = Callable[[], httpx.AsyncClient]
 type _FailureKind = Literal[
@@ -430,6 +440,7 @@ class PasswordBearerAuthStrategy:
             password = _secret_text(credentials.password, field="password")
             body = json.dumps(
                 {
+                    **self._configuration.login_request.static_fields,
                     self._configuration.identity_field: identity,
                     self._configuration.password_field: password,
                 },
@@ -437,6 +448,8 @@ class PasswordBearerAuthStrategy:
                 allow_nan=False,
                 separators=(",", ":"),
             ).encode()
+            if len(body) > _MAX_LOGIN_REQUEST_BYTES:
+                raise _LoginRequestTooLargeError
             request = httpx.Request(
                 "POST",
                 f"{self._base_url}{self._configuration.login_path}",
@@ -486,6 +499,9 @@ class PasswordBearerAuthStrategy:
                         result = self._authentication_result(payload)
                 finally:
                     await response.aclose()
+                if failure is None and result is not None and self._configuration.scope_discovery:
+                    discovered = await self._discover_scopes(client, result)
+                    result = replace(result, source_scopes=discovered)
         except asyncio.CancelledError:
             raise
         except AuthResponseTooLargeError:
@@ -501,6 +517,8 @@ class PasswordBearerAuthStrategy:
             )
         except AuthCredentialError:
             failure = _FailureDescriptor(kind="secret_missing")
+        except _LoginRequestTooLargeError:
+            failure = _FailureDescriptor(kind="configuration")
         except httpx.TimeoutException:
             failure = _FailureDescriptor(kind="timeout")
         except httpx.RequestError:
@@ -907,8 +925,10 @@ class PasswordBearerAuthStrategy:
             authentication=result,
         )
 
-    async def _bounded_json(self, response: httpx.Response) -> JsonValue:
-        limit = self._configuration.max_response_bytes
+    async def _bounded_json(
+        self, response: httpx.Response, *, limit: int | None = None
+    ) -> JsonValue:
+        limit = self._configuration.max_response_bytes if limit is None else limit
         content_length = response.headers.get("content-length")
         if content_length is not None:
             try:
@@ -937,6 +957,69 @@ class PasswordBearerAuthStrategy:
             LOGGER.warning("source login returned invalid JSON")
             raise _invalid_response("invalid_json")
         return parsed
+
+    async def _discover_scopes(
+        self,
+        client: httpx.AsyncClient,
+        result: AuthenticationResult,
+    ) -> frozenset[str]:
+        configuration = self._configuration.scope_discovery
+        authorization = result.authorization
+        if configuration is None or authorization is None:
+            raise _invalid_response("scope_discovery_configuration")
+        raw_authorization = authorization.get_secret_value()
+        request: httpx.Request | None = None
+        response: httpx.Response | None = None
+        payload: JsonValue | object = _MISSING
+        try:
+            request = httpx.Request(
+                "GET",
+                f"{self._base_url}{configuration.path}",
+                params=configuration.static_query_fields,
+                headers={
+                    "Accept": "application/json",
+                    "Authorization": raw_authorization,
+                },
+                extensions={"timeout": httpx.Timeout(configuration.timeout_seconds).as_dict()},
+            )
+            if len(str(request.url).encode("utf-8")) > _MAX_SCOPE_DISCOVERY_REQUEST_BYTES:
+                raise _invalid_response("scope_discovery_request_too_large")
+            response = await client.send(
+                request,
+                auth=None,
+                follow_redirects=False,
+                stream=True,
+            )
+            if _origin(response.url) != self._origin or 300 <= response.status_code < 400:
+                raise _invalid_response("scope_discovery_origin")
+            if response.status_code < 200 or response.status_code >= 300:
+                raise _invalid_response("scope_discovery_status")
+            payload = await self._bounded_json(response, limit=configuration.max_response_bytes)
+            policy = configuration.application_success
+            if policy is not None:
+                application_value = _pointer_value(payload, policy.pointer)
+                if application_value is _MISSING or not any(
+                    type(application_value) is type(allowed) and application_value == allowed
+                    for allowed in policy.allowed_values
+                ):
+                    raise _invalid_response("scope_discovery_application")
+            raw_scopes = _pointer_value(payload, configuration.scopes_pointer)
+            if raw_scopes is _MISSING:
+                raise _invalid_response("missing_scopes")
+            if configuration.scopes_format == "space_delimited":
+                return _space_delimited_scopes(raw_scopes)
+            if not isinstance(raw_scopes, list) or any(
+                not _is_safe_nonempty_text(scope) for scope in raw_scopes
+            ):
+                raise _invalid_response("invalid_scopes")
+            return frozenset(cast(list[str], raw_scopes))
+        finally:
+            raw_authorization = ""
+            if response is not None:
+                await response.aclose()
+            request = None
+            response = None
+            payload = _MISSING
 
     def _authentication_result(self, payload: JsonValue) -> AuthenticationResult:
         token = _pointer_value(payload, self._configuration.token_pointer)
@@ -985,11 +1068,14 @@ class PasswordBearerAuthStrategy:
             raw_scopes = _pointer_value(payload, self._configuration.scopes_pointer)
             if raw_scopes is _MISSING:
                 raise _invalid_response("missing_scopes")
-            if not isinstance(raw_scopes, list) or any(
-                not _is_safe_nonempty_text(scope) for scope in raw_scopes
-            ):
-                raise _invalid_response("invalid_scopes")
-            source_scopes = frozenset(cast(list[str], raw_scopes))
+            if self._configuration.scopes_format == "json_array":
+                if not isinstance(raw_scopes, list) or any(
+                    not _is_safe_nonempty_text(scope) for scope in raw_scopes
+                ):
+                    raise _invalid_response("invalid_scopes")
+                source_scopes = frozenset(cast(list[str], raw_scopes))
+            else:
+                source_scopes = _space_delimited_scopes(raw_scopes)
 
         tenant_context: Mapping[str, JsonValue] | None = None
         if self._configuration.tenant_pointer is not None:
@@ -1078,6 +1164,23 @@ def _is_safe_nonempty_text(value: object) -> bool:
         and bool(value.strip())
         and not any(character in value for character in "\r\n\x00")
     )
+
+
+def _space_delimited_scopes(value: object) -> frozenset[str]:
+    if not isinstance(value, str):
+        raise _invalid_response("invalid_scopes")
+    if len(value.encode("utf-8")) > _MAX_SPACE_DELIMITED_SCOPE_BYTES:
+        raise _invalid_response("invalid_scopes")
+    if any(character.isspace() and character not in " \t\r\n\v\f" for character in value):
+        raise _invalid_response("invalid_scopes")
+    tokens = [token for token in _ASCII_SCOPE_WHITESPACE.split(value) if token]
+    if len(tokens) > _MAX_SPACE_DELIMITED_SCOPES or any(
+        not _is_safe_nonempty_text(token)
+        or any(ord(character) < 0x20 or ord(character) == 0x7F for character in token)
+        for token in tokens
+    ):
+        raise _invalid_response("invalid_scopes")
+    return frozenset(sorted(set(tokens)))
 
 
 def _no_retry_feedback_outcome(

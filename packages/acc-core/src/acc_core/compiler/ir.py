@@ -881,14 +881,15 @@ def compile_project(project_root: str | Path = ".") -> CompilationReport:
                     for scope in validation.operations[operation_id].http.scopes
                 }
                 if (policy_scopes or operation_scopes) and (
-                    auth.scopes_pointer is None or not auth.scope_mapping
+                    (auth.scopes_pointer is None and auth.scope_discovery is None)
+                    or not auth.scope_mapping
                 ):
                     _diagnostic(
                         diagnostics,
                         code="ACC_COMPILE_SOURCE_SCOPE_MAPPING_REQUIRED",
                         message=(
-                            "A scoped streamable_http capability requires scopes_pointer "
-                            "and a non-empty scope_mapping."
+                            "A scoped streamable_http capability requires inline or "
+                            "discovered source scopes and a non-empty scope_mapping."
                         ),
                         path=f"capabilities/{capability_id}.yaml",
                         pointer="/policy",

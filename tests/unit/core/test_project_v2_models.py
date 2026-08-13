@@ -6,6 +6,7 @@ from pydantic import TypeAdapter, ValidationError
 from acc_core.models import (
     Capability,
     CapabilityV2,
+    JsonPointerApplicationSuccessConfig,
     Operation,
     OperationV2,
     Project,
@@ -53,6 +54,64 @@ def test_project_v2_requires_an_explicit_quality_profile() -> None:
         ProjectV2.model_validate(document)
 
 
+def test_project_provider_accepts_a_json_pointer_application_success_contract() -> None:
+    document = _project()
+    document["provider"]["application_success"] = {
+        "kind": "json_pointer",
+        "pointer": "/code",
+        "allowed_values": [200, "OK", True, None],
+    }
+
+    project = ProjectV2.model_validate(document)
+
+    assert project.provider.application_success == JsonPointerApplicationSuccessConfig(
+        kind="json_pointer",
+        pointer="/code",
+        allowed_values=[200, "OK", True, None],
+    )
+    assert project.model_dump(mode="json")["provider"]["application_success"] == {
+        "kind": "json_pointer",
+        "pointer": "/code",
+        "allowed_values": [200, "OK", True, None],
+    }
+
+
+@pytest.mark.parametrize(
+    "allowed_values",
+    [[], [[200]], [{"code": 200}], [float("nan")], [200, 200]],
+)
+def test_project_provider_rejects_invalid_application_success_values(
+    allowed_values: list[object],
+) -> None:
+    document = _project()
+    document["provider"]["application_success"] = {
+        "kind": "json_pointer",
+        "pointer": "/code",
+        "allowed_values": allowed_values,
+    }
+
+    with pytest.raises(ValidationError, match="allowed_values"):
+        ProjectV2.model_validate(document)
+
+
+def test_application_success_values_use_type_exact_uniqueness() -> None:
+    document = _project()
+    document["provider"]["application_success"] = {
+        "kind": "json_pointer",
+        "pointer": "/code",
+        "allowed_values": [1, True, 1.0],
+    }
+
+    project = ProjectV2.model_validate(document)
+
+    values = project.provider.application_success.allowed_values
+    assert [(type(value), value) for value in values] == [
+        (int, 1),
+        (bool, True),
+        (float, 1.0),
+    ]
+
+
 def test_schema_exports_use_only_canonical_current_names() -> None:
     assert set(MODEL_SCHEMAS) == {
         "capability",
@@ -65,6 +124,7 @@ def test_schema_exports_use_only_canonical_current_names() -> None:
         "eval",
         "evidence",
         "interaction-contract",
+        "live-observation-artifact",
         "operation",
         "policy",
         "project",

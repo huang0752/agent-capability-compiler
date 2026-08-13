@@ -2,6 +2,7 @@
 
 from acc_runtime.providers.http import (
     EnvironmentSecretResolver,
+    HttpApplicationError,
     HttpBaseUrlError,
     HttpForbiddenError,
     HttpInvalidJsonError,
@@ -15,6 +16,7 @@ from acc_runtime.providers.http import (
     HttpTimeoutError,
     HttpUpstreamError,
     InputSchemaError,
+    JsonApplicationSuccessPolicy,
     OutputSchemaError,
     ResolvedSecret,
     SecretResolver,
@@ -22,6 +24,7 @@ from acc_runtime.providers.http import (
 
 __all__ = [
     "EnvironmentSecretResolver",
+    "HttpApplicationError",
     "HttpBaseUrlError",
     "HttpForbiddenError",
     "HttpInvalidJsonError",
@@ -35,6 +38,7 @@ __all__ = [
     "HttpTimeoutError",
     "HttpUpstreamError",
     "InputSchemaError",
+    "JsonApplicationSuccessPolicy",
     "OutputSchemaError",
     "ResolvedSecret",
     "SecretResolver",

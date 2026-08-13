@@ -48,7 +48,7 @@ from acc_runtime.gateway.audit import (
 )
 from acc_runtime.loader import LoadedPack, load_pack
 from acc_runtime.policies import PolicyEnforcer
-from acc_runtime.providers import HttpProvider
+from acc_runtime.providers import HttpProvider, JsonApplicationSuccessPolicy
 
 
 class RuntimeConfigurationError(AccRuntimeError):
@@ -255,6 +255,7 @@ class GenericRuntime:
         client: httpx.AsyncClient | None = None,
         audit_collector: AuditCollector | None = None,
         operation_observer: OperationObserver | None = None,
+        application_success_policy: JsonApplicationSuccessPolicy | None = None,
     ) -> GenericRuntime:
         loaded = load_pack(pack_path)
         project_value = loaded.ir.get("project")
@@ -269,10 +270,17 @@ class GenericRuntime:
             tenant_id=tenant_id,
         )
         auth_strategy = _auth_strategy_from_project(project, environment=environment)
+        declared_success = project.provider.application_success
+        effective_success_policy = application_success_policy or (
+            JsonApplicationSuccessPolicy.from_config(declared_success)
+            if declared_success is not None
+            else None
+        )
         provider = HttpProvider(
             base_url_ref=project.provider.base_url_ref,
             auth_strategy=auth_strategy,
             environment=environment,
+            application_success_policy=effective_success_policy,
             client=client,
         )
         runtime = cls(
@@ -643,12 +651,14 @@ _INTERACTION_CONTRACT_FIELDS = frozenset(
 _DECLARED_INVENTORY_FIELDS = frozenset(
     {
         "evidence_sha256",
+        "dimension_dispositions",
         "interaction_ids",
         "scope_mode",
         "sidecar_sha256",
         "status",
         "summary",
         "surface_ids",
+        "surface_contexts",
     }
 )
 _INVENTORY_SUMMARY_FIELDS = frozenset({"interactions", "surfaces", "unresolved"})
@@ -838,6 +848,47 @@ def _validate_interaction_inventory(value: object) -> None:
         raise ValueError
     interaction_ids = _validate_sorted_unique_ids(value.get("interaction_ids"))
     surface_ids = _validate_sorted_unique_ids(value.get("surface_ids"))
+    dispositions = value.get("dimension_dispositions")
+    if not isinstance(dispositions, Mapping) or set(dispositions) != set(interaction_ids):
+        raise ValueError
+    valid_dimensions = {
+        "conditions",
+        "defaults",
+        "input_bindings",
+        "option_sources",
+        "related_data",
+        "result_consumption",
+        "states",
+    }
+    for interaction_id in interaction_ids:
+        interaction_dispositions = dispositions.get(interaction_id)
+        if not isinstance(interaction_dispositions, Mapping) or any(
+            dimension not in valid_dimensions
+            or applicability not in {"applicable", "not_applicable"}
+            for dimension, applicability in interaction_dispositions.items()
+        ):
+            raise ValueError
+    surface_contexts = value.get("surface_contexts")
+    if not isinstance(surface_contexts, Mapping) or set(surface_contexts) != set(surface_ids):
+        raise ValueError
+    for surface_id in surface_ids:
+        context = surface_contexts.get(surface_id)
+        if (
+            not isinstance(context, Mapping)
+            or set(context) != {"kind", "route_or_entry", "usage_context"}
+            or not isinstance(context.get("kind"), str)
+            or not context.get("kind")
+            or not isinstance(context.get("route_or_entry"), str)
+            or not context.get("route_or_entry")
+            or (
+                context.get("usage_context") is not None
+                and (
+                    not isinstance(context.get("usage_context"), str)
+                    or not context.get("usage_context")
+                )
+            )
+        ):
+            raise ValueError
     summary = value.get("summary")
     if (
         not isinstance(summary, Mapping)
