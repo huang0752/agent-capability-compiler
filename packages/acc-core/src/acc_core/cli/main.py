@@ -24,6 +24,7 @@ from acc_core.cli.domains import (
     show_domain,
     status_domains,
 )
+from acc_core.cli.intents import audit_project_intents, build_intent_brief
 from acc_core.cli.scope_diagnostics import analyze_run_scope_configuration
 from acc_core.cli.usage import handle_usage_command
 from acc_core.compiler import compile_project
@@ -111,6 +112,24 @@ def _parser() -> AccArgumentParser:
     )
     _add_json_argument(coverage_parser)
     coverage_parser.set_defaults(handler=_coverage_command)
+
+    intents_parser = subparsers.add_parser(
+        "intents", help="prepare and audit evidence-driven business intent plans"
+    )
+    intents_subparsers = intents_parser.add_subparsers(dest="intents_command", required=True)
+    intents_brief_parser = intents_subparsers.add_parser(
+        "brief", help="emit bounded facts for the Coding Agent planner"
+    )
+    intents_brief_parser.add_argument("path", nargs="?", default=".")
+    intents_brief_parser.add_argument("--domain")
+    _add_json_argument(intents_brief_parser)
+    intents_brief_parser.set_defaults(handler=_intents_command)
+    intents_audit_parser = intents_subparsers.add_parser(
+        "audit", help="audit intent-plan.yaml against the current project"
+    )
+    intents_audit_parser.add_argument("path", nargs="?", default=".")
+    _add_json_argument(intents_audit_parser)
+    intents_audit_parser.set_defaults(handler=_intents_command)
 
     domains_parser = subparsers.add_parser("domains", help="inspect deterministic domain workflow")
     domains_subparsers = domains_parser.add_subparsers(dest="domains_command", required=True)
@@ -775,6 +794,37 @@ def _coverage_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelop
         live_observations=live_observations,
     ).model_dump(mode="json")
     return EXIT_SUCCESS, _success("coverage", result, report.diagnostics)
+
+
+def _intents_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope]:
+    command = f"intents {arguments.intents_command}"
+    project = Path(str(arguments.path)).expanduser().resolve()
+    if arguments.intents_command == "brief":
+        result, diagnostics = build_intent_brief(
+            project,
+            domain_id=cast(str | None, getattr(arguments, "domain", None)),
+        )
+    else:
+        result, diagnostics = audit_project_intents(project)
+    if result is None or any(item.severity == "error" for item in diagnostics):
+        errors = [item for item in diagnostics if item.severity == "error"]
+        if not errors:
+            errors = [
+                Diagnostic(
+                    code="ACC_INTENT_AUDIT_FAILED",
+                    severity="error",
+                    message="Intent planning did not produce a valid result.",
+                    path=None,
+                    pointer=None,
+                )
+            ]
+        return EXIT_INPUT, ResultEnvelope(
+            ok=False,
+            command=command,
+            result=None,
+            diagnostics=errors,
+        )
+    return EXIT_SUCCESS, _success(command, result, diagnostics)
 
 
 def _domains_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope]:

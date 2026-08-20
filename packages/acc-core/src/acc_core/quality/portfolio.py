@@ -4,12 +4,20 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
 from acc_core.diagnostics import Diagnostic
-from acc_core.models import Capability
+from acc_core.models import (
+    BranchStep,
+    CallStep,
+    Capability,
+    ForeachStep,
+    ParallelStep,
+    ReadCapabilityV2,
+    WorkflowStep,
+)
 from acc_core.quality.models import CapabilityQuality
 from acc_core.scope import ScopeInventory
 
@@ -20,6 +28,45 @@ _ACTION_LIFECYCLE_TOOLS = (
     "acc_action_commit",
     "acc_action_status",
 )
+
+
+def _called_operations(steps: Iterable[WorkflowStep]) -> set[str]:
+    dependencies: set[str] = set()
+    for step in steps:
+        if isinstance(step, CallStep):
+            dependencies.add(step.call.operation)
+        elif isinstance(step, BranchStep):
+            dependencies.update(_called_operations(step.branch.then_steps))
+            dependencies.update(_called_operations(step.branch.else_steps))
+        elif isinstance(step, ParallelStep):
+            dependencies.update(_called_operations(step.parallel))
+        elif isinstance(step, ForeachStep):
+            dependencies.update(_called_operations(step.foreach.workflow))
+    return dependencies
+
+
+def capability_operation_dependencies(
+    capabilities: Mapping[str, Capability],
+) -> dict[str, tuple[str, ...]]:
+    """Return every recursively referenced Operation for each Capability."""
+
+    result: dict[str, tuple[str, ...]] = {}
+    for capability_id, capability in sorted(capabilities.items()):
+        workflows = (
+            (capability.workflow,)
+            if isinstance(capability, ReadCapabilityV2)
+            else (capability.preview_workflow, capability.commit_workflow)
+        )
+        result[capability_id] = tuple(
+            sorted(
+                {
+                    operation_id
+                    for workflow in workflows
+                    for operation_id in _called_operations(workflow)
+                }
+            )
+        )
+    return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -300,4 +347,9 @@ def analyze_tool_portfolio(
     )
 
 
-__all__ = ["PortfolioOverlap", "ToolPortfolioAnalysis", "analyze_tool_portfolio"]
+__all__ = [
+    "PortfolioOverlap",
+    "ToolPortfolioAnalysis",
+    "analyze_tool_portfolio",
+    "capability_operation_dependencies",
+]

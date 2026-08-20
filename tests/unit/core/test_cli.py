@@ -41,6 +41,7 @@ EXPORTED_SCHEMAS = {
     "scope-inventory.schema.json",
     "source-contract.schema.json",
     "interaction-contract.schema.json",
+    "intent-plan.schema.json",
     "live-observation-artifact.schema.json",
     "ui-interaction-inventory.schema.json",
     "domain-map.schema.json",

@@ -1,0 +1,28 @@
+# Strict IntentPlan artifact: keep this file outside operations/, capabilities/,
+# policies/, and evals/. The Coding Agent derives however many intents Evidence
+# supports; this contract contains no quota or route-per-tool setting.
+schema_version: "2"
+intents:
+  - id: REPLACE_WITH_INTENT_ID
+    domain_id: REPLACE_WITH_DOMAIN_ID
+    resource: REPLACE_WITH_RESOURCE
+    user_goal: REPLACE_WITH_EVIDENCED_USER_GOAL
+    route_ids:
+      - REPLACE_WITH_SCOPE_ROUTE_ID
+    interaction_ids: []
+    candidate_ids:
+      - REPLACE_WITH_CANDIDATE_ID
+    capability_ids:
+      - REPLACE_WITH_CAPABILITY_ID
+    kind: read
+    effect: read
+    rationale:
+      summary: REPLACE_WITH_EVIDENCE_BOUND_BOUNDARY_SUMMARY
+      split: REPLACE_WITH_REASON_THIS_GOAL_REMAINS_DISTINCT
+    evidence:
+      - evidence_ref: REPLACE_WITH_EVIDENCE_SOURCE_ID
+        supports: REPLACE_WITH_EXACT_CLAIM_SUPPORTED_BY_THIS_EVIDENCE
+    confidence: high
+    gaps: []
+    recommendation: materialize
+relationships: []

@@ -16,6 +16,7 @@ from acc_core.domains import (
     DomainMap,
     EvidenceChangeSet,
 )
+from acc_core.intents import IntentPlan
 from acc_core.interactions import CapabilityInteractionContract, UIInteractionInventory
 from acc_core.models import (
     Capability,
@@ -44,6 +45,7 @@ MODEL_SCHEMAS: dict[str, type[BaseModel] | TypeAdapter[object]] = {
     "eval": Eval,
     "evidence": Evidence,
     "interaction-contract": CapabilityInteractionContract,
+    "intent-plan": IntentPlan,
     "live-observation-artifact": LiveObservationArtifact,
     "operation": TypeAdapter(Operation),
     "policy": Policy,

@@ -42,13 +42,17 @@ Outputs are confined to `acc_project`. The source checkout is evidence, never an
 22. 一次只问一个异常、冲突、高风险策略或用户控制的测试边界；普通证据清晰候选不占用用户决策。
 23. 每个领域结束时逐项复核独立轴并确认版本化 `DomainDecision`，然后才进入下一个领域。
 24. 源 JWT/接口最终裁决源权限；Scope 只能收窄；Action approval 不是授权，只确认本次 prepared execution。
+25. The Coding Agent is the AI Domain Intent Planner. It emits and revises `intent-plan.yaml`; ACC Core and Runtime never call an LLM.
+26. Capability quantity is an Evidence-derived result. Fixed tool quotas, route-per-tool defaults, evidence-free merging, and catch-all management tools are prohibited.
+27. The user confirms `DomainPolicy`, user-controlled test boundaries, and exceptional/high-risk choices only; the Planner owns ordinary intent grouping and never asks the user to set a tool count.
+28. Every denominator route appears in an intent candidate or remains explicitly blocked. If a route belongs to multiple intents, `IntentRelationship` must explain the shared boundary with Evidence; merge/split/compose rationale must address permission, risk, data flow, and failure semantics.
 
 ## State machine
 
 Advance only when the current gate passes:
 
 ```text
-PREFLIGHT -> GLOBAL_ANALYZE -> DOMAIN_POLICY -> DOMAIN_DEEP_SCAN -> DOMAIN_REVIEW
+PREFLIGHT -> GLOBAL_ANALYZE -> INTENT_PLAN -> DOMAIN_POLICY -> DOMAIN_DEEP_SCAN -> DOMAIN_REVIEW
           -> (NEXT_READY_DOMAIN | MODEL -> PLAN -> IMPLEMENT)
           -> VALIDATE -> TEST -> REFINE -> HANDOFF -> STOP
 ```
@@ -63,7 +67,7 @@ Canonicalize both paths with `pwd -P` or `realpath`. Declare `system_complete` b
 
 ### 1. Analyze
 
-Perform shallow global discovery across route registrations, OpenAPI, and client surfaces to establish the complete route/interaction denominator, Candidate Ledger, `DomainMap`, and dependency order. Do not offer the route list as user choices. Activate exactly one dependency-ready domain, confirm its business goals and `DomainPolicy`, and only then use repeatable workspace-relative `--include` paths for that domain's deep Evidence inspection. Normalize calls into route usage and client semantics independently; UI evidence cannot upgrade authorization or `SourceContract` authority. Automatically model evidence-clear candidates and ask one question at a time only for exceptions.
+Perform shallow global discovery across route registrations, OpenAPI, and client surfaces to establish the complete route/interaction denominator, Candidate Ledger, `DomainMap`, dependency order, and initial `intent-plan.yaml`. Do not offer the route list as user choices. The Coding Agent proposes initial intent boundaries without a fixed quantity goal and accounts for every route; uncertain boundaries remain gaps. Activate exactly one dependency-ready domain, confirm only its business goals and `DomainPolicy`, and only then use repeatable workspace-relative `--include` paths for that domain's deep Evidence inspection. Normalize calls into route usage and client semantics independently; UI evidence cannot upgrade authorization or `SourceContract` authority. Automatically model evidence-clear candidates and ask one question at a time only for exceptions or high-risk choices.
 
 ### 2. Model
 
@@ -71,7 +75,7 @@ Normalize only the active, policy-confirmed domain: entities, relations, Read an
 
 ### 3. Plan
 
-Present the active domain's independent axes and versioned candidate dispositions. Confirm its `DomainDecision`; user deferral remains distinct from an evidence blocker. Only accepted, evidenced candidates enter Capability Plan. A system-complete DomainDecision cannot be completed while an Action is deferred, excluded, or blocked; lack of write-sandbox authorization remains `blocked_on_evidence`. After a domain is confirmed, continue with the next dependency-ready domain; never batch all route decisions into one prompt. The final Plan closes the Read/Create/Update/Delete/transition/execute/composite business surface plus both route and interaction denominators, and keeps credentials, tenant identity, and server-derived values out of agent inputs.
+Present the active domain's independent axes and versioned candidate dispositions. Finalize `intent-plan.yaml` from Evidence: choose single, parameterized, or composite boundaries; record merge/split/compose rationale; and derive the portfolio without a quota. Bind its `DomainDecision` to the previously confirmed `DomainPolicy` and any explicit exception/high-risk decision; do not ask the user to approve tool quantity or ordinary route grouping. User deferral remains distinct from an evidence blocker. Only accepted, evidenced candidates enter Capability Plan. A system-complete DomainDecision cannot be completed while an Action is deferred, excluded, or blocked; lack of write-sandbox authorization remains `blocked_on_evidence`. After a domain is policy-bound and reviewed, continue with the next dependency-ready domain; never batch all route decisions into one prompt. The final Plan closes the Read/Create/Update/Delete/transition/execute/composite business surface plus both route and interaction denominators, and keeps credentials, tenant identity, and server-derived values out of agent inputs.
 
 ### 4. Implement
 
@@ -87,11 +91,11 @@ Run contract and direct Fake Runtime suites as `offline_candidate`; record `head
 
 ### 7. Refine
 
-Compare the ten core axes, including `tool_portfolio`, and ten interaction axes independently: `surface_disposition`, `interaction_trace`, `input_binding_fidelity`, `default_provenance`, `option_resolution`, `condition_coverage`, `related_data_graph`, `state_scenarios`, `presentation_projection`, and `client_adapter_evidence`. Do not generate a total score. Detect portfolio explosion, same-intent overlap, isolated mutations, under-covered materialized routes, orphaned interactions, unproven defaults, unsafe conditions, broken related-data graphs, frontend-used exclusions, and denominator distortion. Rerun both audits, validation, and tests after each material change.
+Compare the ten core axes, including `tool_portfolio`, and ten interaction axes independently: `surface_disposition`, `interaction_trace`, `input_binding_fidelity`, `default_provenance`, `option_resolution`, `condition_coverage`, `related_data_graph`, `state_scenarios`, `presentation_projection`, and `client_adapter_evidence`. Do not generate a total score. Reconcile `intent-plan.yaml` route coverage, `IntentRelationship` Evidence, and boundary rationale against the materialized portfolio. Detect route-per-tool generation, fixed-count optimization, evidence-free merges, catch-all tools, portfolio explosion, same-intent overlap, isolated mutations, under-covered materialized routes, orphaned interactions, unproven defaults, unsafe conditions, broken related-data graphs, frontend-used exclusions, and denominator distortion. Rerun both audits, validation, and tests after each material change.
 
 ### 8. Handoff
 
-Verify the source snapshot is unchanged. Build the pack twice and compare digests. State route scope, interaction scope, full business-surface disposition, and each independently proven verification level. Never label `system_complete` complete when any eligible Action/composite intent is excluded, deferred, or `blocked_on_evidence`. A source-connected result never becomes client-adapter proof. Produce review artifacts with exact commands/results, limitations, and risks. Do not commit or push unless separately requested; stop for human review.
+Verify the source snapshot is unchanged. Build the pack twice and compare digests. Deliver the Evidence-finalized `intent-plan.yaml` and every blocked boundary; report derived Capability/MCP counts separately from the strict plan artifact. State route scope, interaction scope, full business-surface disposition, and each independently proven verification level. Never label `system_complete` complete when any eligible Action/composite intent is excluded, deferred, or `blocked_on_evidence`. A source-connected result never becomes client-adapter proof. Produce review artifacts with exact commands/results, limitations, and risks. Do not commit or push unless separately requested; stop for human review.
 
 ## Handoff truth rules
 

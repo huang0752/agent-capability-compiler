@@ -11,13 +11,14 @@
 
 1. 独立对比十个核心轴：`route_disposition`、`operation_trace`、`scenario_coverage`、`constructability`、`discoverability_graph`、`composition`、`tool_portfolio`、`schema_fidelity`、`output_budget`、`live_observations`；不生成总分，不把 route closure 当 usable。工具数量下降不能替代业务 denominator 闭合。
 2. 独立对比十个交互轴：`surface_disposition`、`interaction_trace`、`input_binding_fidelity`、`default_provenance`、`option_resolution`、`condition_coverage`、`related_data_graph`、`state_scenarios`、`presentation_projection`、`client_adapter_evidence`；不得合成总分或用 source-connected observation 填充 adapter 证据。
-3. 查找孤立 Operation/interaction、重复 Capability、不可构造 selector、未证明 default、断裂 option/related-data graph、条件循环、缺失 state scenario、权限 Evidence 不足和 Schema fidelity 风险。一接口一工具不是天然缺陷，工具数量不是优化目标。
+3. 将实际 Capability portfolio 反向对账 `intent-plan.yaml`，查找 route-per-tool 机械生成、固定数量拟合、无 Evidence merge/compose、跨权限/风险/失败边界聚合、万能 `manage` 工具、孤立 Operation/interaction、重复 Capability、不可构造 selector、未证明 default、断裂 option/related-data graph、条件循环、缺失 state scenario、权限 Evidence 不足和 Schema fidelity 风险。一接口一工具不是天然缺陷，工具数量不是优化目标。
 4. 检查重复 decision rationale、整域零能力、前端使用路由被排除，以及高排除率信号。eligible `>= 10` 且 excluded `>= 70%` 只是 warning。
 5. 查找 Agent 不应获得的参数、未脱敏字段和可以进一步收紧的权限/租户边界；`hidden/disabled` 不是授权。
 6. 仅依据现有 Evidence 改进 ACC 项目；需要新事实时返回 Analyze，而不是推测。
 7. 每轮改进后重跑 scope audit、interaction audit、Validate 和 Test，并分别比较全部独立 Coverage 轴、warning 与风险变化。
 8. 对当前领域的十二个 Domain/Action 独立轴逐项复核；自动修复证据清晰的 ACC 定义，只对冲突、异常、高风险或测试边界一次询问一个用户问题。
 9. 不以 Read 数量、route closure 或 source-connected 标签遮蔽 blocked Action；deferred 保持用户决策，不伪装成永久排除。复核 Read/Create/Update/Delete/transition/execute/composite 全业务表面，eligible Action exclusion 必须恢复为 materialized/composed 或阻断状态。
+10. 只有新 Evidence、修正的业务语义或门禁矛盾才能改变 intent 数量或边界；不得为了接近某个数字而合并、拆分或删除。普通边界由 Coding Agent 自主修正，只把 `DomainPolicy` 变化、异常冲突或高风险选择交给用户。
 
 ## 门禁
 
@@ -27,6 +28,7 @@
 - 候选保持业务级组合，避免为了指标增加低价值工具。
 - 重复 decision 和整域零能力 error 已消除；高排除率 warning 已解释并保留，不能靠删 Evidence 或改分母消除。
 - 当前领域经独立轴复核后才可形成新版 `DomainDecision`，并且只推进下一个依赖已就绪领域。
+- `intent-plan.yaml` 的 Evidence rationale、route coverage 与 `IntentRelationship` 已同步更新；派生 portfolio observation 在 Coverage/报告中另行更新，没有数量目标。
 
 ## 输出
 

@@ -1,0 +1,155 @@
+schema_version: "2"
+intents:
+  - id: work_items.delete
+    domain_id: work_items
+    resource: work_item
+    user_goal: Permanently delete a selected work item.
+    route_ids:
+      - "DELETE /work-items/{work_item_id}"
+    interaction_ids: []
+    candidate_ids: [work_items.delete]
+    capability_ids: []
+    kind: action
+    effect: delete
+    rationale:
+      summary: Deletion is independently valuable but cannot be published safely yet.
+      split: Its irreversible effect and safety policy differ from state transitions.
+    evidence:
+      - evidence_ref: service-delete-route
+        supports: The source declares a permanent-delete route and permission boundary.
+    confidence: low
+    gaps:
+      - code: action_safety_incomplete
+        summary: Idempotency, concurrency, approval, and outcome resolution are unknown.
+        required_evidence: Source contracts and isolated tests for every missing safety dimension.
+    recommendation: blocked_on_evidence
+    action_safety:
+      authorization:
+        status: proven
+        rationale: The source permission check is independently evidenced.
+        evidence_refs: [service-delete-route]
+      idempotency:
+        status: missing
+        rationale: No idempotency contract is evidenced.
+        evidence_refs: []
+      concurrency:
+        status: missing
+        rationale: No conflict-control contract is evidenced.
+        evidence_refs: []
+      approval:
+        status: missing
+        rationale: No high-risk approval policy is confirmed.
+        evidence_refs: []
+      outcome_resolution:
+        status: missing
+        rationale: Durable resolution after an unknown response is not evidenced.
+        evidence_refs: []
+
+  - id: work_items.inspect
+    domain_id: work_items
+    resource: work_item
+    user_goal: Inspect one selected work item.
+    route_ids:
+      - "GET /work-items/{work_item_id}"
+    interaction_ids: [work-items.detail]
+    candidate_ids: [work_items.inspect]
+    capability_ids: [work_items.inspect]
+    kind: read
+    effect: read
+    rationale:
+      summary: Detail has a required selector and distinct absence semantics.
+      split: Search is independently useful and must not force a detail request.
+    evidence:
+      - evidence_ref: client-detail-flow
+        supports: The client opens detail only after a user selects a work item.
+      - evidence_ref: service-detail-contract
+        supports: The source returns one work item or a not-found outcome.
+    confidence: high
+    gaps: []
+    recommendation: materialize
+
+  - id: work_items.search
+    domain_id: work_items
+    resource: work_item
+    user_goal: Find work items, including a valid empty result.
+    route_ids:
+      - "GET /work-items"
+    interaction_ids: [work-items.list]
+    candidate_ids: [work_items.search]
+    capability_ids: [work_items.search]
+    kind: read
+    effect: read
+    rationale:
+      summary: Search is a complete empty-or-nonempty business result.
+      split: It has no required item selector and does not depend on detail.
+    evidence:
+      - evidence_ref: client-list-flow
+        supports: The client consumes list results without an automatic detail call.
+      - evidence_ref: service-list-contract
+        supports: The source defines filtering and an empty success response.
+    confidence: high
+    gaps: []
+    recommendation: materialize
+
+  - id: work_items.set_processing_state
+    domain_id: work_items
+    resource: work_item
+    user_goal: Set a selected work item to active or paused.
+    route_ids:
+      - "POST /work-items/{work_item_id}/pause"
+      - "POST /work-items/{work_item_id}/resume"
+    interaction_ids: [work-items.processing-state]
+    candidate_ids: [work_items.pause, work_items.resume]
+    capability_ids: [work_items.set_processing_state]
+    kind: action
+    effect: transition
+    rationale:
+      summary: A bounded target-state parameter expresses one evidenced state-setting goal.
+      merge: Both routes share resource, permission, risk, lifecycle, and failure semantics.
+      compose: The Capability selects exactly one evidenced transition route from target state.
+    evidence:
+      - evidence_ref: client-state-control
+        supports: One control exposes active and paused as the same state axis.
+      - evidence_ref: domain-transition-policy
+        supports: The confirmed policy defines whether this transition requires approval.
+      - evidence_ref: service-state-machine
+        supports: Both routes enforce the same permission and version precondition.
+      - evidence_ref: state-transition-tests
+        supports: Both transitions share idempotency and outcome contracts.
+    confidence: high
+    gaps: []
+    recommendation: compose
+    action_safety:
+      authorization:
+        status: proven
+        rationale: Both source routes enforce the same transition permission.
+        evidence_refs: [service-state-machine]
+      idempotency:
+        status: proven
+        rationale: Target-state retries are evidenced as idempotent.
+        evidence_refs: [state-transition-tests]
+      concurrency:
+        status: proven
+        rationale: Both routes require the same source version precondition.
+        evidence_refs: [service-state-machine, state-transition-tests]
+      approval:
+        status: proven
+        rationale: Confirmed DomainPolicy classifies this bounded transition below its approval threshold.
+        evidence_refs: [domain-transition-policy]
+      outcome_resolution:
+        status: proven
+        rationale: A source status query resolves the resulting state.
+        evidence_refs: [state-transition-tests]
+
+relationships:
+  - kind: split
+    intent_ids:
+      - work_items.inspect
+      - work_items.search
+    route_ids:
+      - "GET /work-items"
+      - "GET /work-items/{work_item_id}"
+    rationale: Search and inspect are separate goals because selector and absence semantics differ.
+    evidence_refs:
+      - client-detail-flow
+      - client-list-flow

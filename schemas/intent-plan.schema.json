@@ -1,0 +1,442 @@
+{
+  "$defs": {
+    "ActionSafetyAssessment": {
+      "additionalProperties": false,
+      "description": "Minimum safety closure required before an Action may be materialized.",
+      "properties": {
+        "approval": {
+          "$ref": "#/$defs/ActionSafetyClaim"
+        },
+        "authorization": {
+          "$ref": "#/$defs/ActionSafetyClaim"
+        },
+        "concurrency": {
+          "$ref": "#/$defs/ActionSafetyClaim"
+        },
+        "idempotency": {
+          "$ref": "#/$defs/ActionSafetyClaim"
+        },
+        "outcome_resolution": {
+          "$ref": "#/$defs/ActionSafetyClaim"
+        }
+      },
+      "required": [
+        "authorization",
+        "idempotency",
+        "concurrency",
+        "approval",
+        "outcome_resolution"
+      ],
+      "title": "ActionSafetyAssessment",
+      "type": "object"
+    },
+    "ActionSafetyClaim": {
+      "additionalProperties": false,
+      "description": "Evidence status for one independently enforced Action safety dimension.",
+      "properties": {
+        "evidence_refs": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "rationale": {
+          "maxLength": 16384,
+          "minLength": 1,
+          "title": "Rationale",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/SafetyStatus"
+        }
+      },
+      "required": [
+        "status",
+        "rationale"
+      ],
+      "title": "ActionSafetyClaim",
+      "type": "object"
+    },
+    "Confidence": {
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "type": "string"
+    },
+    "DomainIntentCandidate": {
+      "additionalProperties": false,
+      "description": "One proposed user-goal boundary derived from source-system evidence.",
+      "properties": {
+        "action_safety": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActionSafetyAssessment"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "candidate_ids": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Candidate Ids",
+          "type": "array"
+        },
+        "capability_ids": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Capability Ids",
+          "type": "array"
+        },
+        "confidence": {
+          "$ref": "#/$defs/Confidence"
+        },
+        "domain_id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Domain Id",
+          "type": "string"
+        },
+        "effect": {
+          "$ref": "#/$defs/IntentEffect"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/IntentEvidenceRef"
+          },
+          "minItems": 1,
+          "title": "Evidence",
+          "type": "array"
+        },
+        "gaps": {
+          "items": {
+            "$ref": "#/$defs/IntentGap"
+          },
+          "title": "Gaps",
+          "type": "array"
+        },
+        "id": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "interaction_ids": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Interaction Ids",
+          "type": "array"
+        },
+        "kind": {
+          "$ref": "#/$defs/IntentKind"
+        },
+        "rationale": {
+          "$ref": "#/$defs/IntentRationale"
+        },
+        "recommendation": {
+          "$ref": "#/$defs/IntentDecision"
+        },
+        "resource": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Resource",
+          "type": "string"
+        },
+        "route_ids": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Route Ids",
+          "type": "array"
+        },
+        "user_goal": {
+          "maxLength": 16384,
+          "minLength": 1,
+          "title": "User Goal",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "domain_id",
+        "resource",
+        "user_goal",
+        "route_ids",
+        "candidate_ids",
+        "capability_ids",
+        "kind",
+        "effect",
+        "rationale",
+        "evidence",
+        "confidence",
+        "recommendation"
+      ],
+      "title": "DomainIntentCandidate",
+      "type": "object"
+    },
+    "IntentDecision": {
+      "enum": [
+        "materialize",
+        "compose",
+        "blocked_on_evidence",
+        "exclude"
+      ],
+      "type": "string"
+    },
+    "IntentEffect": {
+      "enum": [
+        "unknown",
+        "read",
+        "create",
+        "update",
+        "delete",
+        "transition",
+        "execute"
+      ],
+      "type": "string"
+    },
+    "IntentEvidenceRef": {
+      "additionalProperties": false,
+      "description": "Evidence identity plus the exact planning claim it supports.",
+      "properties": {
+        "evidence_ref": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Evidence Ref",
+          "type": "string"
+        },
+        "supports": {
+          "maxLength": 16384,
+          "minLength": 1,
+          "title": "Supports",
+          "type": "string"
+        }
+      },
+      "required": [
+        "evidence_ref",
+        "supports"
+      ],
+      "title": "IntentEvidenceRef",
+      "type": "object"
+    },
+    "IntentGap": {
+      "additionalProperties": false,
+      "description": "One explicit blocker that prevents an intent from being safely published.",
+      "properties": {
+        "code": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "required_evidence": {
+          "maxLength": 16384,
+          "minLength": 1,
+          "title": "Required Evidence",
+          "type": "string"
+        },
+        "summary": {
+          "maxLength": 16384,
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "summary",
+        "required_evidence"
+      ],
+      "title": "IntentGap",
+      "type": "object"
+    },
+    "IntentKind": {
+      "enum": [
+        "unknown",
+        "read",
+        "action"
+      ],
+      "type": "string"
+    },
+    "IntentRationale": {
+      "additionalProperties": false,
+      "description": "Auditable merge, split, or composition reasoning without prescribing a count.",
+      "properties": {
+        "compose": {
+          "anyOf": [
+            {
+              "maxLength": 16384,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Compose"
+        },
+        "merge": {
+          "anyOf": [
+            {
+              "maxLength": 16384,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Merge"
+        },
+        "split": {
+          "anyOf": [
+            {
+              "maxLength": 16384,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Split"
+        },
+        "summary": {
+          "maxLength": 16384,
+          "minLength": 1,
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "summary"
+      ],
+      "title": "IntentRationale",
+      "type": "object"
+    },
+    "IntentRelationship": {
+      "additionalProperties": false,
+      "description": "Explicit explanation for a route or boundary shared by multiple intents.",
+      "properties": {
+        "evidence_refs": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evidence Refs",
+          "type": "array"
+        },
+        "intent_ids": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 2,
+          "title": "Intent Ids",
+          "type": "array"
+        },
+        "kind": {
+          "$ref": "#/$defs/IntentRelationshipKind"
+        },
+        "rationale": {
+          "maxLength": 16384,
+          "minLength": 1,
+          "title": "Rationale",
+          "type": "string"
+        },
+        "route_ids": {
+          "items": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Route Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "intent_ids",
+        "route_ids",
+        "rationale",
+        "evidence_refs"
+      ],
+      "title": "IntentRelationship",
+      "type": "object"
+    },
+    "IntentRelationshipKind": {
+      "enum": [
+        "merged",
+        "split",
+        "composed",
+        "shared_support"
+      ],
+      "type": "string"
+    },
+    "SafetyStatus": {
+      "enum": [
+        "proven",
+        "missing",
+        "not_applicable"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Complete intent proposal over a declared route denominator.",
+  "properties": {
+    "intents": {
+      "items": {
+        "$ref": "#/$defs/DomainIntentCandidate"
+      },
+      "minItems": 1,
+      "title": "Intents",
+      "type": "array"
+    },
+    "relationships": {
+      "items": {
+        "$ref": "#/$defs/IntentRelationship"
+      },
+      "title": "Relationships",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "2",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "intents"
+  ],
+  "title": "IntentPlan",
+  "type": "object"
+}

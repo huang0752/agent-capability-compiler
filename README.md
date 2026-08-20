@@ -64,18 +64,30 @@ Capability Pack 是 AI 辅助编译期与无 LLM 运行期之间仅包含数据�
 
 ## AI 领域向导式能力发现
 
-全局 AI 扫描由 ACC Engineer Skill 所在的 Coding Agent 执行；ACC Core 与 Runtime 都不调用 LLM。Agent 先对后端、OpenAPI、客户端交互、默认值、选项、条件和关联数据做全局浅扫，生成平台中立的 `DomainMap` 与 `CapabilityCandidateLedger`。这一步是编译期分析工作，不表示 ACC Runtime 内置了扫描模型，也不表示任何生产系统已被扫描或验证。
+全局 AI 扫描由 ACC Engineer Skill 所在的 Coding Agent 执行；ACC Core 与 Runtime 都不调用 LLM。Agent 先对后端、OpenAPI、客户端交互、默认值、选项、条件和关联数据做全局浅扫，生成平台中立的 `DomainMap`、`CapabilityCandidateLedger` 与 `IntentPlan`（项目文件为 `intent-plan.yaml`）。这一步是编译期分析工作，不表示 ACC Runtime 内置了扫描模型，也不表示任何生产系统已被扫描或验证。
+
+Coding Agent 同时承担 AI Domain Intent Planner：它从 Evidence 自主判断哪些接口保持独立业务意图、哪些状态变化可参数化、哪些接口存在可证明的数据流组合，以及哪些候选必须 `blocked_on_evidence`。Intent 数量与最终 MCP 数量都是物化后的派生结果，不设固定配额，也不以“约 N 个工具”为目标。禁止 route-per-tool 默认生成、无证据合并、为了接近某个数字而拆分/删除，以及把不同权限、风险、审批、失败或结果语义塞进万能 `manage` 工具。ACC 的确定性模型与校验器负责结构、引用、安全和矛盾检查，但不会替 AI 制造业务语义。
 
 已有系统未声明范围时默认采用 `system_complete`。这里的“完整”是完整业务表面，不是 Read-only 子集：Read、Create、Update、Delete、transition、execute 以及跨接口 composite intent 都必须进入发现与决策分母。缺少写沙箱授权，或缺少 effect/risk/retry/idempotency/concurrency/approval/outcome Evidence 时，对应 Action 只能保留为 `undetermined`、`blocked_on_evidence`，并阻止领域与系统 complete；不能把它标为 excluded/ineligible 或从分母删除后宣称闭合。若用户只需要只读交付，应明确确认 `pilot`，而不是改写 `system_complete` 的含义。
 
 向导随后按依赖和显式优先顺序，一次只激活一个已就绪的业务领域：
 
-1. 用户确认业务目标与策略，不逐条选择 route，也不逐条审核全部接口。
-2. Coding Agent 深扫当前领域，把证据清晰的 Read、Action 和纯客户端候选自动分类；涉及默认数据、关联数据或展示条件时同时保留前端证据。
+1. 用户确认业务目标与策略，但只确认 `DomainPolicy`、用户控制的测试边界及异常/高风险选择；不逐条选择 route，不指定工具数量，也不逐条审核普通候选。
+2. Coding Agent 深扫当前领域，把证据清晰的 Read、Action 和纯客户端候选自动分类，并在 `intent-plan.yaml` 中为每个 merge、split 或 compose 决定记录 Evidence 与理由；涉及默认数据、关联数据或展示条件时同时保留前端证据。
 3. 无法由 Evidence 闭合的例外一次只问一个问题。`unknown` 候选不能被伪装为 `ineligible` 或消失；只有独立 Evidence 支持的客观不可用结论才允许判为 ineligible。Eligible Action intent 不能靠 exclusion 闭合；重复 route 只有在 replacement materialize 相同 mutation intent 和完整 Action lifecycle 时才可 composed。
-4. 当前领域形成版本化的 `DomainDecision`，绑定候选、依赖和 Evidence 快照；完成并确认后才进入下一个领域。
+4. 当前领域形成版本化的 `DomainDecision`，绑定已确认的 DomainPolicy、显式异常/高风险决定、候选、依赖和 Evidence 快照；AI 规划的工具数量不是用户确认项，领域复核完成后才进入下一个领域。
 
 用户选择的是业务目标、允许的效果、风险上限、需审批的业务意图和明确排除项。route、接口字段、Candidate 分类与安全声明由 Evidence 和确定性校验闭合，不能通过用户随手勾选获得真实性。
+
+Coding Agent 可先取得不含固定数量目标的完整规划输入，再审计其生成的计划：
+
+```bash
+acc intents brief /path/to/acc-project --json
+acc intents brief /path/to/acc-project --domain system --json
+acc intents audit /path/to/acc-project --json
+```
+
+`brief` 输出当前 route denominator、领域、Candidate、已物化 Capability、Operation 依赖和 Evidence 定位；它不调用模型，也不生成工具数量。Coding Agent 按 ACC Engineer Skill 生成 `intent-plan.yaml` 后，`audit` 才确定性检查完整分母、引用闭包、权限/风险/生命周期兼容性、Action safety、万能工具和 route-per-tool 碎片化，并报告由当前 Capability 实际投影出的 MCP 工具数量。缺计划、漏 route、无证据合并或把 blocked Candidate 提升为可用都会 fail closed。
 
 源 JWT 与源 API 是最终授权者。ACC Scope 只能收窄源系统可能允许的范围，不能创建角色、授予权限或替代源系统逐请求鉴权；Action approval 只批准一次已证明的业务变更，也不是源权限。
 
@@ -697,7 +709,7 @@ Action 使用显式生命周期：`prepare` 生成并密封只读预览；proof 
 
 Coverage 直接消费平台中立的 Scope Inventory、DomainMap 和 Candidate Ledger。除 `route_disposition`、`operation_trace`、`scenario_coverage`、`constructability`、`discoverability_graph`、`composition`、`tool_portfolio`、`schema_fidelity`、`output_budget` 和 `live_observations` 外，还独立报告十个交互轴，以及 `domain_disposition`、`business_goals`、`candidate_classification`、`semantics_provenance`、`identity_authorization`、`action_lifecycle`、`conflict_control`、`idempotency`、`outcome_resolution`、`verification`、`cross_domain_dependency`、`user_decision_trace` 十二个领域与 Action 轴。它不生成总分，也不把“路由已分类”“候选已确认”或“源已连接”解释为 Capability 可用或 Action 安全。
 
-`tool_portfolio` 按 Capability 的业务 intent 审计 Agent 工具组合，而不是要求一条 route 对应一个工具；同时用 `projected_mcp_tool_count` 报告实际 `tools/list` 投影。Read Capability 各产生一个同名工具，Action Capability 各产生一个 `<id>.prepare`，只要存在 Action 还会增加共享的 `acc_action_approve`、`acc_action_commit`、`acc_action_status` 三个工具。轴会阻止 Read 名称与 Action prepare 或共享生命周期保留名碰撞。核心默认不设置绝对数量上限；项目或部署只有显式传入 review budget 时才按实际 MCP 投影数量产生 warning。同一 intent 下，只有 input/output/selector 接口证据等价且 Operation 依赖完全重复或 Jaccard 重叠度至少 0.75，才提示合并或补充独立业务结果证据；空 Operation 依赖保持“证据不完整”，不会被当作重复。它还报告缺少同资源 Read selector 的孤立 mutation、未绑定现存 Capability 的 planned/composed route，以及完整范围中保留的 evidence-blocked route。减少工具数量不能抹去业务分母，堆叠工具数量也不能把 blocked route 变成已覆盖。
+`tool_portfolio` 按 Capability 的业务 intent 审计 Agent 工具组合，而不是要求一条 route 对应一个工具；同时用 `projected_mcp_tool_count` 报告实际 `tools/list` 投影。Read Capability 各产生一个同名工具，Action Capability 各产生一个 `<id>.prepare`，只要存在 Action 还会增加共享的 `acc_action_approve`、`acc_action_commit`、`acc_action_status` 三个工具。轴会阻止 Read 名称与 Action prepare 或共享生命周期保留名碰撞。`IntentPlan` 先给出 Evidence 驱动的用户目标、route/interaction/candidate/capability 关联、merge/split/compose rationale、Action safety 与 gap；Capability 和 MCP 数量随后派生，不能作为规划输入或验收配额。核心默认不设置绝对数量上限；项目或部署只有显式传入 review budget 时才按实际 MCP 投影数量产生 warning。同一 intent 下，只有 input/output/selector 接口证据等价且 Operation 依赖完全重复或 Jaccard 重叠度至少 0.75，才提示合并或补充独立业务结果证据；空 Operation 依赖保持“证据不完整”，不会被当作重复。它还报告缺少同资源 Read selector 的孤立 mutation、未绑定现存 Capability 的 planned/composed route，以及完整范围中保留的 evidence-blocked route。减少工具数量不能抹去业务分母，堆叠工具数量也不能把 blocked route 变成已覆盖。
 
 交互验证等级分别为 `contract_declared`、`static_verified`、`headless_verified`、`runtime_offline_verified`、`source_connected_verified` 和 `client_adapter_verified`，等级之间不自动升级。尤其是连通真实或隔离测试源，只证明所执行的源请求路径；没有与当前 interaction digest 绑定、且所有 required scenarios 均通过的客户端适配报告时，仍不得声明 `client_adapter_verified`。Runtime 公开只读、去 Evidence 的交互 manifest 并执行安全公共默认值，但它不是浏览器、移动端渲染器或 UI 引擎。
 

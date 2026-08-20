@@ -124,6 +124,7 @@ def test_schema_exports_use_only_canonical_current_names() -> None:
         "eval",
         "evidence",
         "interaction-contract",
+        "intent-plan",
         "live-observation-artifact",
         "operation",
         "policy",

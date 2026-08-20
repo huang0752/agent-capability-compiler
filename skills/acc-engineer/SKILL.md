@@ -32,12 +32,24 @@ If the request is only to audit or refine an existing ACC project, still run Pre
 
 Run the system-complete denominator as a domain wizard, not an interface questionnaire:
 
-1. Perform a 全局浅扫 and create the complete Candidate Ledger, `DomainMap`, and dependency order before any domain deep scan.
+1. Perform a 全局浅扫 and create the complete Candidate Ledger, `DomainMap`, dependency order, and initial `intent-plan.yaml` before any domain deep scan.
 2. 一次只激活一个依赖已就绪的大领域；never activate a dependent domain merely because its routes are easy to inspect.
-3. Before deep inspection, ask the user to confirm the business goals, risk boundary, write-sandbox authorization, and `DomainPolicy`. 绝不把全部 route 交给用户选择；未授权写测试只会阻断对应 Action，不会把它从全局分母删除。
-4. Deep-scan only the active domain. Automatically model every 证据清晰 candidate and retain uncertain facts as typed gaps.
+3. Before deep inspection, ask the user to confirm only the business goals, risk boundary, write-sandbox authorization, and `DomainPolicy`. The user does not choose a tool quota, route grouping, or ordinary candidate disposition. 绝不把全部 route 交给用户选择；未授权写测试只会阻断对应 Action，不会把它从全局分母删除。
+4. Deep-scan only the active domain. The Coding Agent acts as the AI Domain Intent Planner: it revises `intent-plan.yaml`, automatically models every 证据清晰 candidate, derives Capability boundaries and quantity from Evidence, and retains uncertain facts as typed gaps.
 5. 一次只问一个 exception: evidence conflict, business ambiguity, high-risk policy choice, or missing user-controlled test boundary. Do not ask the user to classify ordinary routes.
-6. Review every 独立轴, then ask the user to confirm the versioned `DomainDecision`. Continue only with the next dependency-ready domain.
+6. Review every 独立轴 and bind the versioned `DomainDecision` to the confirmed `DomainPolicy`, Evidence snapshot, and any explicit exception/high-risk decision. Do not ask the user to approve an AI-selected tool count. Continue only with the next dependency-ready domain.
+
+## AI Domain Intent Planner
+
+The Planner is a compile-time responsibility of the Coding Agent; ACC Core and Runtime remain model-free. It must:
+
+- account for every discovered route and client interaction before proposing intent boundaries;
+- decide `single_operation`, parameterized, or deterministic composite boundaries from evidenced user goals, resources, selector/data flow, permission, risk, approval, idempotency, concurrency, outcome, output, and failure semantics;
+- preserve independently useful search/detail/monitor intents and merge only when the claimed equivalence or composition dependency has Evidence;
+- emit `materialize`, `compose`, `blocked_on_evidence`, or objectively evidenced ineligibility without hiding denominator entries;
+- treat `capability_count` and `projected_mcp_tool_count` as derived observations after materialization, never quotas or optimization targets.
+
+Fixed tool-count goals, route-per-tool generation, evidence-free merging, and a catch-all `manage` Capability are invalid planning shortcuts. Deterministic audits verify accounting, references, safety, and contradictions; they do not manufacture business semantics or replace Planner Evidence.
 
 The 源 JWT and source interface make the 最终裁决 on authorization. `Scope 只能收窄` what a deployment may attempt; it never grants a source permission. Action `approval 不是授权`: it confirms this exact prepared execution and cannot replace upstream authorization.
 
@@ -73,9 +85,9 @@ The 源 JWT and source interface make the 最终裁决 on authorization. `Scope 
 | Phase | Read | Required output or gate |
 | --- | --- | --- |
 | 0 Preflight | [01-preflight.md](guides/01-preflight.md) | Safe paths, declared scope mode, stop/go decision |
-| 1 Analyze | [02-analyze.md](guides/02-analyze.md) | Route and interaction inventories, `system-map.yaml`, captured evidence |
+| 1 Analyze | [02-analyze.md](guides/02-analyze.md) | Route and interaction inventories, initial `intent-plan.yaml`, `system-map.yaml`, captured evidence |
 | 2 Model | [03-model.md](guides/03-model.md) | Domain, entities, permissions, tenant boundary, unknowns |
-| 3 Plan | [04-plan.md](guides/04-plan.md) | `capability-plan.yaml`, `coverage-baseline.json` |
+| 3 Plan | [04-plan.md](guides/04-plan.md) | Evidence-finalized `intent-plan.yaml`, `capability-plan.yaml`, `coverage-baseline.json` |
 | 4 Implement | [05-implement.md](guides/05-implement.md) | Operations, Capabilities, Policies, Evals, fixtures |
 | 5 Validate | [06-validate.md](guides/06-validate.md) | Scope audit passes before ACC diagnostics |
 | 6 Test | [07-test.md](guides/07-test.md) | Contract, runtime, and E2E results inspected |
@@ -105,7 +117,7 @@ Run scripts with Python 3.12: use `uv run python <script> --help` in an ACC chec
 
 ## Templates and references
 
-Copy and replace the placeholders in `templates/`; never submit a placeholder as evidence. Current public contracts live under `references/schemas/`, and small valid patterns live under `references/examples/`. Prefer the installed `acc schema` output when it differs from a bundled reference. `evidence_capture.py` records an optional line locator but deliberately hashes the whole bounded file, matching `acc freeze`.
+Copy and replace the placeholders in `templates/`; never submit a placeholder as evidence. `templates/intent-plan.yaml` is a platform-neutral planning contract, and `references/examples/evidence-derived-intent-plan.yaml` demonstrates evidence-derived boundaries without a tool quota. Current public contracts live under `references/schemas/`, and small valid patterns live under `references/examples/`. Prefer the installed `acc schema` output when it differs from a bundled reference. `evidence_capture.py` records an optional line locator but deliberately hashes the whole bounded file, matching `acc freeze`.
 
 ## Required gates
 
@@ -126,4 +138,4 @@ The scope audit and, when client surfaces exist, interaction audit are required 
 
 ## Completion
 
-Finish only after Phase 8 produces `HANDOFF.md`, `scope-audit-report.json`, applicable `interaction-audit-report.json`, `coverage-report.json`, `test-report.json`, and `risk-report.json`, plus `candidate.diff` for a Git ACC project or `artifact-manifest.json` for a non-Git ACC project. A `system_complete` finish requires the complete Read/Create/Update/Delete/transition/execute/composite business surface to be materialized or objectively ineligible, with zero `blocked_on_evidence`, deferred Action intent, or eligible Action exclusion. Copy every audit warning into both risk artifacts; state route and interaction scope plus independently proven verification levels. `headless_verified`, `source_connected_verified`, and `client_adapter_verified` never imply one another; then stop for human review.
+Finish only after Phase 8 produces the Evidence-finalized `intent-plan.yaml`, `HANDOFF.md`, `scope-audit-report.json`, applicable `interaction-audit-report.json`, `coverage-report.json`, `test-report.json`, and `risk-report.json`, plus `candidate.diff` for a Git ACC project or `artifact-manifest.json` for a non-Git ACC project. A `system_complete` finish requires the complete Read/Create/Update/Delete/transition/execute/composite business surface to be materialized or objectively ineligible, with zero `blocked_on_evidence`, deferred Action intent, or eligible Action exclusion. Copy every audit warning into both risk artifacts; state route and interaction scope plus independently proven verification levels. `headless_verified`, `source_connected_verified`, and `client_adapter_verified` never imply one another; then stop for human review.

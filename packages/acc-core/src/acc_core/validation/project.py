@@ -21,6 +21,7 @@ from acc_core.domains import (
     capability_candidate_ledger_digest,
     domain_decision_digest,
 )
+from acc_core.intents import IntentPlan
 from acc_core.interactions.models import (
     CapabilityInteractionContract,
     UIInteractionInventory,
@@ -69,6 +70,8 @@ class ValidationReport:
     ui_interaction_inventory_path: str | None = None
     interaction_contracts: dict[str, CapabilityInteractionContract] = field(default_factory=dict)
     interaction_contract_paths: dict[str, str] = field(default_factory=dict)
+    intent_plan: IntentPlan | None = None
+    intent_plan_path: str | None = None
     evidence_registry: dict[str, Evidence] = field(default_factory=dict)
     evidence_paths: dict[str, str] = field(default_factory=dict)
     domain_map: DomainMap | None = None
@@ -1565,6 +1568,202 @@ def _validate_interaction_sidecar_closure(report: ValidationReport) -> None:
         )
 
 
+def _validate_intent_plan_closure(report: ValidationReport) -> None:
+    """Bind an optional planner artifact to the loaded denominator and evidence registry."""
+
+    plan = report.intent_plan
+    if plan is None:
+        return
+    path = report.intent_plan_path
+    inventory = report.scope_inventory
+    if inventory is None:
+        report.diagnostics.append(
+            Diagnostic(
+                code="ACC_INTENT_SCOPE_INVENTORY_MISSING",
+                severity="error",
+                message="intent-plan.yaml requires scope-inventory.yaml as its route denominator.",
+                path=path,
+                pointer=None,
+            )
+        )
+        return
+
+    routes = {route.id: route for route in inventory.routes}
+    covered_routes = {route_id for intent in plan.intents for route_id in intent.route_ids}
+    for route_id in sorted(set(routes) - covered_routes):
+        report.diagnostics.append(
+            Diagnostic(
+                code="ACC_INTENT_ROUTE_UNACCOUNTED",
+                severity="error",
+                message=(
+                    "Every route in the declared denominator must be assigned to an intent: "
+                    f"{route_id}"
+                ),
+                path=path,
+                pointer=None,
+            )
+        )
+    for route_id in sorted(covered_routes - set(routes)):
+        report.diagnostics.append(
+            Diagnostic(
+                code="ACC_INTENT_ROUTE_UNKNOWN",
+                severity="error",
+                message=f"Intent references a route outside the declared denominator: {route_id}",
+                path=path,
+                pointer=None,
+            )
+        )
+
+    known_interactions = (
+        {item.id for item in report.ui_interaction_inventory.interactions}
+        if report.ui_interaction_inventory is not None
+        else set()
+    )
+    known_candidates = (
+        {candidate.id for candidate in report.capability_candidate_ledger.candidates}
+        if report.capability_candidate_ledger is not None
+        else set()
+    )
+    for intent_index, intent in enumerate(plan.intents):
+        for route_index, route_id in enumerate(intent.route_ids):
+            route = routes.get(route_id)
+            if route is None:
+                continue
+            composed_read_support = (
+                intent.kind == "action"
+                and intent.recommendation == "compose"
+                and route.kind == "read"
+            )
+            if route.kind != intent.kind and not composed_read_support:
+                report.diagnostics.append(
+                    Diagnostic(
+                        code="ACC_INTENT_ROUTE_KIND_MISMATCH",
+                        severity="error",
+                        message="Intent kind must agree with every assigned source route.",
+                        path=path,
+                        pointer=f"/intents/{intent_index}/route_ids/{route_index}",
+                    )
+                )
+        if intent.kind == "action" and not any(
+            routes[route_id].kind == "action" for route_id in intent.route_ids if route_id in routes
+        ):
+            report.diagnostics.append(
+                Diagnostic(
+                    code="ACC_INTENT_ACTION_ROUTE_MISSING",
+                    severity="error",
+                    message="Action intents must retain at least one Action source route.",
+                    path=path,
+                    pointer=f"/intents/{intent_index}/route_ids",
+                )
+            )
+        for interaction_index, interaction_id in enumerate(intent.interaction_ids):
+            if interaction_id not in known_interactions:
+                report.diagnostics.append(
+                    Diagnostic(
+                        code="ACC_INTENT_INTERACTION_UNKNOWN",
+                        severity="error",
+                        message="Intent references an unknown UI interaction.",
+                        path=path,
+                        pointer=f"/intents/{intent_index}/interaction_ids/{interaction_index}",
+                    )
+                )
+        for candidate_index, candidate_id in enumerate(intent.candidate_ids):
+            if candidate_id not in known_candidates:
+                report.diagnostics.append(
+                    Diagnostic(
+                        code="ACC_INTENT_CANDIDATE_UNKNOWN",
+                        severity="error",
+                        message="Intent references an unknown CapabilityCandidate.",
+                        path=path,
+                        pointer=f"/intents/{intent_index}/candidate_ids/{candidate_index}",
+                    )
+                )
+        for capability_index, capability_id in enumerate(intent.capability_ids):
+            if capability_id not in report.capabilities:
+                report.diagnostics.append(
+                    Diagnostic(
+                        code="ACC_INTENT_CAPABILITY_UNKNOWN",
+                        severity="error",
+                        message="Intent references an unknown Capability.",
+                        path=path,
+                        pointer=f"/intents/{intent_index}/capability_ids/{capability_index}",
+                    )
+                )
+
+        evidence_refs = {item.evidence_ref for item in intent.evidence}
+        if intent.action_safety is not None:
+            for claim in (
+                intent.action_safety.authorization,
+                intent.action_safety.idempotency,
+                intent.action_safety.concurrency,
+                intent.action_safety.approval,
+                intent.action_safety.outcome_resolution,
+            ):
+                evidence_refs.update(claim.evidence_refs)
+        for evidence_ref in sorted(evidence_refs):
+            if evidence_ref not in report.evidence_registry:
+                report.diagnostics.append(
+                    Diagnostic(
+                        code="ACC_INTENT_EVIDENCE_UNKNOWN",
+                        severity="error",
+                        message=f"Intent references an unknown Evidence identity: {evidence_ref}",
+                        path=path,
+                        pointer=f"/intents/{intent_index}/evidence",
+                    )
+                )
+
+    route_intents: dict[str, set[str]] = {}
+    for intent in plan.intents:
+        for route_id in intent.route_ids:
+            route_intents.setdefault(route_id, set()).add(intent.id)
+    for relationship_index, relationship in enumerate(plan.relationships):
+        declared_intents = set(relationship.intent_ids)
+        relationship_owners: set[str] = set()
+        for route_id in relationship.route_ids:
+            owners = route_intents.get(route_id, set())
+            relationship_owners.update(owners)
+            if relationship.kind == "shared_support" and owners != declared_intents:
+                report.diagnostics.append(
+                    Diagnostic(
+                        code="ACC_INTENT_RELATIONSHIP_OWNER_MISMATCH",
+                        severity="error",
+                        message=(
+                            "A shared_support relationship requires every declared route to be "
+                            "owned by exactly the declared intents."
+                        ),
+                        path=path,
+                        pointer=f"/relationships/{relationship_index}/intent_ids",
+                    )
+                )
+        if relationship.kind != "shared_support" and relationship_owners != declared_intents:
+            report.diagnostics.append(
+                Diagnostic(
+                    code="ACC_INTENT_RELATIONSHIP_OWNER_MISMATCH",
+                    severity="error",
+                    message=(
+                        "Relationship intent_ids must exactly match the owners of its declared "
+                        "route set."
+                    ),
+                    path=path,
+                    pointer=f"/relationships/{relationship_index}/intent_ids",
+                )
+            )
+        for evidence_ref in relationship.evidence_refs:
+            if evidence_ref not in report.evidence_registry:
+                report.diagnostics.append(
+                    Diagnostic(
+                        code="ACC_INTENT_EVIDENCE_UNKNOWN",
+                        severity="error",
+                        message=(
+                            "IntentRelationship references an unknown Evidence identity: "
+                            f"{evidence_ref}"
+                        ),
+                        path=path,
+                        pointer=f"/relationships/{relationship_index}/evidence_refs",
+                    )
+                )
+
+
 def validate_project(project_root: str | Path = ".") -> ValidationReport:
     """Validate all Milestone 1 documents under ``project_root``."""
 
@@ -1637,6 +1836,16 @@ def validate_project(project_root: str | Path = ".") -> ValidationReport:
         relative_paths=report.interaction_contract_paths,
     )
     _load_evidence_registry(root, report)
+    intent_plan_path = "intent-plan.yaml"
+    if (root / intent_plan_path).exists() or (root / intent_plan_path).is_symlink():
+        report.intent_plan = _load_model(
+            root,
+            intent_plan_path,
+            IntentPlan,
+            report.diagnostics,
+        )
+        if report.intent_plan is not None:
+            report.intent_plan_path = intent_plan_path
     domain_map_path = "domain-map.yaml"
     domain_map_declared = (root / domain_map_path).exists() or (root / domain_map_path).is_symlink()
     if domain_map_declared:
@@ -1673,6 +1882,7 @@ def validate_project(project_root: str | Path = ".") -> ValidationReport:
         domain_map_declared=domain_map_declared,
         candidate_ledger_declared=candidate_ledger_declared,
     )
+    _validate_intent_plan_closure(report)
     _validate_v2_sidecar_closure(report)
     _validate_interaction_sidecar_closure(report)
     report.policies = _load_collection(
