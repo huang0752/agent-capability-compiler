@@ -47,6 +47,9 @@ routes:
 # context isolation, conflict control, idempotency, lifecycle, or outcome gaps
 # must likewise remain undetermined/blocked_on_evidence. Missing safety evidence
 # or a user's decision not to select an Action is not objective ineligibility.
+# In system_complete, an eligible Action intent cannot be closed as excluded.
+# A duplicate Action route is composed only when the replacement preserves the
+# same mutation intent and full prepare/approve/commit/status lifecycle.
 # Use ineligible only when the candidate has a proven ineligibility_claim whose
 # evidence_refs resolve to independent artifacts under evidence/.
 summary:

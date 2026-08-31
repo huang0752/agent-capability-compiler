@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from fs_links import create_link
+
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = ROOT / "skills" / "acc-engineer" / "scripts" / "verify_read_only_workspace.py"
 
@@ -70,7 +72,7 @@ def test_verify_snapshots_regular_files_without_following_symlinks(tmp_path: Pat
     (workspace / "nested" / "b.txt").write_text("beta", encoding="utf-8")
     outside = tmp_path / "outside-secret.txt"
     outside.write_text("never-read-this-secret", encoding="utf-8")
-    (workspace / "linked.txt").symlink_to(outside)
+    create_link(workspace / "linked.txt", outside)
 
     completed, payload = _run("--workspace", str(workspace))
 

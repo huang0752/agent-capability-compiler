@@ -28,7 +28,11 @@ from acc_runtime.errors import RuntimeError as AccRuntimeError
 from acc_runtime.execution import ExecutionError
 from acc_runtime.gateway.audit import AuditCollector, AuditEvent, MemoryAuditSink
 from acc_runtime.policies import PolicyScopeDeniedError
-from acc_runtime.providers import HttpForbiddenError, HttpProvider
+from acc_runtime.providers import (
+    HttpForbiddenError,
+    HttpProvider,
+    JsonApplicationSuccessPolicy,
+)
 from acc_runtime.runtime import (
     ContextOperationProvider,
     GenericRuntime,
@@ -631,6 +635,58 @@ def test_from_pack_builds_provider_auth_and_a_fixed_stdio_principal(
     assert runtime.principal_context.source_scopes is None
     assert runtime.principal_context.effective_scopes == frozenset({"customer.read"})
     assert runtime.principal_context.tenant_context == {"tenant_id": "tenant-a"}
+
+
+def test_from_pack_builds_declared_application_success_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ir = _ir()
+    ir["project"]["provider"]["application_success"] = {
+        "kind": "json_pointer",
+        "pointer": "/code",
+        "allowed_values": [200],
+    }
+    monkeypatch.setattr(
+        "acc_runtime.runtime.load_pack",
+        lambda path: type("Pack", (), {"ir": ir, "path": Path(path)})(),
+    )
+
+    runtime = GenericRuntime.from_pack(
+        "runtime.accpkg",
+        environment={"CRM_URL": "https://crm.example.test"},
+    )
+
+    provider = runtime.provider
+    assert isinstance(provider, HttpProvider)
+    assert provider._application_success_policy == JsonApplicationSuccessPolicy(
+        pointer="/code", allowed_values=(200,)
+    )
+
+
+def test_from_pack_explicit_application_success_policy_is_a_controlled_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ir = _ir()
+    ir["project"]["provider"]["application_success"] = {
+        "kind": "json_pointer",
+        "pointer": "/code",
+        "allowed_values": [200],
+    }
+    monkeypatch.setattr(
+        "acc_runtime.runtime.load_pack",
+        lambda path: type("Pack", (), {"ir": ir, "path": Path(path)})(),
+    )
+    override = JsonApplicationSuccessPolicy(pointer="/status", allowed_values=("ok",))
+
+    runtime = GenericRuntime.from_pack(
+        "runtime.accpkg",
+        environment={"CRM_URL": "https://crm.example.test"},
+        application_success_policy=override,
+    )
+
+    provider = runtime.provider
+    assert isinstance(provider, HttpProvider)
+    assert provider._application_success_policy is override
 
 
 def test_from_pack_rejects_gateway_credentials_in_stdio_with_a_stable_error(

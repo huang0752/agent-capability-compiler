@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -13,7 +13,13 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 class RequestSecurityMiddleware:
     """Validate exact authorities and buffer every finite HTTP request body."""
 
-    __slots__ = ("_allowed_hosts", "_allowed_origins", "_app", "_max_body_size")
+    __slots__ = (
+        "_allowed_hosts",
+        "_allowed_origins",
+        "_app",
+        "_max_body_size",
+        "_path_body_limits",
+    )
 
     def __init__(
         self,
@@ -22,6 +28,7 @@ class RequestSecurityMiddleware:
         allowed_hosts: Iterable[str],
         allowed_origins: Iterable[str] = (),
         max_body_size: int,
+        path_body_limits: Mapping[str, int] | None = None,
     ) -> None:
         hosts = frozenset(allowed_hosts)
         origins = frozenset(allowed_origins)
@@ -39,11 +46,25 @@ class RequestSecurityMiddleware:
         self._allowed_hosts = hosts
         self._allowed_origins = origins
         self._max_body_size = max_body_size
+        limits = dict(path_body_limits or {})
+        if any(
+            not isinstance(path, str)
+            or not path.startswith("/")
+            or not isinstance(limit, int)
+            or isinstance(limit, bool)
+            or limit <= 0
+            or limit > max_body_size
+            for path, limit in limits.items()
+        ):
+            raise ValueError("path body limits must be positive and within max_body_size")
+        self._path_body_limits = limits
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self._app(scope, receive, send)
             return
+
+        body_limit = self._path_body_limits.get(scope.get("path", ""), self._max_body_size)
 
         headers = scope.get("headers", ())
         host_values = _header_values(headers, b"host")
@@ -81,7 +102,7 @@ class RequestSecurityMiddleware:
             if declared is None:
                 await _safe_error(400, "invalid_content_length")(scope, receive, send)
                 return
-            if declared > self._max_body_size:
+            if declared > body_limit:
                 await _safe_error(413, "request_body_too_large")(scope, receive, send)
                 return
 
@@ -100,7 +121,7 @@ class RequestSecurityMiddleware:
                     cached.append(message)
                     break
                 chunk = message.get("body", b"")
-                if len(buffered) + len(chunk) > self._max_body_size:
+                if len(buffered) + len(chunk) > body_limit:
                     await _safe_error(413, "request_body_too_large")(scope, receive, send)
                     return
                 buffered.extend(chunk)

@@ -33,6 +33,7 @@ from acc_core.io import (
     ProjectFileTooLargeError,
     ProjectIOError,
     ProjectSymlinkError,
+    is_path_link,
     read_project_bytes,
 )
 
@@ -281,7 +282,7 @@ def _validate_domain_document(relative_path: str, contents: bytes) -> None:
 
 
 def _collect_project_payloads(root: Path, max_file_bytes: int) -> dict[str, bytes]:
-    if root.is_symlink():
+    if is_path_link(root):
         raise PackSymlinkError("project root cannot be a symbolic link", path=".")
     if not root.is_dir():
         raise PackFormatError(f"project root is not a directory: {root}", path=".")
@@ -290,12 +291,12 @@ def _collect_project_payloads(root: Path, max_file_bytes: int) -> dict[str, byte
     manifest = _project_manifest(payloads["project.yaml"])
     for relative_path in _FIXED_PROJECT_DOCUMENTS:
         source = root / relative_path
-        if not source.exists() and not source.is_symlink():
+        if not source.exists() and not is_path_link(source):
             continue
         payloads[relative_path] = _read_project_member(root, relative_path, max_file_bytes)
     for directory in _document_directories(manifest.format_version):
         directory_path = root / directory
-        if directory_path.is_symlink():
+        if is_path_link(directory_path):
             raise PackSymlinkError(
                 f"project directory cannot be a symbolic link: {directory}",
                 path=directory,
@@ -309,7 +310,7 @@ def _collect_project_payloads(root: Path, max_file_bytes: int) -> dict[str, byte
             )
         for entry in sorted(directory_path.iterdir(), key=lambda candidate: candidate.name):
             relative_path = f"{directory}/{entry.name}"
-            if entry.is_symlink():
+            if entry.is_symlink() or bool(getattr(entry, "is_junction", lambda: False)()):
                 raise PackSymlinkError(
                     f"project member cannot be a symbolic link: {relative_path}",
                     path=relative_path,
@@ -370,7 +371,7 @@ def _project_manifest(project_contents: bytes) -> PackManifest:
 
 
 def _read_compiled_path(path: Path, max_file_bytes: int) -> bytes:
-    if path.is_symlink():
+    if is_path_link(path):
         raise PackSymlinkError("compiled IR cannot be a symbolic link", path=str(path))
     if not path.is_file():
         raise PackFormatError("compiled IR must be a regular JSON file", path=str(path))
@@ -410,12 +411,12 @@ def _compiled_payload(
         return contents
 
     source = Path(compiled_ir)
-    if source.is_symlink():
+    if is_path_link(source):
         raise PackSymlinkError("compiled IR source cannot be a symbolic link", path=str(source))
     if source.is_dir():
         entries = sorted(source.iterdir(), key=lambda candidate: candidate.name)
         for entry in entries:
-            if entry.is_symlink():
+            if entry.is_symlink() or bool(getattr(entry, "is_junction", lambda: False)()):
                 raise PackSymlinkError(
                     "compiled IR directory cannot contain symbolic links", path=str(entry)
                 )
@@ -514,7 +515,7 @@ def build_pack(
     )
     payloads["pack.lock"] = lock_contents
 
-    if destination.is_symlink():
+    if is_path_link(destination):
         raise PackSymlinkError("pack output cannot be a symbolic link", path=str(destination))
     destination.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
@@ -670,7 +671,7 @@ def verify_pack(
 
     _validate_max_bytes(max_file_bytes)
     path = Path(pack_path)
-    if path.is_symlink():
+    if is_path_link(path):
         raise PackSymlinkError("capability pack cannot be a symbolic link", path=str(path))
     if not path.is_file():
         raise PackFormatError("capability pack is not a regular file", path=str(path))
@@ -678,9 +679,13 @@ def verify_pack(
     try:
         with zipfile.ZipFile(path) as archive:
             infos = archive.infolist()
+            # ``ZipInfo`` normalizes backslashes in ``filename`` on Windows.
+            # Validate the preserved archive spelling before using the
+            # normalized member name, otherwise an unsafe Windows path can be
+            # silently accepted as POSIX syntax.
+            for info in infos:
+                _validate_member_path(info.orig_filename)
             names = [info.filename for info in infos]
-            for name in names:
-                _validate_member_path(name)
             if len(names) != len(set(names)):
                 duplicate = next(name for name in names if names.count(name) > 1)
                 raise PackDuplicateEntryError("capability pack repeats a member", path=duplicate)

@@ -7,11 +7,12 @@ compiler responsibility.
 
 from __future__ import annotations
 
+import json
 from typing import Annotated, Literal, Self
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
-from pydantic import Field, TypeAdapter, field_validator, model_validator
+from pydantic import Field, JsonValue, TypeAdapter, field_validator, model_validator
 
 from acc_core.models import (
     ContextBindingReference,
@@ -25,7 +26,7 @@ from acc_core.models import (
     StrictModel,
     WorkflowStep,
 )
-from acc_core.models.actions import ExecutionMode, HttpOperationV2
+from acc_core.models.actions import BodyTokenSourceV2, ExecutionMode, HttpOperationV2
 
 
 def _checked_json_schema(value: JsonObject) -> JsonObject:
@@ -107,12 +108,66 @@ class ApprovalContractV2(StrictModel):
     mode: Literal["required", "not_required"]
 
 
+class LocalDevelopmentStateGuardV2(StrictModel):
+    """Runtime-only state guard for an explicitly local development sandbox.
+
+    This declaration does not assert source-system atomicity. It only permits
+    cooperating ACC runtime calls to lock, re-read, and deduplicate locally.
+    """
+
+    mode: Literal["local_development_runtime_guard"]
+    resource_key_pointer: NonEmptyString
+    read_operation_id: NonEmptyString
+    state_pointer: NonEmptyString
+    allowed_values: Annotated[list[JsonValue], Field(min_length=1)]
+    terminal_values: Annotated[list[JsonValue], Field(min_length=1)]
+
+    @field_validator("resource_key_pointer", "state_pointer")
+    @classmethod
+    def validate_pointer(cls, value: str) -> str:
+        # Reuse the current strict RFC 6901 validation without creating a
+        # second, subtly different pointer language.
+        return BodyTokenSourceV2(kind="body", pointer=value).pointer
+
+    @field_validator("allowed_values", "terminal_values")
+    @classmethod
+    def validate_state_values(cls, value: list[JsonValue]) -> list[JsonValue]:
+        encoded = [
+            json.dumps(
+                item,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+            for item in value
+        ]
+        if encoded != sorted(set(encoded)):
+            raise ValueError("state values must be canonical, sorted, and unique")
+        return value
+
+    @model_validator(mode="after")
+    def validate_disjoint_states(self) -> Self:
+        allowed = {
+            json.dumps(item, sort_keys=True, separators=(",", ":"), allow_nan=False)
+            for item in self.allowed_values
+        }
+        terminal = {
+            json.dumps(item, sort_keys=True, separators=(",", ":"), allow_nan=False)
+            for item in self.terminal_values
+        }
+        if allowed & terminal:
+            raise ValueError("allowed and terminal state values must be disjoint")
+        return self
+
+
 class ActionContractV2(StrictModel):
     """Lifecycle controls that every Action Capability must state explicitly."""
 
     execution_mode: ExecutionMode
     approval: ApprovalContractV2
     expires_in_seconds: Annotated[int, Field(ge=1, le=86_400)]
+    local_development_state_guard: LocalDevelopmentStateGuardV2 | None = None
 
 
 class _CapabilityDocumentV2(StrictModel):

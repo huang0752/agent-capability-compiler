@@ -44,6 +44,7 @@ _ALLOWED_TRANSITIONS = {
             PreparedActionStatus.OUTCOME_UNKNOWN,
         }
     ),
+    PreparedActionStatus.OUTCOME_UNKNOWN: frozenset({PreparedActionStatus.SUCCEEDED}),
 }
 
 

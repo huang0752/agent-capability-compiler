@@ -22,6 +22,8 @@ from acc_core.coverage.models import (
     RouteDispositionCoverage,
     ScenarioCoverage,
     SchemaFidelityCoverage,
+    ToolPortfolioCoverage,
+    ToolPortfolioOverlapCoverage,
 )
 from acc_core.diagnostics import Diagnostic
 from acc_core.models import (
@@ -34,6 +36,7 @@ from acc_core.models import (
 )
 from acc_core.quality.analyze import analyze_capability_quality
 from acc_core.quality.output_size import analyze_output_budget, estimate_output_size
+from acc_core.quality.portfolio import analyze_tool_portfolio
 from acc_core.scope import ScopeInventory
 from acc_core.validation import ValidationReport
 
@@ -215,6 +218,52 @@ def _quality_axes(
     return constructability, discoverability, composition
 
 
+def _tool_portfolio(
+    report: ValidationReport,
+    inventory: ScopeInventory,
+    capabilities: dict[str, ReadCapabilityV2],
+    *,
+    tool_budget: int | None,
+    overlap_threshold: float,
+) -> ToolPortfolioCoverage:
+    dependencies = {
+        capability_id: sorted(_called_operations(capability.workflow))
+        for capability_id, capability in capabilities.items()
+    }
+    analysis = analyze_tool_portfolio(
+        report.capabilities,
+        report.capability_quality,
+        dependencies,
+        inventory,
+        tool_budget=tool_budget,
+        overlap_threshold=overlap_threshold,
+    )
+    return ToolPortfolioCoverage(
+        capability_ids=sorted(capabilities),
+        intent_groups={key: list(value) for key, value in analysis.intent_groups.items()},
+        operation_dependencies={
+            key: list(value) for key, value in analysis.operation_dependencies.items()
+        },
+        projected_mcp_tool_names=list(analysis.projected_mcp_tool_names),
+        projected_mcp_tool_count=analysis.projected_mcp_tool_count,
+        projected_mcp_tool_collisions=list(analysis.projected_mcp_tool_collisions),
+        overlaps=[
+            ToolPortfolioOverlapCoverage(
+                left=item.left,
+                right=item.right,
+                similarity=item.similarity,
+                kind=item.kind,
+            )
+            for item in analysis.overlaps
+        ],
+        isolated_mutation_ids=list(analysis.isolated_mutation_ids),
+        covered_route_ids=list(analysis.covered_route_ids),
+        uncovered_materialized_route_ids=list(analysis.uncovered_materialized_route_ids),
+        blocked_route_count=analysis.blocked_route_count,
+        diagnostics=list(analysis.diagnostics),
+    )
+
+
 def _schema_fidelity(report: ValidationReport) -> SchemaFidelityCoverage:
     analyzed = sorted(set(report.operations) & set(report.source_contracts))
     diagnostics = [
@@ -305,6 +354,8 @@ def analyze_coverage(
     live_observations: Sequence[LiveObservation] = (),
     client_adapter_observations: Sequence[ClientAdapterObservation] = (),
     operation_budget: int = 8,
+    tool_budget: int | None = None,
+    tool_overlap_threshold: float = 0.75,
 ) -> CoverageReportV2:
     """Return independent evidence axes without converting route closure into usability."""
 
@@ -339,6 +390,13 @@ def analyze_coverage(
         constructability=constructability,
         discoverability_graph=discoverability,
         composition=composition,
+        tool_portfolio=_tool_portfolio(
+            report,
+            scope_inventory,
+            capabilities,
+            tool_budget=tool_budget,
+            overlap_threshold=tool_overlap_threshold,
+        ),
         schema_fidelity=_schema_fidelity(report),
         output_budget=_output_budget(report, capabilities),
         live_observations=_live_observations(set(capabilities), live_observations),

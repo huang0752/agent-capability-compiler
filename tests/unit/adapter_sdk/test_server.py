@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+import socket
+import threading
 from pathlib import Path
 
 import httpx
 import pytest
+import uvicorn
 
 import acc_adapter_sdk.server as server_module
 from acc_adapter_sdk.contracts import AdapterContract, AdapterHealth, AdapterOperation
@@ -42,6 +46,42 @@ def _client(server: server_module.AdapterServer) -> httpx.AsyncClient:
     return httpx.AsyncClient(
         transport=httpx.ASGITransport(app=server.app),
         base_url="http://adapter.test",
+    )
+
+
+def _action_contract(
+    *, max_request_bytes: int = 4096, max_response_bytes: int = 4096
+) -> AdapterContract:
+    return AdapterContract.model_validate(
+        {
+            "schema_version": "2",
+            "id": "action-adapter",
+            "version": "0.1.0",
+            "base_path": "/adapter/v2",
+            "operations": [
+                {
+                    "id": "customers.close",
+                    "method": "POST",
+                    "path": "/customers/{customer_id}/close",
+                    "summary": "Close customer",
+                    "safety": {
+                        "idempotency": {
+                            "mode": "source_key",
+                            "target": {"kind": "header", "name": "Idempotency-Key"},
+                        },
+                        "concurrency": {
+                            "mode": "required",
+                            "token": {"kind": "response_header", "name": "ETag"},
+                            "precondition": {"kind": "header", "name": "If-Match"},
+                        },
+                        "transactional_outcome": True,
+                        "authorization": "source_revalidated",
+                        "max_request_bytes": max_request_bytes,
+                        "max_response_bytes": max_response_bytes,
+                    },
+                }
+            ],
+        }
     )
 
 
@@ -104,7 +144,7 @@ def test_adapter_server_rejects_unknown_and_duplicate_registrations() -> None:
         server.register_operation("crm.get_customer", handler)
 
 
-def test_adapter_server_rejects_write_routes_even_if_model_validation_was_bypassed() -> None:
+def test_adapter_server_rejects_invalid_contract_even_if_model_validation_was_bypassed() -> None:
     unsafe_operation = AdapterOperation.model_construct(
         id="crm.delete_customer",
         method="DELETE",
@@ -120,8 +160,161 @@ def test_adapter_server_rejects_write_routes_even_if_model_validation_was_bypass
         operations=[unsafe_operation],
     )
 
-    with pytest.raises(server_module.AdapterRegistrationError, match="read-only"):
+    with (
+        pytest.warns(UserWarning),
+        pytest.raises(server_module.AdapterRegistrationError, match="invalid"),
+    ):
         server_module.AdapterServer(unsafe_contract)
+
+
+@pytest.mark.asyncio
+async def test_adapter_server_registers_action_separately_and_revalidates_source_auth() -> None:
+    server = server_module.AdapterServer(_action_contract())
+    authorization_calls: list[bool] = []
+
+    async def authorize_source() -> None:
+        authorization_calls.append(True)
+
+    async def close_customer(customer_id: str, payload: dict[str, object]) -> dict[str, object]:
+        return {"customer_id": customer_id, "status": "closed", "payload": payload}
+
+    with pytest.raises(server_module.AdapterRegistrationError, match="read-only"):
+        server.register_operation("customers.close", close_customer)
+    server.register_action(
+        "customers.close",
+        close_customer,
+        source_authorizer=authorize_source,
+    )
+
+    async with _client(server) as client:
+        response = await client.post(
+            "/adapter/v2/customers/c-1/close",
+            headers={"Idempotency-Key": "key-1", "If-Match": '"version-3"'},
+            json={"reason": "requested"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "customer_id": "c-1",
+        "status": "closed",
+        "payload": {"reason": "requested"},
+    }
+    assert authorization_calls == [True]
+
+
+def test_adapter_server_action_registration_fails_closed() -> None:
+    server = server_module.AdapterServer(_action_contract())
+
+    async def handler() -> dict[str, bool]:
+        return {"ok": True}
+
+    async def authorize_source() -> None:
+        return None
+
+    with pytest.raises(server_module.AdapterRegistrationError, match="not declared"):
+        server.register_action("customers.missing", handler, source_authorizer=authorize_source)
+    with pytest.raises(server_module.AdapterRegistrationError, match="not an Action"):
+        server_module.AdapterServer(_contract()).register_action(
+            "crm.get_customer", handler, source_authorizer=authorize_source
+        )
+    with pytest.raises(server_module.AdapterRegistrationError, match="source authorizer"):
+        server.register_action("customers.close", handler, source_authorizer=None)  # type: ignore[arg-type]
+
+    server.register_action("customers.close", handler, source_authorizer=authorize_source)
+    with pytest.raises(server_module.AdapterRegistrationError, match="already registered"):
+        server.register_action("customers.close", handler, source_authorizer=authorize_source)
+
+
+@pytest.mark.asyncio
+async def test_action_http_requires_controls_and_enforces_body_limits() -> None:
+    server = server_module.AdapterServer(_action_contract(max_request_bytes=32))
+
+    async def authorize_source() -> None:
+        return None
+
+    async def handler(payload: dict[str, object]) -> dict[str, bool]:
+        del payload
+        return {"ok": True}
+
+    server.register_action("customers.close", handler, source_authorizer=authorize_source)
+    async with _client(server) as client:
+        missing = await client.post(
+            "/adapter/v2/customers/c-1/close",
+            json={"value": "small"},
+        )
+        oversized = await client.post(
+            "/adapter/v2/customers/c-1/close",
+            headers={"Idempotency-Key": "key-1", "If-Match": "3"},
+            json={"value": "x" * 64},
+        )
+
+    assert missing.status_code == 400
+    assert oversized.status_code == 413
+
+
+@pytest.mark.asyncio
+async def test_action_http_enforces_response_limit_before_sending_upstream_body() -> None:
+    server = server_module.AdapterServer(_action_contract(max_response_bytes=16))
+
+    async def authorize_source() -> None:
+        return None
+
+    async def handler() -> dict[str, str]:
+        return {"value": "x" * 64}
+
+    server.register_action("customers.close", handler, source_authorizer=authorize_source)
+    async with _client(server) as client:
+        response = await client.post(
+            "/adapter/v2/customers/c-1/close",
+            headers={"Idempotency-Key": "key-1", "If-Match": "3"},
+        )
+
+    assert response.status_code == 502
+    assert "response exceeds" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_registered_action_runs_over_a_real_loopback_http_server() -> None:
+    adapter = server_module.AdapterServer(_action_contract())
+    authorized: list[bool] = []
+
+    async def authorize_source() -> None:
+        authorized.append(True)
+
+    async def handler(customer_id: str) -> dict[str, str]:
+        return {"customer_id": customer_id, "outcome": "committed"}
+
+    adapter.register_action(
+        "customers.close",
+        handler,
+        source_authorizer=authorize_source,
+    )
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    port = listener.getsockname()[1]
+    server = uvicorn.Server(uvicorn.Config(adapter.app, log_level="critical", lifespan="off"))
+    thread = threading.Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
+    thread.start()
+    try:
+        for _ in range(200):
+            if server.started:
+                break
+            await asyncio.sleep(0.01)
+        assert server.started
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
+            response = await client.post(
+                "/adapter/v2/customers/c-9/close",
+                headers={"Idempotency-Key": "key-9", "If-Match": '"version-7"'},
+            )
+    finally:
+        server.should_exit = True
+        thread.join(timeout=5)
+        listener.close()
+
+    assert response.status_code == 200
+    assert response.json() == {"customer_id": "c-9", "outcome": "committed"}
+    assert authorized == [True]
 
 
 @pytest.mark.asyncio
@@ -146,3 +339,37 @@ operations: []
         response = await client.get("/healthz")
     assert response.status_code == 200
     assert response.json()["metadata"] == {}
+
+
+def test_adapter_server_loads_strict_action_contract_yaml(tmp_path: Path) -> None:
+    contract_path = tmp_path / "action-contract.yaml"
+    contract_path.write_text(
+        """\
+schema_version: "2"
+id: generated-action-adapter
+version: 0.1.0
+base_path: /adapter/v2
+operations:
+  - id: records.close
+    method: PATCH
+    path: /records/{record_id}
+    summary: Close record
+    safety:
+      idempotency:
+        mode: source_key
+        target: {kind: header, name: Idempotency-Key}
+      concurrency:
+        mode: required
+        token: {kind: body, pointer: /version}
+        precondition: {kind: body, pointer: /expected_version}
+      transactional_outcome: true
+      authorization: source_revalidated
+      max_request_bytes: 4096
+      max_response_bytes: 4096
+""",
+        encoding="utf-8",
+    )
+
+    server = server_module.AdapterServer.from_contract_file(contract_path)
+
+    assert server.contract.operations[0].method == "PATCH"

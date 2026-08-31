@@ -33,6 +33,13 @@ from acc_runtime.gateway.models import (
     SessionCreateRequest,
     SessionCreateResponse,
 )
+from acc_runtime.gateway.operator import (
+    OPERATOR_APPROVAL_BODY_LIMIT,
+    LocalDevelopmentOperatorApprovalService,
+    OperatorActionNotFoundError,
+    OperatorApprovalUnauthorizedError,
+    ProductionOperatorApprovalService,
+)
 from acc_runtime.gateway.security import RequestSecurityMiddleware
 from acc_runtime.mcp import PrincipalCapabilityMcpServer
 
@@ -48,6 +55,8 @@ _CANCELLED = _Cancelled()
 
 
 class GatewaySessionApplicationService(Protocol):
+    async def startup(self) -> None: ...
+
     async def create_session(self, *, identity: str, password: str) -> SessionCreateResponse: ...
 
     async def delete_current(self, token: str) -> None: ...
@@ -76,6 +85,8 @@ def create_gateway_app(
     runtime_info: GatewayRuntimeInfo,
     max_request_body_size: int = DEFAULT_GATEWAY_BODY_LIMIT,
     mcp_session_idle_timeout_seconds: float | None = None,
+    operator_approval_service: LocalDevelopmentOperatorApprovalService | None = None,
+    production_operator_approval_service: ProductionOperatorApprovalService | None = None,
 ) -> Starlette:
     """Create one single-use Gateway app and bind all lifecycle-owned resources."""
 
@@ -85,6 +96,8 @@ def create_gateway_app(
         or max_request_body_size <= 0
     ):
         raise ValueError("max_request_body_size must be a positive integer")
+    if operator_approval_service is not None and production_operator_approval_service is not None:
+        raise ValueError("development and production operator approval are mutually exclusive")
     idle_timeout = (
         min(float(settings.session_ttl_seconds), DEFAULT_MCP_SESSION_IDLE_TIMEOUT_SECONDS)
         if mcp_session_idle_timeout_seconds is None
@@ -169,6 +182,76 @@ def create_gateway_app(
     async def get_runtime_info(_: Request) -> Response:
         return JSONResponse(runtime_info.model_dump(mode="json"))
 
+    async def operator_approve(request: Request) -> Response:
+        service = operator_approval_service or production_operator_approval_service
+        assert service is not None
+        candidate = _single_operator_secret(
+            request.scope,
+            production=production_operator_approval_service is not None,
+        )
+        if candidate is None:
+            return _error_response(401, "ACC_GATEWAY_OPERATOR_UNAUTHORIZED")
+        try:
+            service.authenticate(candidate)
+        except OperatorApprovalUnauthorizedError:
+            return _error_response(401, "ACC_GATEWAY_OPERATOR_UNAUTHORIZED")
+        finally:
+            candidate = b""
+        raw = bytearray()
+        try:
+            async for chunk in request.stream():
+                if len(raw) + len(chunk) > OPERATOR_APPROVAL_BODY_LIMIT:
+                    return _error_response(413, "ACC_GATEWAY_OPERATOR_REQUEST_INVALID")
+                raw.extend(chunk)
+            if not _is_json_content_type(request.scope):
+                return _error_response(400, "ACC_GATEWAY_OPERATOR_REQUEST_INVALID")
+            payload = json.loads(raw)
+            if production_operator_approval_service is None:
+                assert operator_approval_service is not None
+                if (
+                    not isinstance(payload, dict)
+                    or set(payload) != {"action_handle"}
+                    or not isinstance(payload.get("action_handle"), str)
+                ):
+                    return _error_response(400, "ACC_GATEWAY_OPERATOR_REQUEST_INVALID")
+                capability_id, status = await operator_approval_service.approve(
+                    payload["action_handle"]
+                )
+            else:
+                if (
+                    not isinstance(payload, dict)
+                    or set(payload)
+                    != {
+                        "action_handle",
+                        "decision_id",
+                        "approver_id",
+                        "expires_in_seconds",
+                    }
+                    or any(
+                        not isinstance(payload.get(field), str) or not payload[field]
+                        for field in ("action_handle", "decision_id", "approver_id")
+                    )
+                    or not isinstance(payload.get("expires_in_seconds"), int)
+                    or isinstance(payload.get("expires_in_seconds"), bool)
+                ):
+                    return _error_response(400, "ACC_GATEWAY_OPERATOR_REQUEST_INVALID")
+                capability_id, status = await production_operator_approval_service.approve(
+                    payload["action_handle"],
+                    decision_id=payload["decision_id"],
+                    approver_id=payload["approver_id"],
+                    expires_in_seconds=payload["expires_in_seconds"],
+                )
+            return JSONResponse({"capability_id": capability_id, "status": status})
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return _error_response(400, "ACC_GATEWAY_OPERATOR_REQUEST_INVALID")
+        except (OperatorActionNotFoundError, AccRuntimeError):
+            return _error_response(404, "ACC_GATEWAY_OPERATOR_ACTION_NOT_FOUND")
+        except Exception:
+            return _error_response(404, "ACC_GATEWAY_OPERATOR_ACTION_NOT_FOUND")
+        finally:
+            raw.clear()
+            request = None  # type: ignore[assignment]
+
     protected = [Middleware(RequireAuthMiddleware, required_scopes=[])]
     routes = [
         Route("/runtime/sessions", create_session, methods=["POST"]),
@@ -191,10 +274,18 @@ def create_gateway_app(
             middleware=protected,
         ),
     ]
+    if operator_approval_service is not None or production_operator_approval_service is not None:
+        routes.insert(
+            3,
+            Route("/operator/actions/approve", operator_approve, methods=["POST"]),
+        )
 
     @contextlib.asynccontextmanager
     async def lifespan(_: Starlette) -> AsyncIterator[None]:
         try:
+            startup = getattr(service, "startup", None)
+            if startup is not None:
+                await startup()
             async with manager.run():
                 yield
         finally:
@@ -206,6 +297,12 @@ def create_gateway_app(
             allowed_hosts=settings.allowed_hosts,
             allowed_origins=settings.allowed_origins,
             max_body_size=max_request_body_size,
+            path_body_limits=(
+                {"/operator/actions/approve": OPERATOR_APPROVAL_BODY_LIMIT}
+                if operator_approval_service is not None
+                or production_operator_approval_service is not None
+                else None
+            ),
         ),
         Middleware(AuthenticationMiddleware, backend=BearerAuthBackend(token_verifier)),
         Middleware(AuthContextMiddleware),
@@ -261,6 +358,19 @@ def _single_bearer_token(scope: Scope) -> str | None:
         return None
     token = value[7:]
     return token if token and token == token.strip() else None
+
+
+def _single_operator_secret(scope: Scope, *, production: bool = False) -> bytes | None:
+    name = (
+        b"x-acc-production-operator-authorization"
+        if production
+        else b"x-acc-operator-authorization"
+    )
+    values = _raw_header_values(scope, name)
+    if len(values) != 1 or not values[0].startswith(b"Bearer "):
+        return None
+    candidate = values[0][7:]
+    return candidate if candidate and b" " not in candidate else None
 
 
 def _raw_header_values(scope: Scope, name: bytes) -> list[bytes]:

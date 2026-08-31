@@ -24,6 +24,7 @@ from acc_core.domains import (
     domain_decision_digest,
 )
 from acc_core.validation import validate_project
+from fs_links import create_link
 
 
 def _write(path: Path, value: object) -> None:
@@ -600,7 +601,7 @@ def test_domains_impact_rejects_symlink_change_input(
     project = _incremental_impact_project(tmp_path)
     outside = tmp_path / "outside.json"
     outside.write_text((project / "changes.json").read_text(encoding="utf-8"), encoding="utf-8")
-    os.symlink(outside, project / "linked-change.json")
+    create_link(project / "linked-change.json", outside)
 
     exit_code = main(
         [
@@ -622,7 +623,11 @@ def test_domains_impact_write_rejects_symlink_output_directory(tmp_path: Path) -
     project = _incremental_impact_project(tmp_path)
     outside = tmp_path / "outside-requests"
     outside.mkdir()
-    os.symlink(outside, project / "domain-change-requests")
+    create_link(
+        project / "domain-change-requests",
+        outside,
+        target_is_directory=True,
+    )
 
     result, diagnostics = analyze_domain_changes(project, "changes.json", write=True)
 

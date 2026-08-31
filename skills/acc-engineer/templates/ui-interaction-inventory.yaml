@@ -9,9 +9,17 @@ surfaces:
   - id: REPLACE_WITH_SURFACE_ID
     kind: page
     route_or_entry: /REPLACE_WITH_CLIENT_ENTRY
+    usage_context: REPLACE_WITH_DISTINCT_PLATFORM_NEUTRAL_USAGE_CONTEXT
     business_purpose: REPLACE_WITH_EVIDENCED_BUSINESS_PURPOSE
     evidence_sources:
       - REPLACE_WITH_SURFACE_EVIDENCE
+    entry_evidence:
+      source_id: REPLACE_WITH_SURFACE_EVIDENCE
+      kind: source_file
+      path: REPLACE_WITH_CLIENT_ENTRY_OR_ROUTER_SOURCE
+      line_start: 1
+      line_end: 1
+      digest: sha256:REPLACE_WITH_FULL_FILE_SHA256
 interactions:
   - id: REPLACE_WITH_INTERACTION_ID
     surface_id: REPLACE_WITH_SURFACE_ID
@@ -28,6 +36,44 @@ interactions:
     related_data: []
     result_consumption: []
     states: []
+    # Complete scope requires exactly these seven sorted dispositions. Use
+    # applicable only when the matching collection is non-empty; otherwise
+    # prove not_applicable. Never use bare empty arrays as completeness proof.
+    dimension_dispositions:
+      - dimension: conditions
+        applicability: not_applicable
+        rationale: REPLACE_WITH_EVIDENCED_REASON
+        evidence: &dimension_evidence
+          source_id: REPLACE_WITH_INTERACTION_EVIDENCE_SOURCE_ID
+          kind: source_file
+          path: REPLACE_WITH_CLIENT_SOURCE_RELATIVE_PATH
+          line_start: 1
+          line_end: 1
+          digest: sha256:REPLACE_WITH_FULL_FILE_SHA256
+      - dimension: defaults
+        applicability: not_applicable
+        rationale: REPLACE_WITH_EVIDENCED_REASON
+        evidence: *dimension_evidence
+      - dimension: input_bindings
+        applicability: not_applicable
+        rationale: REPLACE_WITH_EVIDENCED_REASON
+        evidence: *dimension_evidence
+      - dimension: option_sources
+        applicability: not_applicable
+        rationale: REPLACE_WITH_EVIDENCED_REASON
+        evidence: *dimension_evidence
+      - dimension: related_data
+        applicability: not_applicable
+        rationale: REPLACE_WITH_EVIDENCED_REASON
+        evidence: *dimension_evidence
+      - dimension: result_consumption
+        applicability: not_applicable
+        rationale: REPLACE_WITH_EVIDENCED_REASON
+        evidence: *dimension_evidence
+      - dimension: states
+        applicability: not_applicable
+        rationale: REPLACE_WITH_EVIDENCED_REASON
+        evidence: *dimension_evidence
     evidence_claims:
       - target_pointer: /interactions/0
         evidence:

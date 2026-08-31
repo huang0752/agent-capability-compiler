@@ -20,6 +20,7 @@ import yaml
 from pydantic import ValidationError
 
 from acc_core.domains import DomainMap
+from acc_core.io import is_path_link
 from acc_core.packaging import CapabilityPackError, verify_pack
 from acc_core.quality.output_size import canonical_json_bytes
 from acc_core.usage.models import McpReleaseAcceptance
@@ -127,9 +128,9 @@ def _read_regular_snapshot(
     path_value: str | os.PathLike[str], *, max_bytes: int
 ) -> tuple[bytes, _FileFingerprint]:
     path = Path(path_value)
-    if path.is_symlink():
+    if is_path_link(path):
         raise _ArtifactInvalid
-    flags = os.O_RDONLY
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
     try:

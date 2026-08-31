@@ -41,6 +41,7 @@ addopts = "-ra --strict-config --strict-markers"
 asyncio_mode = "strict"
 testpaths = ["tests"]
 pythonpath = [
+    "tests",
     "packages/acc-core/src",
     "packages/acc-runtime/src",
     "packages/acc-adapter-sdk/src",

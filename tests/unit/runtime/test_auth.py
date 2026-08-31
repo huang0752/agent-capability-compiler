@@ -490,6 +490,62 @@ async def test_password_login_sends_only_the_two_declared_fields() -> None:
 
 
 @pytest.mark.asyncio
+async def test_password_login_adds_declared_public_static_scalar_fields() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert json.loads(request.content) == {
+            "clientId": "public-client-id",
+            "grantType": "password",
+            "username": "alice@example.test",
+            "password": "private-password",
+        }
+        return httpx.Response(
+            200,
+            json={"data": {"access_token": "source-token"}},
+        )
+
+    strategy = _password_strategy(
+        handler,
+        config=_config(
+            identity_field="username",
+            login_request={
+                "static_fields": {
+                    "clientId": "public-client-id",
+                    "grantType": "password",
+                }
+            },
+            token_pointer="/data/access_token",
+        ),
+    )
+
+    result = await strategy.headers(_context())
+
+    assert _authorization(result) == "Bearer source-token"
+
+
+@pytest.mark.asyncio
+async def test_oversize_static_login_request_fails_without_sending_or_leaking() -> None:
+    marker = "public-marker-" + "x" * 65_536
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={"access_token": "unreachable"})
+
+    strategy = _password_strategy(
+        handler,
+        config=_config(login_request={"static_fields": {"publicContext": marker}}),
+    )
+
+    with pytest.raises(AuthConfigurationError) as captured:
+        await strategy.headers(_context())
+
+    assert calls == 0
+    assert marker not in str(captured.value)
+    assert marker not in repr(captured.value)
+
+
+@pytest.mark.asyncio
 async def test_password_login_resolves_every_configured_json_pointer() -> None:
     response = {
         "payload": {
@@ -526,6 +582,197 @@ async def test_password_login_resolves_every_configured_json_pointer() -> None:
         "region": {"id": 7},
     }
     assert result.authentication.expires_at == 620.0
+
+
+@pytest.mark.asyncio
+async def test_password_login_parses_bounded_space_delimited_scopes() -> None:
+    strategy = _password_strategy(
+        lambda _request: httpx.Response(
+            200,
+            json={"access_token": "token", "scope": "write  read\twrite"},
+        ),
+        config=_config(scopes_pointer="/scope", scopes_format="space_delimited"),
+    )
+
+    result = await strategy.headers(_context())
+
+    assert result.authentication.source_scopes == frozenset({"read", "write"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "scope",
+    [
+        ["array-is-wrong-in-this-mode"],
+        "read\u00a0write",
+        "read\x1fwrite",
+        " ".join(f"scope-{index}" for index in range(1025)),
+        "x" * 8_193,
+    ],
+    ids=("wrong-type", "unicode-space", "control", "too-many", "too-large"),
+)
+async def test_space_delimited_scopes_reject_wrong_type_and_unsafe_or_oversize_values(
+    scope: object,
+) -> None:
+    strategy = _password_strategy(
+        lambda _request: httpx.Response(
+            200,
+            json={"access_token": "token", "scope": scope},
+        ),
+        config=_config(scopes_pointer="/scope", scopes_format="space_delimited"),
+    )
+
+    with pytest.raises(AuthResponseInvalidError):
+        await strategy.headers(_context())
+
+
+@pytest.mark.asyncio
+async def test_empty_space_delimited_scope_is_an_empty_set() -> None:
+    strategy = _password_strategy(
+        lambda _request: httpx.Response(
+            200,
+            json={"access_token": "token", "scope": " \t\r\n"},
+        ),
+        config=_config(scopes_pointer="/scope", scopes_format="space_delimited"),
+    )
+
+    result = await strategy.headers(_context())
+
+    assert result.authentication.source_scopes == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_default_json_array_scope_format_is_unchanged() -> None:
+    strategy = _password_strategy(
+        lambda _request: httpx.Response(
+            200,
+            json={"access_token": "token", "scope": "read write"},
+        ),
+        config=_config(scopes_pointer="/scope"),
+    )
+
+    with pytest.raises(AuthResponseInvalidError):
+        await strategy.headers(_context())
+
+
+@pytest.mark.asyncio
+async def test_scope_discovery_uses_new_bearer_and_returns_source_scopes() -> None:
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        if request.url.path == "/api/auth/login":
+            return httpx.Response(200, json={"access_token": "source-token"})
+        assert request.method == "GET"
+        assert request.url.query == b"clientid=public-client"
+        assert request.headers["authorization"] == "Bearer source-token"
+        return httpx.Response(
+            200,
+            json={"code": 200, "data": {"permissions": ["notice:read", "notice:edit"]}},
+        )
+
+    strategy = _password_strategy(
+        handler,
+        config=_config(
+            scope_discovery={
+                "path": "/system/user/getInfo",
+                "static_query_fields": {"clientid": "public-client"},
+                "scopes_pointer": "/data/permissions",
+                "application_success": {
+                    "kind": "json_pointer",
+                    "pointer": "/code",
+                    "allowed_values": [200],
+                },
+            }
+        ),
+    )
+
+    result = await strategy.headers(_context())
+
+    assert result.authentication.source_scopes == frozenset({"notice:read", "notice:edit"})
+    assert calls == ["/api/auth/login", "/system/user/getInfo"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["unauthorized", "business", "type", "redirect"])
+async def test_scope_discovery_failures_reject_the_whole_authentication(case: str) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/auth/login":
+            return httpx.Response(200, json={"access_token": "source-token"})
+        if case == "unauthorized":
+            return httpx.Response(401)
+        if case == "business":
+            return httpx.Response(200, json={"code": 403, "data": {"permissions": []}})
+        if case == "type":
+            return httpx.Response(200, json={"code": 200, "data": {"permissions": "bad"}})
+        return httpx.Response(302, headers={"location": "https://evil.example/scopes"})
+
+    strategy = _password_strategy(
+        handler,
+        config=_config(
+            scope_discovery={
+                "path": "/scopes",
+                "scopes_pointer": "/data/permissions",
+                "application_success": {
+                    "kind": "json_pointer",
+                    "pointer": "/code",
+                    "allowed_values": [200],
+                },
+            }
+        ),
+    )
+
+    with pytest.raises(AuthResponseInvalidError):
+        await strategy.headers(_context())
+
+
+@pytest.mark.asyncio
+async def test_scope_discovery_timeout_and_oversize_are_bounded() -> None:
+    mode = "timeout"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/auth/login":
+            return httpx.Response(200, json={"access_token": "source-token"})
+        if mode == "timeout":
+            raise httpx.ReadTimeout("private-body-must-not-escape")
+        return httpx.Response(200, content=b"x" * 65_537)
+
+    config = _config(
+        scope_discovery={
+            "path": "/scopes",
+            "scopes_pointer": "/permissions",
+            "max_response_bytes": 65_536,
+        }
+    )
+    with pytest.raises(AuthTimeoutError):
+        await _password_strategy(handler, config=config).headers(_context())
+    mode = "oversize"
+    with pytest.raises(AuthResponseTooLargeError):
+        await _password_strategy(handler, config=config).headers(_context())
+
+
+@pytest.mark.asyncio
+async def test_scope_discovery_query_is_bounded_before_network_send() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"access_token": "source-token"})
+
+    strategy = _password_strategy(
+        handler,
+        config=_config(
+            scope_discovery={
+                "path": "/scopes",
+                "static_query_fields": {"publicContext": "x" * 8_192},
+                "scopes_pointer": "/permissions",
+            }
+        ),
+    )
+
+    with pytest.raises(AuthResponseInvalidError):
+        await strategy.headers(_context())
+    assert [request.url.path for request in requests] == ["/api/auth/login"]
 
 
 def test_password_auth_response_size_defaults_to_64_kib_and_is_capped_at_1_mib() -> None:
@@ -602,6 +849,37 @@ async def test_concurrent_first_login_is_single_flight_per_auth_state_key() -> N
     assert results[0].state_key == context.auth_state_key
     assert results[0].generation == 1
     assert "shared-token" not in repr(results[0])
+
+
+@pytest.mark.asyncio
+async def test_concurrent_first_login_runs_scope_discovery_once() -> None:
+    calls = {"login": 0, "discovery": 0}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/auth/login":
+            calls["login"] += 1
+            await asyncio.sleep(0.01)
+            return httpx.Response(200, json={"access_token": "shared-token"})
+        calls["discovery"] += 1
+        return httpx.Response(200, json={"permissions": ["notice:read"]})
+
+    strategy = PasswordBearerAuthStrategy(
+        config=_config(
+            scope_discovery={
+                "path": "/scopes",
+                "scopes_pointer": "/permissions",
+            }
+        ),
+        base_url="https://crm.example.test",
+        credential_source=_CredentialSource(),
+        client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    context = _context()
+
+    results = await asyncio.gather(*(strategy.headers(context) for _ in range(12)))
+
+    assert calls == {"login": 1, "discovery": 1}
+    assert results[0].authentication.source_scopes == frozenset({"notice:read"})
 
 
 @pytest.mark.asyncio

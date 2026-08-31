@@ -70,6 +70,32 @@ class CompositionCoverage(StrictModel):
     diagnostics: list[Diagnostic]
 
 
+class ToolPortfolioOverlapCoverage(StrictModel):
+    """One intent-level overlap pair."""
+
+    left: NonEmptyString
+    right: NonEmptyString
+    similarity: Annotated[float, Field(ge=0, le=1)]
+    kind: Literal["duplicate", "high_overlap"]
+
+
+class ToolPortfolioCoverage(StrictModel):
+    """Tool-count, intent, overlap, CRUD-anchor, and business-surface facts."""
+
+    capability_ids: list[NonEmptyString]
+    intent_groups: dict[NonEmptyString, list[NonEmptyString]]
+    operation_dependencies: dict[NonEmptyString, list[NonEmptyString]]
+    projected_mcp_tool_names: list[NonEmptyString]
+    projected_mcp_tool_count: int = Field(ge=0)
+    projected_mcp_tool_collisions: list[NonEmptyString]
+    overlaps: list[ToolPortfolioOverlapCoverage]
+    isolated_mutation_ids: list[NonEmptyString]
+    covered_route_ids: list[NonEmptyString]
+    uncovered_materialized_route_ids: list[NonEmptyString]
+    blocked_route_count: int = Field(ge=0)
+    diagnostics: list[Diagnostic]
+
+
 class SchemaFidelityCoverage(StrictModel):
     """Evidence-backed schema comparison results."""
 
@@ -329,6 +355,7 @@ class CoverageReportV2(StrictModel):
     constructability: ConstructabilityCoverage
     discoverability_graph: DiscoverabilityGraphCoverage
     composition: CompositionCoverage
+    tool_portfolio: ToolPortfolioCoverage
     schema_fidelity: SchemaFidelityCoverage
     output_budget: OutputBudgetCoverage
     live_observations: LiveObservationCoverage
@@ -386,6 +413,8 @@ __all__ = [
     "SchemaFidelityCoverage",
     "StateScenarioCoverage",
     "SurfaceDispositionCoverage",
+    "ToolPortfolioCoverage",
+    "ToolPortfolioOverlapCoverage",
     "UserDecisionTraceCoverage",
     "VerificationCoverage",
 ]

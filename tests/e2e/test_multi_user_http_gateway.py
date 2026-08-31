@@ -449,7 +449,11 @@ async def _gateway_harness(
         ),
         environment={"OFFLINE_SOURCE_BASE_URL": source_url},
         deployment_scope_ceiling=deployment_scope_ceiling,
-        mcp_session_idle_timeout_seconds=min(0.5, float(ttl_seconds)),
+        # Keep the MCP transport alive long enough for concurrent source calls
+        # on slower CI/Windows hosts. Session-token expiry is exercised below
+        # through ``session_ttl_seconds`` and does not require a sub-second MCP
+        # idle timeout.
+        mcp_session_idle_timeout_seconds=float(ttl_seconds),
         audit_sink=audit,
         audit_deployment_salt=b"offline-audit-salt-private",
     )

@@ -42,6 +42,14 @@ AI 自动处理证据清晰且一致的 `business_goal`、`tool_route`、`input_
 
 用户接受不能授予权限。source JWT 与 source API 对每次真实请求进行最终鉴权；401/403 保留源系统裁决，不扩大 Scope、不换高权账号。真实 mutation 默认禁止。
 
+## 受信验证 Artifact 桥
+
+`acc usage release` 和 `acc usage build` 不能信任 Usage 工程里手写或反序列化的 verification 布尔值。Headless caller 与 real MCP client 必须由显式受信 runner/profile 注入；该 runner 用独立 HMAC 密钥生成 canonical JSON verification artifact。artifact 只包含 `key_id`，并绑定当前 Usage project、accepted MCP、Pack、IR、Tool Schema、测试报告、Domain、合同、决策、Scenario 分母和 release bundle。
+
+密钥只允许存在于 runner 与验证端的同一管理信任域。trust-store 必须通过独立路径提供，且不得位于 source workspace、ACC project 或 Usage project 内，不得经过 symlink/junction；包签名密钥只允许通过 SecretRef 环境变量名称传入，不能作为 CLI 明文或工程文件。artifact 必须含 nonce、`observed_at`、`expires_at`，有效期大于 0 且不超过 24 小时。非 canonical、篡改、过期、stale、digest mismatch、错误 Pack 或链接路径一律 fail-closed。
+
+正式命令需要显式给出 `--verification-artifact`、`--verification-trust-store`、`--accepted-pack`、`--accepted-tools` 和 `--accepted-test-report`。`usage build` 另加 `--package-signing-secret-env <ENV_NAME>`；未提供受信证据时保持 `ACC_USAGE_*_EVIDENCE_NOT_PROVISIONED`，不得降级为读取 release 自我声明。
+
 ## 停止与反馈分流
 
 - MCP 缺工具、Schema/Runtime/Action lifecycle 错误：生成管道 A MCP Change Request；

@@ -53,6 +53,7 @@ class GatewaySessionService:
         "_deployment_scope_ceiling",
         "_lifecycle_lock",
         "_session_id_generator",
+        "_started",
         "_store",
         "_target_system_id",
     )
@@ -91,6 +92,33 @@ class GatewaySessionService:
         )
         self._lifecycle_lock = asyncio.Lock()
         self._closed = False
+        self._started = False
+
+    async def startup(self) -> None:
+        """Restore durable authentication state before the app accepts requests."""
+
+        async with self._lifecycle_lock:
+            if self._closed:
+                raise GatewaySessionInvalidError("Gateway session service is closed.")
+            if self._started:
+                return
+        restored = await self._store.restore_authentications()
+        bound: list[AuthStateKey] = []
+        try:
+            for record, authentication in restored:
+                if record.status.value != "active":
+                    continue
+                key = record.principal_context.auth_state_key
+                await self._auth_strategy.bind_state(key, authentication)
+                bound.append(key)
+        except BaseException:
+            for key in reversed(bound):
+                await self._auth_strategy.invalidate(key)
+            async with self._lifecycle_lock:
+                self._closed = True
+            raise
+        async with self._lifecycle_lock:
+            self._started = True
 
     async def create_session(
         self,
@@ -194,17 +222,18 @@ class GatewaySessionService:
             if failure is None:
                 assert state_key is not None
                 assert result is not None
-                await self._auth_strategy.bind_state(state_key, result)
-                bound = True
                 assert context is not None
                 creation = await self._store.create(
                     session_id=session_id,
                     principal_context=context,
                     source_expires_at=result.expires_at,
                     source_refresh_at=result.refresh_at,
+                    authentication=result,
                 )
                 gateway_token, record = creation
                 published = True
+                await self._auth_strategy.bind_state(state_key, result)
+                bound = True
                 cleanup_failed, cleanup_cancelled = await self._invalidate_records(
                     creation.removed_records
                 )
@@ -398,27 +427,28 @@ class GatewaySessionService:
     async def _close_outcome(self) -> _ServiceFailure | _Cancelled | None:
         async with self._lifecycle_lock:
             self._closed = True
-        failed, cancelled = await self._close_resources()
+        failed, cancelled = await self._close_resources(preserve_sessions=True)
         if cancelled:
             return _CANCELLED
         if failed:
             return _invalid_failure("service_close_failed")
         return None
 
-    async def _close_resources(self) -> tuple[bool, bool]:
+    async def _close_resources(self, *, preserve_sessions: bool = False) -> tuple[bool, bool]:
         store_failed = False
         store_cancelled = False
         removed_records: tuple[GatewaySessionRecord, ...] | None = ()
         strategy_failed = False
         strategy_cancelled = False
         try:
+            close_store = self._store.checkpoint_close if preserve_sessions else self._store.close
             removed_records, store_failure, store_cancelled = await _complete_value_action(
-                self._store.close
+                close_store
             )
             store_failed = store_failure is not None or removed_records is None
             if store_failed:
                 removed_records, retry_failure, retry_cancelled = await _complete_value_action(
-                    self._store.close
+                    close_store
                 )
                 store_failed = retry_failure is not None or removed_records is None
                 store_cancelled = store_cancelled or retry_cancelled

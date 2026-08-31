@@ -14,7 +14,12 @@ from acc_runtime.auth import NoAuthStrategy
 from acc_runtime.context import PrincipalContext
 from acc_runtime.errors import RuntimeError as ACCRuntimeError
 from acc_runtime.policies import PolicyEnforcer
-from acc_runtime.providers import HttpOperationError, HttpProvider
+from acc_runtime.providers import (
+    HttpApplicationError,
+    HttpOperationError,
+    HttpProvider,
+    JsonApplicationSuccessPolicy,
+)
 
 
 class StaticSecretResolver:
@@ -166,6 +171,103 @@ async def test_v2_http_success_statuses_are_exact_instead_of_any_2xx() -> None:
     assert captured.value.details == {
         "operation": "crm.get_customer",
         "upstream_status": 201,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("application_code", [401, 403, 500])
+async def test_http_provider_rejects_http_200_application_error_when_configured(
+    application_code: int,
+) -> None:
+    operation = _v2_read_operation().model_copy(
+        update={
+            "output_schema": {
+                "type": "object",
+                "required": ["code", "message", "data"],
+                "properties": {
+                    "code": {"type": "integer"},
+                    "message": {"type": "string"},
+                    "data": {},
+                },
+            }
+        }
+    )
+    response = {"code": application_code, "message": "application error", "data": None}
+
+    async with _client(lambda request: httpx.Response(200, json=response)) as client:
+        provider = HttpProvider(
+            base_url_ref="CRM_BASE_URL",
+            environment={"CRM_BASE_URL": "https://crm.example.test"},
+            auth_strategy=NoAuthStrategy(),
+            application_success_policy=JsonApplicationSuccessPolicy(
+                pointer="/code", allowed_values=(200,)
+            ),
+            client=client,
+        )
+        with pytest.raises(HttpApplicationError) as captured:
+            await provider.call(
+                operation.model_dump(mode="json"),
+                {"customer_id": "one"},
+                principal_context=_v2_principal(),
+            )
+
+    assert captured.value.code == "ACC_RUNTIME_HTTP_APPLICATION_ERROR"
+    assert captured.value.details == {
+        "operation": "crm.get_customer",
+        "application_code": application_code,
+    }
+
+
+@pytest.mark.asyncio
+async def test_http_provider_does_not_infer_envelope_semantics_when_unconfigured() -> None:
+    operation = _v2_read_operation().model_copy(
+        update={
+            "output_schema": {
+                "type": "object",
+                "required": ["code"],
+                "properties": {"code": {"type": "integer"}},
+            }
+        }
+    )
+
+    async with _client(lambda request: httpx.Response(200, json={"code": 500})) as client:
+        provider = HttpProvider(
+            base_url_ref="CRM_BASE_URL",
+            environment={"CRM_BASE_URL": "https://crm.example.test"},
+            auth_strategy=NoAuthStrategy(),
+            client=client,
+        )
+        result = await provider.call(
+            operation.model_dump(mode="json"),
+            {"customer_id": "one"},
+            principal_context=_v2_principal(),
+        )
+
+    assert result == {"code": 500}
+
+
+@pytest.mark.asyncio
+async def test_http_provider_fails_closed_when_application_code_is_missing() -> None:
+    async with _client(lambda request: httpx.Response(200, json={"id": "one"})) as client:
+        provider = HttpProvider(
+            base_url_ref="CRM_BASE_URL",
+            environment={"CRM_BASE_URL": "https://crm.example.test"},
+            auth_strategy=NoAuthStrategy(),
+            application_success_policy=JsonApplicationSuccessPolicy(
+                pointer="/code", allowed_values=(200,)
+            ),
+            client=client,
+        )
+        with pytest.raises(HttpApplicationError) as captured:
+            await provider.call(
+                _v2_read_operation().model_dump(mode="json"),
+                {"customer_id": "one"},
+                principal_context=_v2_principal(),
+            )
+
+    assert captured.value.details == {
+        "operation": "crm.get_customer",
+        "application_code": "missing",
     }
 
 

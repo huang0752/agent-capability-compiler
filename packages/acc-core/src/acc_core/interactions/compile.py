@@ -364,6 +364,13 @@ def compile_interactions(report: ValidationReport) -> CompiledInteractionAttesta
     else:
         inventory_document = inventory.model_dump(mode="json", by_alias=True)
         inventory_manifest = {
+            "dimension_dispositions": {
+                interaction.id: {
+                    disposition.dimension: disposition.applicability
+                    for disposition in interaction.dimension_dispositions
+                }
+                for interaction in inventory.interactions
+            },
             "evidence_sha256": _digest(list(inventory.scope.evidence_sources)),
             "interaction_ids": [item.id for item in inventory.interactions],
             "scope_mode": inventory.scope.mode,
@@ -374,6 +381,14 @@ def compile_interactions(report: ValidationReport) -> CompiledInteractionAttesta
                 _normalize_json(inventory.summary.model_dump(mode="json", by_alias=True)),
             ),
             "surface_ids": [item.id for item in inventory.surfaces],
+            "surface_contexts": {
+                surface.id: {
+                    "kind": surface.kind,
+                    "route_or_entry": surface.route_or_entry,
+                    "usage_context": surface.usage_context,
+                }
+                for surface in inventory.surfaces
+            },
         }
         if inventory.scope.mode == "none":
             compiled_contracts = {}

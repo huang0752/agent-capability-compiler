@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import asyncio
+import json
+import threading
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, cast
 
+import httpx
 import pytest
 from pydantic import JsonValue
 
@@ -24,6 +29,10 @@ from acc_runtime.actions.audit import ActionAuditEvent, ActionAuditSink
 from acc_runtime.actions.coordinator import ActionCommitExecution
 from acc_runtime.actions.errors import ActionStateConflictError
 from acc_runtime.actions.models import PreparedActionStatus
+from acc_runtime.actions.resource_lock import (
+    ActionResourceLockCapacityError,
+    InMemoryActionResourceLock,
+)
 from acc_runtime.actions.runtime import (
     ActionRuntimeDependencies,
     create_runtime_action_coordinator,
@@ -35,11 +44,13 @@ from acc_runtime.actions.runtime_executor import (
     RuntimeActionWorkflowExecutor,
 )
 from acc_runtime.actions.store import InMemoryActionStore
+from acc_runtime.auth import NoAuthStrategy
 from acc_runtime.context import PrincipalContext
 from acc_runtime.credentials import SecretValue
 from acc_runtime.deployment import DeploymentPolicy
 from acc_runtime.execution import ExecutionError
 from acc_runtime.policies import PolicyScopeDeniedError
+from acc_runtime.providers import HttpProvider, HttpUpstreamError
 
 
 def test_runtime_action_executor_has_public_action_api_exports() -> None:
@@ -404,6 +415,137 @@ def _server_serialized_ir() -> dict[str, Any]:
     return ir
 
 
+def _source_key_outcome_ir() -> dict[str, Any]:
+    ir = _ir()
+    status_document = _operation(read=True)
+    status_document["id"] = "orders.outcome"
+    status_document["title"] = "orders.outcome"
+    status_document["input_schema"] = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "idempotency_key": {"type": "string"},
+            "tenant_id": {"type": "string"},
+        },
+        "required": ["idempotency_key", "tenant_id"],
+    }
+    status_document["http"]["path"] = "/action-outcomes/{idempotency_key}"
+    status_document["http"]["path_parameters"] = {"idempotency_key": "idempotency_key"}
+    status_document["http"]["query_parameters"] = {"tenant": "tenant_id"}
+    ir["operations"]["orders.outcome"] = status_document
+    capability = ActionCapabilityV2.model_validate(
+        ir["capabilities"]["orders.change"]["definition"]
+    )
+    operations: dict[str, OperationV2] = {
+        operation_id: (
+            ReadOperationV2.model_validate(document)
+            if document["kind"] == "read"
+            else ActionOperationV2.model_validate(document)
+        )
+        for operation_id, document in ir["operations"].items()
+    }
+    mutation = operations["orders.update"]
+    assert isinstance(mutation, ActionOperationV2)
+    semantics = ActionSemantics.model_validate(
+        {
+            "method": mutation.http.method,
+            **mutation.http.safety.model_dump(mode="json"),
+            "outcome_resolution": {
+                "mode": "status_query",
+                "operation_id": "orders.outcome",
+                "request_bindings": [
+                    {
+                        "target": "idempotency_key",
+                        "source": "runtime_idempotency_key",
+                    }
+                ],
+                "success_pointer": "/status",
+                "success_values": ["approved"],
+            },
+            "evidence": mutation.evidence[0].model_dump(mode="json"),
+            "authority": "implementation",
+        }
+    )
+    proof = prove_action_capability(
+        capability,
+        operations,
+        action_semantics={"orders.update": semantics},
+        policy=Policy.model_validate(ir["policies"]["orders-write"]),
+    )
+    assert proof.ok
+    ir["capabilities"]["orders.change"]["operation_dependencies"] = [
+        "orders.get",
+        "orders.outcome",
+        "orders.update",
+    ]
+    ir["capabilities"]["orders.change"]["action_proof"] = {
+        "approval_required": proof.approval_required,
+        "effects": list(proof.effects),
+        "maximum_risk": proof.maximum_risk,
+        "mutation_operation_ids": list(proof.mutation_operation_ids),
+        "operation_semantics": {
+            "orders.update": compile_action_semantics_attestation(mutation, semantics)
+        },
+        "required_scopes": list(proof.required_scopes),
+    }
+    return ir
+
+
+def _local_development_guard_ir() -> dict[str, Any]:
+    ir = _ir()
+    capability_document = cast(dict[str, Any], ir["capabilities"]["orders.change"]["definition"])
+    action = cast(dict[str, Any], capability_document["action"])
+    action["local_development_state_guard"] = {
+        "mode": "local_development_runtime_guard",
+        "resource_key_pointer": "/order_id",
+        "read_operation_id": "orders.get",
+        "state_pointer": "/status",
+        "allowed_values": ["pending", "processing"],
+        "terminal_values": ["approved"],
+    }
+    mutation_document = cast(dict[str, Any], ir["operations"]["orders.update"])
+    mutation_document["http"]["safety"] = {
+        "effect": "update",
+        "risk": "low",
+        "reversibility": "reversible",
+        "retry": {"mode": "never"},
+        "idempotency": {"mode": "runtime_deduplicate"},
+        "concurrency": {"mode": "not_supported"},
+    }
+    capability = ActionCapabilityV2.model_validate(capability_document)
+    operations: dict[str, OperationV2] = {
+        "orders.get": ReadOperationV2.model_validate(ir["operations"]["orders.get"]),
+        "orders.update": ActionOperationV2.model_validate(mutation_document),
+    }
+    mutation = cast(ActionOperationV2, operations["orders.update"])
+    semantics = ActionSemantics.model_validate(
+        {
+            "method": mutation.http.method,
+            **mutation.http.safety.model_dump(mode="json"),
+            "evidence": mutation.evidence[0].model_dump(mode="json"),
+            "authority": "implementation",
+        }
+    )
+    proof = prove_action_capability(
+        capability,
+        operations,
+        action_semantics={"orders.update": semantics},
+        policy=Policy.model_validate(ir["policies"]["orders-write"]),
+    )
+    assert proof.ok
+    ir["capabilities"]["orders.change"]["action_proof"] = {
+        "approval_required": proof.approval_required,
+        "effects": list(proof.effects),
+        "maximum_risk": proof.maximum_risk,
+        "mutation_operation_ids": list(proof.mutation_operation_ids),
+        "operation_semantics": {
+            "orders.update": compile_action_semantics_attestation(mutation, semantics)
+        },
+        "required_scopes": list(proof.required_scopes),
+    }
+    return ir
+
+
 def _bound_status_query_ir(
     bindings: list[dict[str, str]],
     *,
@@ -586,6 +728,322 @@ class _Provider(ActionOperationProvider):
             "version": 4,
             "internal": "provider-private",
         }
+
+
+@dataclass
+class _StatefulLocalProvider(_Provider):
+    status: str = "pending"
+
+    async def call_read(
+        self,
+        operation: ReadOperationV2,
+        arguments: Mapping[str, JsonValue],
+        principal_context: PrincipalContext,
+    ) -> ActionReadResult:
+        self.read_calls.append((operation, dict(arguments), principal_context))
+        return ActionReadResult(
+            value={
+                "order_id": arguments["order_id"],
+                "status": self.status,
+                "version": 3,
+                "internal": "provider-private",
+            }
+        )
+
+    async def call_action(
+        self,
+        operation: ActionOperationV2,
+        arguments: Mapping[str, JsonValue],
+        principal_context: PrincipalContext,
+        *,
+        idempotency_key: SecretValue,
+        concurrency_token: JsonValue,
+    ) -> JsonValue:
+        result = await super().call_action(
+            operation,
+            arguments,
+            principal_context,
+            idempotency_key=idempotency_key,
+            concurrency_token=concurrency_token,
+        )
+        self.status = "approved"
+        return result
+
+
+@dataclass
+class _OutcomeLedgerProvider(_Provider):
+    ledger_status: str = "not_found"
+    lose_mutation_response: bool = True
+
+    async def call_read(
+        self,
+        operation: ReadOperationV2,
+        arguments: Mapping[str, JsonValue],
+        principal_context: PrincipalContext,
+    ) -> ActionReadResult:
+        if operation.id != "orders.outcome":
+            return await super().call_read(operation, arguments, principal_context)
+        self.read_calls.append((operation, dict(arguments), principal_context))
+        return ActionReadResult(
+            value={
+                "order_id": "order-1",
+                "status": self.ledger_status,
+                "version": 4,
+                "internal": "provider-private",
+            }
+        )
+
+    async def call_action(
+        self,
+        operation: ActionOperationV2,
+        arguments: Mapping[str, JsonValue],
+        principal_context: PrincipalContext,
+        *,
+        idempotency_key: SecretValue,
+        concurrency_token: JsonValue,
+    ) -> JsonValue:
+        self.action_calls.append(
+            (
+                operation,
+                dict(arguments),
+                principal_context,
+                idempotency_key,
+                concurrency_token,
+            )
+        )
+        self.ledger_status = "approved"
+        if self.lose_mutation_response:
+            raise RuntimeError("private-lost-mutation-response")
+        return {
+            "order_id": "order-1",
+            "status": "approved",
+            "version": 4,
+            "internal": "provider-private",
+        }
+
+
+def _local_execution(*, key: str = "runtime-idempotency") -> ActionCommitExecution:
+    return ActionCommitExecution(
+        input_value={"order_id": "order-1"},
+        preview_value={"order_id": "order-1", "status": "pending", "version": 3},
+        concurrency_token=None,
+        idempotency_key=SecretValue(key),
+    )
+
+
+def _local_executor(
+    provider: ActionOperationProvider,
+) -> tuple[RuntimeActionWorkflowExecutor, ActionCapabilityV2]:
+    ir = _local_development_guard_ir()
+    executor = RuntimeActionWorkflowExecutor(
+        ir,
+        provider=provider,
+        action_sandbox_mode="local_development",
+        resource_lock=InMemoryActionResourceLock(max_entries=8),
+    )
+    capability = ActionCapabilityV2.model_validate(
+        ir["capabilities"]["orders.change"]["definition"]
+    )
+    return executor, capability
+
+
+def test_local_development_guard_is_rejected_at_startup_by_default() -> None:
+    ir = _local_development_guard_ir()
+    executor = RuntimeActionWorkflowExecutor(ir, provider=_Provider())
+
+    with pytest.raises(ActionRuntimeConfigurationError):
+        executor.verified_definition("orders.change")
+
+
+def test_local_development_pack_requires_explicit_deployment_sandbox() -> None:
+    with pytest.raises(ActionRuntimeConfigurationError):
+        create_runtime_action_coordinator(
+            _local_development_guard_ir(),
+            pack_digest="sha256:" + "a" * 64,
+            provider=_Provider(),
+            dependencies=ActionRuntimeDependencies(
+                deployment_policy=DeploymentPolicy(
+                    allowed_effects=frozenset({"read", "update"}),
+                    max_risk="low",
+                    require_durable_action_store=False,
+                    action_audit_mode="best_effort",
+                ),
+                store=InMemoryActionStore(development_only=True),
+                approval_authority=InMemoryApprovalAuthority(development_only=True),
+                audit_sink=_ActionAudit(),
+                audit_salt=b"local-development-audit-salt",
+                resource_lock=InMemoryActionResourceLock(),
+            ),
+        )
+
+
+def test_local_development_pack_loads_with_explicit_sandbox_and_lock() -> None:
+    coordinator = create_runtime_action_coordinator(
+        _local_development_guard_ir(),
+        pack_digest="sha256:" + "a" * 64,
+        provider=_Provider(),
+        dependencies=ActionRuntimeDependencies(
+            deployment_policy=DeploymentPolicy(
+                allowed_effects=frozenset({"read", "update"}),
+                max_risk="low",
+                require_durable_action_store=False,
+                action_audit_mode="best_effort",
+                action_sandbox_mode="local_development",
+            ),
+            store=InMemoryActionStore(development_only=True),
+            approval_authority=InMemoryApprovalAuthority(development_only=True),
+            audit_sink=_ActionAudit(),
+            audit_salt=b"local-development-audit-salt",
+            resource_lock=InMemoryActionResourceLock(),
+        ),
+    )
+
+    assert coordinator.public_manifest()["capabilities"]
+
+
+@pytest.mark.asyncio
+async def test_local_development_resource_lock_is_bounded_and_cleans_up() -> None:
+    lock = InMemoryActionResourceLock(max_entries=1)
+    async with lock.hold("capability:one"):
+        with pytest.raises(ActionResourceLockCapacityError):
+            async with lock.hold("capability:two"):
+                raise AssertionError("capacity guard must fail before entry")
+    async with lock.hold("capability:two"):
+        pass
+
+
+@pytest.mark.asyncio
+async def test_local_development_commit_rejects_state_drift_before_mutation() -> None:
+    provider = _Provider(read_statuses=["processing"])
+    executor, capability = _local_executor(provider)
+
+    with pytest.raises(ActionStateConflictError, match="changed after prepare"):
+        await executor.commit(capability, _local_execution(), _principal())
+
+    assert provider.action_calls == []
+
+
+@pytest.mark.asyncio
+async def test_local_development_commit_returns_fresh_terminal_without_mutation() -> None:
+    provider = _Provider(read_statuses=["approved"])
+    executor, capability = _local_executor(provider)
+
+    result = await executor.commit(capability, _local_execution(), _principal())
+
+    assert cast(dict[str, JsonValue], result)["status"] == "approved"
+    assert provider.action_calls == []
+
+
+@pytest.mark.asyncio
+async def test_local_development_commit_fails_closed_on_fresh_read_error() -> None:
+    provider = _Provider(read_error_on_call=1)
+    executor, capability = _local_executor(provider)
+
+    with pytest.raises(ExecutionError, match="Operation caller failed"):
+        await executor.commit(capability, _local_execution(), _principal())
+
+    assert provider.action_calls == []
+
+
+@pytest.mark.asyncio
+async def test_local_development_lock_serializes_two_handles_for_same_resource() -> None:
+    provider = _StatefulLocalProvider()
+    executor, capability = _local_executor(provider)
+
+    first, second = await asyncio.gather(
+        executor.commit(capability, _local_execution(key="first"), _principal()),
+        executor.commit(capability, _local_execution(key="second"), _principal()),
+    )
+
+    assert cast(dict[str, JsonValue], first)["status"] == "approved"
+    assert cast(dict[str, JsonValue], second)["status"] == "approved"
+    assert len(provider.action_calls) == 1
+    assert len(provider.read_calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_local_development_guard_over_real_http_serializes_and_rechecks() -> None:
+    class Handler(BaseHTTPRequestHandler):
+        state = "pending"
+        get_count = 0
+        post_count = 0
+        fail_reads = False
+        state_lock = threading.Lock()
+
+        def do_GET(self) -> None:
+            with self.state_lock:
+                type(self).get_count += 1
+                if type(self).fail_reads:
+                    self.send_response(503)
+                    self.end_headers()
+                    return
+                body = {
+                    "order_id": "order-1",
+                    "status": self.state,
+                    "version": 3,
+                    "internal": "source-private",
+                }
+            self._json(body)
+
+        def do_POST(self) -> None:
+            length = int(self.headers.get("Content-Length", "0"))
+            json.loads(self.rfile.read(length))
+            with self.state_lock:
+                type(self).post_count += 1
+                type(self).state = "approved"
+                body = {
+                    "order_id": "order-1",
+                    "status": "approved",
+                    "version": 4,
+                    "internal": "source-private",
+                }
+            self._json(body)
+
+        def _json(self, value: dict[str, JsonValue]) -> None:
+            payload = json.dumps(value).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{server.server_port}"
+    try:
+        async with httpx.AsyncClient() as client:
+            provider = HttpProvider(
+                base_url_ref="LOCAL_ACTION_URL",
+                environment={"LOCAL_ACTION_URL": base_url},
+                auth_strategy=NoAuthStrategy(),
+                client=client,
+            )
+            executor, capability = _local_executor(provider)
+            first, second = await asyncio.gather(
+                executor.commit(capability, _local_execution(key="http-first"), _principal()),
+                executor.commit(capability, _local_execution(key="http-second"), _principal()),
+            )
+            Handler.state = "pending"
+            Handler.fail_reads = True
+            with pytest.raises(HttpUpstreamError):
+                await executor.commit(
+                    capability,
+                    _local_execution(key="http-error"),
+                    _principal(),
+                )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert cast(dict[str, JsonValue], first)["status"] == "approved"
+    assert cast(dict[str, JsonValue], second)["status"] == "approved"
+    assert Handler.post_count == 1
+    assert Handler.get_count == 3
 
 
 @pytest.mark.asyncio
@@ -884,6 +1342,91 @@ def _server_serialized_coordinator(
         ),
     )
     return coordinator, authority
+
+
+def _source_key_outcome_coordinator(
+    provider: _OutcomeLedgerProvider,
+    *,
+    store: InMemoryActionStore | None = None,
+    authority: InMemoryApprovalAuthority | None = None,
+) -> tuple[Any, InMemoryApprovalAuthority]:
+    selected_authority = authority or InMemoryApprovalAuthority(development_only=True)
+    coordinator = create_runtime_action_coordinator(
+        _source_key_outcome_ir(),
+        pack_digest="sha256:" + "a" * 64,
+        provider=provider,
+        dependencies=ActionRuntimeDependencies(
+            deployment_policy=DeploymentPolicy(
+                allowed_effects=frozenset({"read", "update"}),
+                max_risk="medium",
+                capability_allowlist=frozenset({"orders.change"}),
+                require_durable_action_store=False,
+                action_audit_mode="best_effort",
+            ),
+            store=store or InMemoryActionStore(development_only=True),
+            approval_authority=selected_authority,
+            audit_sink=_ActionAudit(),
+            audit_salt=b"source-key-outcome-audit-salt",
+        ),
+    )
+    return coordinator, selected_authority
+
+
+@pytest.mark.asyncio
+async def test_source_key_lost_response_recovers_from_sealed_key_without_replay() -> None:
+    provider = _OutcomeLedgerProvider()
+    store = InMemoryActionStore(development_only=True)
+    coordinator, authority = _source_key_outcome_coordinator(provider, store=store)
+    principal = _principal()
+    prepared = await coordinator.prepare("orders.change", {"order_id": "order-1"}, principal)
+    binding = await coordinator.approval_binding_for_trusted_host(prepared.action_handle, principal)
+    approval = await authority.issue_for_testing(binding, expires_in_seconds=60)
+    await coordinator.approve(prepared.action_handle, approval, principal)
+
+    with pytest.raises(ActionStateConflictError) as captured:
+        await coordinator.commit(prepared.action_handle, principal)
+
+    assert "private-lost-mutation-response" not in str(captured.value)
+    assert len(provider.action_calls) == 1
+    # Reconstructing the coordinator simulates a Gateway restart; recovery has
+    # no caller-provided mutation arguments or idempotency material.
+    restarted, _ = _source_key_outcome_coordinator(provider, store=store, authority=authority)
+    recovered = await restarted.status(prepared.action_handle, principal)
+
+    assert recovered.status is PreparedActionStatus.SUCCEEDED
+    assert recovered.result == {
+        "order_id": "order-1",
+        "status": "approved",
+        "version": 4,
+    }
+    assert len(provider.action_calls) == 1
+    outcome_call = [call for call in provider.read_calls if call[0].id == "orders.outcome"]
+    sealed_key = provider.action_calls[0][3].get_secret_value()
+    assert outcome_call[-1][1]["idempotency_key"] == sealed_key
+    assert sealed_key not in repr(recovered)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ledger_status", ["pending", "not_found"])
+async def test_source_key_unresolved_ledger_status_stays_unknown(
+    ledger_status: str,
+) -> None:
+    provider = _OutcomeLedgerProvider()
+    coordinator, authority = _source_key_outcome_coordinator(provider)
+    principal = _principal()
+    prepared = await coordinator.prepare("orders.change", {"order_id": "order-1"}, principal)
+    binding = await coordinator.approval_binding_for_trusted_host(prepared.action_handle, principal)
+    approval = await authority.issue_for_testing(binding, expires_in_seconds=60)
+    await coordinator.approve(prepared.action_handle, approval, principal)
+    with pytest.raises(ActionStateConflictError):
+        await coordinator.commit(prepared.action_handle, principal)
+    provider.ledger_status = ledger_status
+
+    unresolved = await coordinator.status(prepared.action_handle, principal)
+
+    assert unresolved.status is PreparedActionStatus.OUTCOME_UNKNOWN
+    assert unresolved.result is None
+    assert len(provider.action_calls) == 1
 
 
 @pytest.mark.asyncio

@@ -17,7 +17,11 @@ import httpx
 from jsonschema import Draft202012Validator
 from pydantic import JsonValue, ValidationError
 
-from acc_core.models import ActionOperationV2, ReadOperationV2
+from acc_core.models import (
+    ActionOperationV2,
+    JsonPointerApplicationSuccessConfig,
+    ReadOperationV2,
+)
 from acc_core.models.actions import BodyInjectionTargetV2, HeaderInjectionTargetV2
 from acc_runtime.actions.runtime_executor import ActionReadResult
 from acc_runtime.auth import AuthAttempt, AuthUnauthorizedError, HttpAuthStrategy, NoAuthStrategy
@@ -26,6 +30,44 @@ from acc_runtime.credentials import SecretValue, resolve_secret
 from acc_runtime.errors import RuntimeError
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _parse_json_pointer(pointer: str) -> tuple[str, ...]:
+    parts: list[str] = []
+    for raw in pointer.split("/")[1:]:
+        index = 0
+        decoded: list[str] = []
+        while index < len(raw):
+            if raw[index] != "~":
+                decoded.append(raw[index])
+                index += 1
+                continue
+            if index + 1 >= len(raw) or raw[index + 1] not in {"0", "1"}:
+                raise ValueError("application success pointer contains an invalid escape")
+            decoded.append("~" if raw[index + 1] == "0" else "/")
+            index += 2
+        parts.append("".join(decoded))
+    return tuple(parts)
+
+
+def _resolve_json_pointer(value: JsonValue, pointer: str) -> tuple[bool, JsonValue]:
+    current: JsonValue = value
+    for part in _parse_json_pointer(pointer):
+        if isinstance(current, dict):
+            if part not in current:
+                return False, None
+            current = current[part]
+            continue
+        if isinstance(current, list):
+            if not part.isdecimal():
+                return False, None
+            index = int(part)
+            if index >= len(current):
+                return False, None
+            current = current[index]
+            continue
+        return False, None
+    return True, current
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +139,13 @@ class HttpUpstreamError(RuntimeError):
     status = 502
 
 
+class HttpApplicationError(RuntimeError):
+    """A successful HTTP response failed its configured application-success contract."""
+
+    code = "ACC_RUNTIME_HTTP_APPLICATION_ERROR"
+    status = 502
+
+
 class HttpRequestError(RuntimeError):
     code = "ACC_RUNTIME_HTTP_REQUEST_FAILED"
     status = 502
@@ -129,6 +178,58 @@ class SecretResolver(Protocol):
 
     def resolve(self, reference: str) -> str | ResolvedSecret:
         """Resolve one named credential without exposing it in arguments."""
+
+
+type JsonScalar = str | int | float | bool | None
+
+
+@dataclass(frozen=True, slots=True)
+class JsonApplicationSuccessPolicy:
+    """Opt-in application-level success check for JSON envelope APIs.
+
+    ``pointer`` is an RFC 6901 JSON Pointer and ``allowed_values`` contains the
+    exact scalar values that represent application success. A missing pointer
+    is a contract failure. The policy is deliberately opt-in so ordinary APIs
+    and domain payloads with a field named ``code`` retain their existing
+    semantics.
+    """
+
+    pointer: str
+    allowed_values: tuple[JsonScalar, ...]
+
+    @classmethod
+    def from_config(
+        cls, config: JsonPointerApplicationSuccessConfig
+    ) -> JsonApplicationSuccessPolicy:
+        """Create the runtime policy from the Pack's validated declaration."""
+
+        return cls(pointer=config.pointer, allowed_values=tuple(config.allowed_values))
+
+    def __post_init__(self) -> None:
+        if not self.pointer.startswith("/"):
+            raise ValueError("application success pointer must be a non-root JSON Pointer")
+        _parse_json_pointer(self.pointer)
+        if not self.allowed_values:
+            raise ValueError("application success allowed_values must not be empty")
+        seen: set[tuple[type[object], JsonScalar]] = set()
+        for allowed in self.allowed_values:
+            if isinstance(allowed, float) and not math.isfinite(allowed):
+                raise ValueError("application success values must be finite JSON scalars")
+            key = (type(allowed), allowed)
+            if key in seen:
+                raise ValueError("application success values must be type-exact unique")
+            seen.add(key)
+
+    def observed_value(self, value: JsonValue) -> tuple[bool, JsonValue]:
+        found, observed = _resolve_json_pointer(value, self.pointer)
+        return found, observed
+
+    def matches(self, value: JsonValue) -> bool:
+        found, observed = self.observed_value(value)
+        return found and any(
+            type(observed) is type(allowed) and observed == allowed
+            for allowed in self.allowed_values
+        )
 
 
 class EnvironmentSecretResolver:
@@ -173,12 +274,14 @@ class HttpProvider:
         secret_resolver: SecretResolver | None = None,
         auth_strategy: HttpAuthStrategy | None = None,
         environment: Mapping[str, str] | None = None,
+        application_success_policy: JsonApplicationSuccessPolicy | None = None,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self.base_url_ref = base_url_ref
         self._environment = environment
         self._secret_resolver = secret_resolver or EnvironmentSecretResolver(environment)
         self._auth_strategy = auth_strategy or NoAuthStrategy()
+        self._application_success_policy = application_success_policy
         self.client = client
 
     async def call(
@@ -1044,6 +1147,7 @@ class HttpProvider:
             value = None
         else:
             value = self._decode_json_body(operation, response_body)
+        self._enforce_application_success(operation, value)
         return _DecodedResponse(value=value, response_headers=response_headers)
 
     def _decode_json_body(
@@ -1060,6 +1164,28 @@ class HttpProvider:
                 details={"operation": operation.id},
             ) from exc
         return cast(JsonValue, value)
+
+    def _enforce_application_success(
+        self,
+        operation: _ExecutableHttpOperation,
+        value: JsonValue,
+    ) -> None:
+        policy = self._application_success_policy
+        if policy is None or policy.matches(value):
+            return
+        found, observed = policy.observed_value(value)
+        details: dict[str, object] = {"operation": operation.id}
+        if not found:
+            details["application_code"] = "missing"
+        elif type(observed) in {int, float, bool} or observed is None:
+            details["application_code"] = observed
+        else:
+            details["application_code"] = "redacted"
+        LOGGER.warning("HTTP application success contract failed operation=%s", operation.id)
+        raise HttpApplicationError(
+            "upstream returned an application-level error",
+            details=details,
+        )
 
     @staticmethod
     def _response_too_large(

@@ -51,8 +51,13 @@ class LiveGatewayAttestation(_StrictModel):
 class LiveGatewayCase(_StrictModel):
     id: str = Field(min_length=1)
     account: str = Field(min_length=1)
-    tool: str = Field(min_length=1)
-    arguments: dict[str, JsonValue]
+    kind: Literal["tool_call", "operator_approve"] = "tool_call"
+    tool: str | None = Field(default=None, min_length=1)
+    capability_id: str | None = Field(default=None, min_length=1)
+    action_phase: Literal["prepare", "commit", "status"] | None = None
+    prepare_case_id: str | None = Field(default=None, min_length=1)
+    action_handle_from_case: str | None = Field(default=None, min_length=1)
+    arguments: dict[str, JsonValue] = Field(default_factory=dict)
     expected_structured_content: JsonValue | None = None
     expect_error: bool = False
     expected_error_code: str | None = None
@@ -62,6 +67,34 @@ class LiveGatewayCase(_StrictModel):
     def _validate_error_expectation(self) -> Self:
         if self.expected_error_code is not None and not self.expect_error:
             raise ValueError("expected_error_code requires expect_error")
+        if self.kind == "operator_approve":
+            if (
+                self.tool is not None
+                or self.action_phase is not None
+                or self.action_handle_from_case is not None
+                or self.capability_id is None
+                or self.prepare_case_id is None
+                or self.arguments
+                or self.expected_structured_content is not None
+                or self.expect_error
+                or self.expected_error_code is not None
+            ):
+                raise ValueError("operator approval case has a fixed secret-free shape")
+        elif self.tool is None:
+            raise ValueError("tool_call case requires tool")
+        elif {"action_handle", "approval_handle"} & set(self.arguments):
+            raise ValueError("Action handles cannot be serialized in a live profile")
+        elif self.prepare_case_id is not None:
+            raise ValueError("prepare_case_id is reserved for operator approval cases")
+        elif self.action_handle_from_case is not None and self.action_phase not in {
+            "commit",
+            "status",
+        }:
+            raise ValueError("action_handle_from_case requires commit or status phase")
+        elif self.action_phase is not None and self.capability_id is None:
+            raise ValueError("Action tool cases require capability_id")
+        elif self.action_phase in {"commit", "status"} and self.action_handle_from_case is None:
+            raise ValueError("commit and status cases require action_handle_from_case")
         return self
 
 
@@ -120,6 +153,27 @@ class LiveGatewayProfile(_StrictModel):
         referenced = {case.account for case in self.cases} | set(self.isolation.accounts)
         if not referenced <= set(aliases):
             raise ValueError("live cases must reference declared accounts")
+        by_id: dict[str, LiveGatewayCase] = {}
+        for case in self.cases:
+            reference = (
+                case.prepare_case_id
+                if case.kind == "operator_approve"
+                else case.action_handle_from_case
+            )
+            if reference is not None:
+                prepared = by_id.get(reference)
+                if (
+                    prepared is None
+                    or prepared.kind != "tool_call"
+                    or prepared.action_phase != "prepare"
+                    or prepared.account != case.account
+                    or prepared.capability_id != case.capability_id
+                ):
+                    raise ValueError(
+                        "Action case must reference an earlier prepare for the same "
+                        "account and capability"
+                    )
+            by_id[case.id] = case
         return self
 
 

@@ -14,6 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal, Never, Protocol
 
+from acc_runtime.auth import AuthenticationResult
 from acc_runtime.context import PrincipalContext
 from acc_runtime.credentials import SecretValue
 from acc_runtime.errors import RuntimeError
@@ -52,7 +53,12 @@ class GatewaySessionStore(Protocol):
         principal_context: PrincipalContext,
         source_expires_at: float | None = None,
         source_refresh_at: float | None = None,
+        authentication: AuthenticationResult | None = None,
     ) -> GatewaySessionCreation: ...
+
+    async def restore_authentications(
+        self,
+    ) -> tuple[tuple[GatewaySessionRecord, AuthenticationResult], ...]: ...
 
     async def resolve_token(self, token: str | SecretValue) -> GatewaySessionRecord: ...
 
@@ -71,6 +77,8 @@ class GatewaySessionStore(Protocol):
     async def purge_expired(self) -> tuple[GatewaySessionRecord, ...]: ...
 
     async def close(self) -> tuple[GatewaySessionRecord, ...]: ...
+
+    async def checkpoint_close(self) -> tuple[GatewaySessionRecord, ...]: ...
 
 
 _URLSAFE_TOKEN = re.compile(r"^[A-Za-z0-9_-]{43,}$")
@@ -129,6 +137,7 @@ class InMemoryGatewaySessionStore:
         principal_context: PrincipalContext,
         source_expires_at: float | None = None,
         source_refresh_at: float | None = None,
+        authentication: AuthenticationResult | None = None,
     ) -> GatewaySessionCreation:
         try:
             outcome = await self._create_outcome(
@@ -141,8 +150,26 @@ class InMemoryGatewaySessionStore:
             outcome = _CANCELLED
         except Exception:
             outcome = _SessionFailure("invalid", "create_failed")
-        del self, principal_context
+        del self, principal_context, authentication
         return _unwrap_create(outcome)
+
+    async def restore_authentications(
+        self,
+    ) -> tuple[tuple[GatewaySessionRecord, AuthenticationResult], ...]:
+        return ()
+
+    async def restore_record(self, record: GatewaySessionRecord) -> None:
+        """Seed a validated durable record before the Gateway starts serving."""
+
+        if not isinstance(record, GatewaySessionRecord):
+            raise TypeError("restored Gateway session record is invalid")
+        async with self._lock:
+            if self._closed or record.token_digest in self._by_digest:
+                raise GatewaySessionInvalidError("Gateway session restore failed.")
+            if record.session_id in self._digest_by_session_id:
+                raise GatewaySessionInvalidError("Gateway session restore failed.")
+            self._by_digest[record.token_digest] = record
+            self._digest_by_session_id[record.session_id] = record.token_digest
 
     async def _create_outcome(
         self,
@@ -414,6 +441,9 @@ class InMemoryGatewaySessionStore:
             outcome = _SessionFailure("invalid", "close_failed")
         del self
         return _unwrap_records(outcome)
+
+    async def checkpoint_close(self) -> tuple[GatewaySessionRecord, ...]:
+        return await self.close()
 
     async def _close_outcome(self) -> tuple[GatewaySessionRecord, ...]:
         async with self._lock:

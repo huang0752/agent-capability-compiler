@@ -29,8 +29,10 @@ def _complete_inventory_document() -> dict[str, Any]:
                 "id": "customers",
                 "kind": "page",
                 "route_or_entry": "/customers",
+                "usage_context": "customers-list-page",
                 "business_purpose": "Manage customers",
                 "evidence_sources": ["customer-page"],
+                "entry_evidence": _evidence(),
             }
         ],
         "interactions": [
@@ -48,6 +50,23 @@ def _complete_inventory_document() -> dict[str, Any]:
                 "related_data": [],
                 "result_consumption": [],
                 "states": [],
+                "dimension_dispositions": [
+                    {
+                        "dimension": dimension,
+                        "applicability": "not_applicable",
+                        "rationale": f"No {dimension} behavior applies to initial load.",
+                        "evidence": _evidence(),
+                    }
+                    for dimension in (
+                        "conditions",
+                        "defaults",
+                        "input_bindings",
+                        "option_sources",
+                        "related_data",
+                        "result_consumption",
+                        "states",
+                    )
+                ],
                 "evidence_claims": [],
                 "unknowns": [],
             }
@@ -61,6 +80,37 @@ def test_complete_inventory_has_a_surface_interaction_denominator() -> None:
 
     assert inventory.scope.mode == "complete"
     assert inventory.interactions[0].trigger.kind == "screen_load"
+
+
+def test_discovered_inventory_keeps_legacy_dimensions_as_migration_gaps() -> None:
+    document = _complete_inventory_document()
+    document["scope"]["mode"] = "discovered"
+    document["interactions"][0]["dimension_dispositions"] = []
+    document["surfaces"][0].pop("usage_context")
+    document["surfaces"][0].pop("entry_evidence")
+
+    inventory = UIInteractionInventory.model_validate(document)
+
+    assert inventory.scope.mode == "discovered"
+    assert inventory.interactions[0].dimension_dispositions == []
+
+
+def test_inventory_schema_exposes_surface_context_and_dimension_dispositions() -> None:
+    schema = UIInteractionInventory.model_json_schema()
+
+    surface = schema["$defs"]["UISurface"]["properties"]
+    interaction = schema["$defs"]["UIInteraction"]["properties"]
+    assert {"usage_context", "entry_evidence"} <= set(surface)
+    assert "dimension_dispositions" in interaction
+    assert set(schema["$defs"]["InteractionDimension"]["enum"]) == {
+        "conditions",
+        "defaults",
+        "input_bindings",
+        "option_sources",
+        "related_data",
+        "result_consumption",
+        "states",
+    }
 
 
 def test_inventory_accepts_platform_neutral_nested_interaction_facts() -> None:

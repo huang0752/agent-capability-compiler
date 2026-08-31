@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from typing import Annotated, Literal
 
-from pydantic import ConfigDict, Field, JsonValue
+from pydantic import ConfigDict, Field, JsonValue, ValidatorFunctionWrapHandler, WrapValidator
 
 from acc_core.contracts import JsonPointer
 from acc_core.models import StrictModel
@@ -76,9 +76,82 @@ class PresentExpression(ExpressionModel):
     operand: ConditionOperand
 
 
+def _parse_condition_expression(value: object) -> object:
+    """Parse a bounded expression without relying on pydantic-core recursion.
+
+    Pydantic's recursive tagged-union validator has a lower implementation
+    recursion ceiling than ACC's public 64-level condition budget on some
+    releases.  Build the already-bounded tree bottom-up so the public contract
+    remains stable across pydantic-core versions.
+    """
+
+    if isinstance(
+        value,
+        (AllExpression, AnyExpression, NotExpression, ComparisonExpression, PresentExpression),
+    ):
+        return value
+    if not isinstance(value, dict):
+        return value
+
+    stack: list[tuple[dict[object, object], bool, int]] = [(value, False, 1)]
+    parsed: dict[int, object] = {}
+    total_nodes = 0
+    while stack:
+        node, visited, depth = stack.pop()
+        if not visited:
+            if depth > MAX_CONDITION_DEPTH:
+                raise ValueError("condition expression exceeds maximum depth")
+            total_nodes += 1
+            if total_nodes > MAX_CONDITION_NODES:
+                raise ValueError("condition expression exceeds maximum node count")
+            operator = node.get("operator")
+            stack.append((node, True, depth))
+            if operator in {"all", "any"}:
+                operands = node.get("operands")
+                if isinstance(operands, list):
+                    for child in reversed(operands):
+                        if isinstance(child, dict):
+                            stack.append((child, False, depth + 1))
+            elif operator == "not":
+                child = node.get("operand")
+                if isinstance(child, dict):
+                    stack.append((child, False, depth + 1))
+            continue
+
+        operator = node.get("operator")
+        operands = node.get("operands")
+        if operator in {"all", "any"} and isinstance(operands, list):
+            children = [parsed.get(id(child), child) for child in operands]
+            document = {**node, "operands": children}
+            model = AllExpression if operator == "all" else AnyExpression
+            parsed[id(node)] = model.model_validate(document)
+        elif operator == "not" and isinstance(node.get("operand"), dict):
+            parsed[id(node)] = NotExpression.model_validate(
+                {**node, "operand": parsed.get(id(node["operand"]), node["operand"])}
+            )
+        elif operator in {"eq", "ne", "in"}:
+            parsed[id(node)] = ComparisonExpression.model_validate(node)
+        elif operator == "present":
+            parsed[id(node)] = PresentExpression.model_validate(node)
+        else:
+            return value
+    return parsed.get(id(value), value)
+
+
+def _condition_expression_wrap(value: object, handler: ValidatorFunctionWrapHandler) -> object:
+    parsed = _parse_condition_expression(value)
+    if isinstance(
+        parsed,
+        (AllExpression, AnyExpression, NotExpression, ComparisonExpression, PresentExpression),
+    ):
+        return parsed
+    return handler(parsed)
+
+
 type ConditionExpression = Annotated[
     AllExpression | AnyExpression | NotExpression | ComparisonExpression | PresentExpression,
     Field(discriminator="operator"),
+    WrapValidator(_condition_expression_wrap),
 ]
 
 

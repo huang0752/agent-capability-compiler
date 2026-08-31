@@ -204,6 +204,26 @@ async def test_exact_limit_body_is_replayed_unchanged() -> None:
 
 
 @pytest.mark.anyio
+async def test_route_specific_limit_rejects_before_global_body_buffering() -> None:
+    app = RequestSecurityMiddleware(
+        _echo,
+        allowed_hosts=("gateway.test",),
+        max_body_size=4096,
+        path_body_limits={"/operator/actions/approve": 8},
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://gateway.test",
+    ) as client:
+        limited = await client.post("/operator/actions/approve", content=b"123456789")
+        ordinary = await client.post("/runtime/sessions", content=b"123456789")
+
+    assert limited.status_code == 413
+    assert ordinary.status_code == 200
+    assert ordinary.json() == {"size": 9}
+
+
+@pytest.mark.anyio
 async def test_cancellation_traceback_does_not_retain_body_or_bearer() -> None:
     password = "traceback-password-secret"
     gateway_token = "traceback-gateway-token-secret"

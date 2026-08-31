@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from fs_links import create_link
+
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = ROOT / "skills" / "acc-engineer" / "scripts" / "summarize_diagnostics.py"
 
@@ -68,7 +70,7 @@ def test_summarize_rejects_oversized_and_symlink_inputs(tmp_path: Path) -> None:
     input_file = tmp_path / "input.json"
     input_file.write_text('{"diagnostics":[]}', encoding="utf-8")
     linked = tmp_path / "linked.json"
-    linked.symlink_to(input_file)
+    create_link(linked, input_file)
 
     oversized, oversized_payload = _run("--input", str(input_file), "--max-file-bytes", "4")
     symlinked, symlinked_payload = _run("--input", str(linked))

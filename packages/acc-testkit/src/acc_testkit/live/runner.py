@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import ipaddress
 from collections.abc import Callable, Mapping
 from contextlib import AsyncExitStack
+from dataclasses import dataclass
 from types import TracebackType
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 import httpx
 from mcp import types
 
+from acc_core.quality.output_size import canonical_json_bytes
 from acc_runtime.credentials import SecretValue
 from acc_runtime.gateway import GatewayRuntimeInfo
 from acc_testkit.live.models import (
@@ -21,6 +26,7 @@ from acc_testkit.live.models import (
     LiveGatewayReport,
     LiveStepResult,
     LiveStepStatus,
+    SecretRef,
 )
 from acc_testkit.mcp_client import (
     GatewayLogoutProbe,
@@ -69,6 +75,30 @@ type SessionClientFactory = Callable[..., Any]
 type McpClientFactory = Callable[..., Any]
 
 
+@dataclass(frozen=True, slots=True)
+class OperatorApprovalConfig:
+    """Runtime-only SecretRef for the fixed loopback Operator endpoint."""
+
+    endpoint_url: str
+    secret_ref: SecretRef
+
+    def __post_init__(self) -> None:
+        if type(self.secret_ref) is not SecretRef:
+            raise TypeError("operator approval secret_ref must be a SecretRef")
+        parsed = urlsplit(self.endpoint_url)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path != "/operator/actions/approve"
+            or parsed.query
+            or parsed.fragment
+            or not _loopback_host(parsed.hostname)
+        ):
+            raise ValueError("Operator approval endpoint must be the fixed loopback HTTP URL")
+
+
 class LiveGatewayRunner:
     """Run protocol-generic probes and keep source-specific behavior in profile cases."""
 
@@ -80,12 +110,20 @@ class LiveGatewayRunner:
         transport: httpx.AsyncBaseTransport | None = None,
         session_client_factory: SessionClientFactory | None = None,
         mcp_client_factory: McpClientFactory | None = None,
+        operator_approval: OperatorApprovalConfig | None = None,
     ) -> None:
         self.profile = profile
         self.transport = transport
         self._credentials = _resolve_credentials(profile.accounts, environment)
         self._session_factory = session_client_factory or self._default_session_factory
         self._mcp_factory = mcp_client_factory or self._default_mcp_factory
+        self._operator_approval = operator_approval
+        self._operator_secret = _resolve_operator_secret(operator_approval, environment)
+        if any(case.kind == "operator_approve" for case in profile.cases):
+            if operator_approval is None or self._operator_secret is None:
+                raise ValueError("operator approval cases require a provisioned runtime hook")
+            if _origin(operator_approval.endpoint_url) != _origin(profile.gateway_url):
+                raise ValueError("Operator approval endpoint must use the exact Gateway origin")
 
     def __repr__(self) -> str:
         return f"LiveGatewayRunner(gateway_url={self.profile.gateway_url!r})"
@@ -103,6 +141,7 @@ class LiveGatewayRunner:
         sessions: dict[str, _SessionClient] = {}
         mcps: dict[str, _McpClient] = {}
         listed_tools: dict[str, frozenset[str]] = {}
+        action_handles: dict[str, SecretValue] = {}
         pack_sha256: str | None = None
         session_stack = AsyncExitStack()
         mcp_stacks: dict[str, AsyncExitStack] = {}
@@ -179,14 +218,50 @@ class LiveGatewayRunner:
 
             for case in self.profile.cases:
                 step_id = f"case.{case.id}"
+                if case.kind == "operator_approve":
+                    handle = action_handles.get(case.prepare_case_id or "")
+                    if handle is None:
+                        steps.append(_skipped(step_id, required=case.required))
+                        continue
+                    try:
+                        evidence = await self._operator_approve(case, handle)
+                        steps.append(_passed(step_id, required=case.required, evidence=evidence))
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        steps.append(_failed(step_id, required=case.required))
+                    continue
                 case_mcp = mcps.get(case.account)
+                assert case.tool is not None
                 if case_mcp is None or case.tool not in listed_tools.get(case.account, frozenset()):
                     steps.append(_skipped(step_id, required=case.required))
                     continue
                 try:
-                    result = await case_mcp.call_tool(case.tool, case.arguments)
+                    arguments = dict(case.arguments)
+                    if case.action_handle_from_case is not None:
+                        handle = action_handles.get(case.action_handle_from_case)
+                        if handle is None:
+                            steps.append(_skipped(step_id, required=case.required))
+                            continue
+                        arguments["action_handle"] = handle.get_secret_value()
+                    result = await case_mcp.call_tool(case.tool, arguments)
                     if _case_matches(result, case):
-                        steps.append(_passed(step_id, required=case.required))
+                        evidence = (
+                            {}
+                            if case.expect_error
+                            else {
+                                "response_bytes": len(
+                                    canonical_json_bytes(result.structuredContent)
+                                )
+                            }
+                        )
+                        if case.action_phase == "prepare":
+                            handle = _prepared_action_handle(result)
+                            if handle is None:
+                                steps.append(_failed(step_id, required=case.required))
+                                continue
+                            action_handles[case.id] = handle
+                        steps.append(_passed(step_id, required=case.required, evidence=evidence))
                     else:
                         steps.append(_failed(step_id, required=case.required))
                 except asyncio.CancelledError:
@@ -364,6 +439,57 @@ class LiveGatewayRunner:
             await session_stack.aclose()
         return LiveGatewayReport.from_steps(steps, pack_sha256=pack_sha256)
 
+    async def _operator_approve(
+        self, case: LiveGatewayCase, action_handle: SecretValue
+    ) -> dict[str, Any]:
+        config = self._operator_approval
+        secret = self._operator_secret
+        if config is None or secret is None or case.capability_id is None:
+            raise ValueError("operator approval hook is not provisioned")
+        async with httpx.AsyncClient(
+            transport=self.transport,
+            follow_redirects=False,
+            timeout=5.0,
+        ) as client:
+            response = await client.post(
+                config.endpoint_url,
+                headers={"X-ACC-Operator-Authorization": (f"Bearer {secret.get_secret_value()}")},
+                json={"action_handle": action_handle.get_secret_value()},
+            )
+        if response.status_code != 200:
+            raise ValueError("operator approval failed")
+        payload = response.json()
+        if payload != {"capability_id": case.capability_id, "status": "approved"}:
+            raise ValueError("operator approval returned an invalid minimized response")
+        prepare_id = case.prepare_case_id or ""
+        related = [
+            item
+            for item in self.profile.cases
+            if item.action_handle_from_case == prepare_id
+            and item.account == case.account
+            and item.capability_id == case.capability_id
+        ]
+        commit = next((item.id for item in related if item.action_phase == "commit"), None)
+        status = next((item.id for item in related if item.action_phase == "status"), None)
+        if commit is None or status is None:
+            raise ValueError("operator approval requires declared commit and status cases")
+        parsed = urlsplit(config.endpoint_url)
+        return {
+            "approval_mechanism": "loopback_operator_http_v1",
+            "gateway_origin_sha256": hashlib.sha256(
+                _origin(config.endpoint_url).encode()
+            ).hexdigest(),
+            "endpoint_path_sha256": hashlib.sha256(parsed.path.encode()).hexdigest(),
+            "prepare_case_id": prepare_id,
+            "operator_case_id": case.id,
+            "commit_case_id": commit,
+            "status_case_id": status,
+            "capability_id": case.capability_id,
+            "account": case.account,
+            "approve_tool_invoked": False,
+            "operator_invoked": True,
+        }
+
 
 def _resolve_credentials(
     accounts: tuple[LiveGatewayAccount, ...], environment: Mapping[str, str]
@@ -380,6 +506,49 @@ def _resolve_credentials(
     return resolved
 
 
+def _resolve_operator_secret(
+    config: OperatorApprovalConfig | None, environment: Mapping[str, str]
+) -> SecretValue | None:
+    if config is None:
+        return None
+    value = environment.get(config.secret_ref.env)
+    if value is None or len(value.encode()) < 32:
+        return None
+    return SecretValue(value)
+
+
+def _loopback_host(host: str | None) -> bool:
+    if host is None:
+        return False
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _origin(value: str) -> str:
+    parsed = urlsplit(value)
+    host = parsed.hostname
+    if host is None:
+        raise ValueError("URL has no host")
+    rendered_host = f"[{host.lower()}]" if ":" in host else host.lower()
+    default_port = 80 if parsed.scheme == "http" else 443
+    port = parsed.port or default_port
+    return f"{parsed.scheme.lower()}://{rendered_host}:{port}"
+
+
+def _prepared_action_handle(result: types.CallToolResult) -> SecretValue | None:
+    payload = result.structuredContent
+    if isinstance(payload, Mapping) and set(payload) == {"result"}:
+        payload = payload["result"]
+    if not isinstance(payload, Mapping):
+        return None
+    value = payload.get("action_handle")
+    return SecretValue(value) if isinstance(value, str) and value else None
+
+
 def _attestation_matches(actual: GatewayRuntimeInfo, expected: LiveGatewayAttestation) -> bool:
     return (
         actual.pack_sha256 == expected.pack_sha256
@@ -392,7 +561,11 @@ def _attestation_matches(actual: GatewayRuntimeInfo, expected: LiveGatewayAttest
 
 
 def _required_tools(profile: LiveGatewayProfile, alias: str) -> frozenset[str]:
-    names = {case.tool for case in profile.cases if case.account == alias}
+    names = {
+        case.tool
+        for case in profile.cases
+        if case.account == alias and case.kind == "tool_call" and case.tool is not None
+    }
     if alias in profile.isolation.accounts:
         names.add(profile.isolation.tool)
     return frozenset(names)
@@ -444,4 +617,9 @@ def _skipped(step_id: str, *, required: bool) -> LiveStepResult:
     return LiveStepResult(id=step_id, required=required, status=LiveStepStatus.SKIPPED)
 
 
-__all__ = ["LiveGatewayRunner", "McpClientFactory", "SessionClientFactory"]
+__all__ = [
+    "LiveGatewayRunner",
+    "McpClientFactory",
+    "OperatorApprovalConfig",
+    "SessionClientFactory",
+]

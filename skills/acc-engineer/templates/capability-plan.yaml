@@ -49,6 +49,8 @@ coverage:
   # covers every system-complete eligible excluded decision. The authoritative
   # rationale, evidence, approval, replacements, and capability IDs remain in
   # Scope Inventory; never add a free-text deliberately_excluded section here.
+  # In system_complete this list never closes an eligible Action intent; keep
+  # missing write-sandbox/safety evidence under blocked_on_evidence instead.
   exclusion_decision_refs: []
   high_value_operations:
     - REPLACE_WITH_OPERATION_ID

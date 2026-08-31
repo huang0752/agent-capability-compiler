@@ -55,6 +55,7 @@ version = "0.1.0"
 source = { editable = "packages/acc-runtime" }
 dependencies = [
     { name = "acc-core" },
+    { name = "cryptography" },
     { name = "httpx" },
     { name = "jsonschema" },
     { name = "mcp" },
@@ -66,6 +67,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "acc-core", editable = "packages/acc-core" },
+    { name = "cryptography", specifier = ">=45,<51" },
     { name = "httpx", specifier = ">=0.28,<1" },
     { name = "jsonschema", specifier = ">=4.23,<5" },
     { name = "mcp", specifier = ">=1.29,<2" },

@@ -22,6 +22,15 @@ from verify_read_only_workspace import (
 
 COMMAND = "interaction-audit"
 AUTHORITIES = {"contract", "implementation", "test", "observation"}
+DIMENSIONS = {
+    "conditions",
+    "defaults",
+    "input_bindings",
+    "option_sources",
+    "related_data",
+    "result_consumption",
+    "states",
+}
 SHA256_DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
 
@@ -123,6 +132,12 @@ def valid_evidence(value: object) -> bool:
     )
 
 
+def evidence_source_id(value: object) -> str | None:
+    evidence = mapping(value)
+    source_id = evidence.get("source_id") if evidence is not None else None
+    return source_id if isinstance(source_id, str) and bool(source_id.strip()) else None
+
+
 def valid_evidence_claim(value: object) -> bool:
     claim = mapping(value)
     return bool(
@@ -210,7 +225,14 @@ def audit_documents(
     interaction_ids = {
         value for interaction in interactions if (value := identifier(interaction)) is not None
     }
+    ui_scope = mapping(ui_inventory.get("scope")) or {}
+    surfaces_by_id = {
+        identified_surface: surface
+        for surface in surfaces
+        if (identified_surface := identifier(surface)) is not None
+    }
 
+    surface_contexts: set[str] = set()
     for index, surface in enumerate(surfaces):
         if non_empty_strings(surface.get("evidence_sources")) is None:
             issue(
@@ -220,6 +242,30 @@ def audit_documents(
                 path="ui-interaction-inventory.yaml",
                 pointer=f"/surfaces/{index}/evidence_sources",
             )
+        if ui_scope.get("mode") == "complete":
+            usage_context = surface.get("usage_context")
+            if (
+                not isinstance(usage_context, str)
+                or not usage_context.strip()
+                or not valid_evidence(surface.get("entry_evidence"))
+            ):
+                issue(
+                    diagnostics,
+                    "ACC_UI_SURFACE_ENTRY_EVIDENCE_REQUIRED",
+                    "complete surface requires usage context and immutable entry evidence",
+                    path="ui-interaction-inventory.yaml",
+                    pointer=f"/surfaces/{index}",
+                )
+            elif usage_context in surface_contexts:
+                issue(
+                    diagnostics,
+                    "ACC_UI_SURFACE_CONTEXT_DUPLICATE",
+                    "surface usage contexts must be unique instead of folded by endpoint",
+                    path="ui-interaction-inventory.yaml",
+                    pointer=f"/surfaces/{index}/usage_context",
+                )
+            else:
+                surface_contexts.add(usage_context)
 
     unresolved = 0
     for index, interaction in enumerate(interactions):
@@ -269,6 +315,64 @@ def audit_documents(
             unresolved += 1
         else:
             unresolved += len(unknowns)
+        if ui_scope.get("mode") == "complete":
+            claim_source_ids = {
+                source_id
+                for claim in records(interaction, "evidence_claims")
+                if (evidence := mapping(claim.get("evidence"))) is not None
+                if (source_id := evidence_source_id(evidence)) is not None
+            }
+            linked_surface = surfaces_by_id.get(surface_id) if isinstance(surface_id, str) else None
+            surface_source_ids = (
+                set(non_empty_strings(linked_surface.get("evidence_sources")) or [])
+                if linked_surface is not None
+                else set()
+            )
+            dispositions = records(interaction, "dimension_dispositions")
+            disposition_dimensions = {
+                item.get("dimension")
+                for item in dispositions
+                if isinstance(item.get("dimension"), str)
+                and item.get("applicability") in {"applicable", "not_applicable"}
+                and isinstance(item.get("rationale"), str)
+                and bool(str(item.get("rationale")).strip())
+                and valid_evidence(item.get("evidence"))
+            }
+            if disposition_dimensions != DIMENSIONS or len(dispositions) != len(DIMENSIONS):
+                issue(
+                    diagnostics,
+                    "ACC_UI_DIMENSION_DISPOSITION_REQUIRED",
+                    "complete interaction requires seven evidenced dimension dispositions",
+                    path="ui-interaction-inventory.yaml",
+                    pointer=f"/interactions/{index}/dimension_dispositions",
+                )
+            for disposition in dispositions:
+                dimension = disposition.get("dimension")
+                if not isinstance(dimension, str) or dimension not in DIMENSIONS:
+                    continue
+                content = interaction.get(dimension)
+                populated = isinstance(content, list) and bool(content)
+                if (disposition.get("applicability") == "applicable") != populated:
+                    issue(
+                        diagnostics,
+                        "ACC_UI_DIMENSION_DISPOSITION_MISMATCH",
+                        "dimension content must match its evidenced applicability",
+                        path="ui-interaction-inventory.yaml",
+                        pointer=f"/interactions/{index}/{dimension}",
+                    )
+                source_id = evidence_source_id(disposition.get("evidence"))
+                if source_id not in claim_source_ids or source_id not in surface_source_ids:
+                    issue(
+                        diagnostics,
+                        "ACC_UI_DIMENSION_EVIDENCE_UNRESOLVED",
+                        "dimension evidence must resolve through interaction claims and "
+                        "surface evidence sources",
+                        path="ui-interaction-inventory.yaml",
+                        pointer=(
+                            f"/interactions/{index}/dimension_dispositions/"
+                            f"{dimension}/evidence/source_id"
+                        ),
+                    )
 
     for index, route in enumerate(scope_routes):
         linked_interactions = non_empty_strings(route.get("interaction_ids"), allow_empty=True)
@@ -324,6 +428,43 @@ def audit_documents(
                     pointer=f"/interaction_ids/{offset}",
                 )
 
+    adopted = {
+        interaction_id
+        for _, contract in contracts
+        for interaction_id in (
+            non_empty_strings(contract.get("interaction_ids"), allow_empty=True) or []
+        )
+    }
+    omitted: set[str] = set()
+    for contract_path, contract in contracts:
+        for omission_index, omission in enumerate(records(contract, "omissions")):
+            omitted_interaction_id = omission.get("interaction_id")
+            if (
+                not isinstance(omitted_interaction_id, str)
+                or omitted_interaction_id not in interaction_ids
+                or not isinstance(omission.get("justification"), str)
+                or not str(omission.get("justification")).strip()
+                or omission.get("authority") not in {"contract", "implementation", "test"}
+                or not valid_evidence(omission.get("evidence"))
+            ):
+                issue(
+                    diagnostics,
+                    "ACC_UI_INTERACTION_OMISSION_INVALID",
+                    "omitted interaction requires immutable evidence and explicit authority",
+                    path=contract_path,
+                    pointer=f"/omissions/{omission_index}",
+                )
+            elif omitted_interaction_id in adopted:
+                issue(
+                    diagnostics,
+                    "ACC_UI_INTERACTION_OMISSION_INVALID",
+                    "interaction cannot be both adopted and omitted",
+                    path=contract_path,
+                    pointer=f"/omissions/{omission_index}/interaction_id",
+                )
+            else:
+                omitted.add(omitted_interaction_id)
+
     scope = mapping(ui_inventory.get("scope")) or {}
     mode = scope.get("mode") if isinstance(scope.get("mode"), str) else None
     summary = mapping(ui_inventory.get("summary")) or {}
@@ -370,6 +511,23 @@ def audit_documents(
             "complete interaction scope cannot contain unresolved items",
             path="ui-interaction-inventory.yaml",
             pointer="/summary/unresolved",
+        )
+    if mode == "complete" and interaction_ids - adopted - omitted:
+        issue(
+            diagnostics,
+            "ACC_UI_SURFACE_COVERAGE_INCOMPLETE",
+            "complete interactions must be adopted or explicitly omitted with evidence",
+            path="ui-interaction-inventory.yaml",
+            pointer="/interactions",
+        )
+    scope_selection = mapping(scope_inventory.get("scope")) or {}
+    if scope_selection.get("mode") == "system_complete" and interactions and mode != "complete":
+        issue(
+            diagnostics,
+            "ACC_UI_SYSTEM_SCOPE_INCOMPLETE",
+            "system-complete route scope with frontend interactions requires complete UI scope",
+            path="ui-interaction-inventory.yaml",
+            pointer="/scope/mode",
         )
     if (
         summary.get("surfaces") != len(surfaces)

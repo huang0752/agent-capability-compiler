@@ -1,4 +1,4 @@
-"""Strict, read-only contracts for out-of-process ACC adapters."""
+"""Strict contracts for out-of-process ACC adapters."""
 
 from __future__ import annotations
 
@@ -10,7 +10,23 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 NonEmptyString = Annotated[str, Field(min_length=1)]
 AdapterMethod = Literal["GET", "HEAD"]
+AdapterActionMethod = Literal["POST", "PUT", "PATCH", "DELETE"]
 _ROUTE_PARAMETER = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*\}")
+_HEADER_NAME = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+_FORBIDDEN_CONTROL_HEADERS = frozenset(
+    {
+        "authorization",
+        "connection",
+        "content-length",
+        "cookie",
+        "host",
+        "proxy-authorization",
+        "te",
+        "trailer",
+        "transfer-encoding",
+        "upgrade",
+    }
+)
 
 
 class StrictAdapterModel(BaseModel):
@@ -66,6 +82,132 @@ class AdapterOperation(StrictAdapterModel):
         return _validate_path(value, static=False)
 
 
+def _validate_json_pointer(value: str) -> str:
+    if not value or not value.startswith("/"):
+        raise ValueError("value must be an absolute RFC 6901 JSON Pointer")
+    for token in value.split("/")[1:]:
+        index = 0
+        while index < len(token):
+            if token[index] != "~":
+                index += 1
+                continue
+            if index + 1 >= len(token) or token[index + 1] not in {"0", "1"}:
+                raise ValueError("value must be a valid RFC 6901 JSON Pointer")
+            index += 2
+    return value
+
+
+class AdapterHeaderTarget(StrictAdapterModel):
+    """A Runtime-owned Action control carried in a non-sensitive header."""
+
+    kind: Literal["header"]
+    name: NonEmptyString
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        if _HEADER_NAME.fullmatch(value) is None or value.casefold() in _FORBIDDEN_CONTROL_HEADERS:
+            raise ValueError("Action control header is invalid or reserved")
+        return value
+
+
+class AdapterBodyTarget(StrictAdapterModel):
+    """A Runtime-owned Action control carried at a JSON body pointer."""
+
+    kind: Literal["body"]
+    pointer: NonEmptyString
+
+    @field_validator("pointer")
+    @classmethod
+    def validate_pointer(cls, value: str) -> str:
+        return _validate_json_pointer(value)
+
+
+type AdapterControlTarget = Annotated[
+    AdapterHeaderTarget | AdapterBodyTarget,
+    Field(discriminator="kind"),
+]
+
+
+class AdapterResponseHeaderToken(StrictAdapterModel):
+    """Capture an optimistic token from a preview response header."""
+
+    kind: Literal["response_header"]
+    name: NonEmptyString
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        if _HEADER_NAME.fullmatch(value) is None:
+            raise ValueError("concurrency token header is invalid")
+        return value
+
+
+class AdapterResponseBodyToken(StrictAdapterModel):
+    """Capture an optimistic token from a preview response body."""
+
+    kind: Literal["body"]
+    pointer: NonEmptyString
+
+    @field_validator("pointer")
+    @classmethod
+    def validate_pointer(cls, value: str) -> str:
+        return _validate_json_pointer(value)
+
+
+type AdapterConcurrencyToken = Annotated[
+    AdapterResponseHeaderToken | AdapterResponseBodyToken,
+    Field(discriminator="kind"),
+]
+
+
+class AdapterSourceKeyIdempotency(StrictAdapterModel):
+    """Require a Runtime-owned key that the source transaction deduplicates."""
+
+    mode: Literal["source_key"]
+    target: AdapterControlTarget
+
+
+class AdapterRequiredConcurrency(StrictAdapterModel):
+    """Require preview token capture and commit-time precondition injection."""
+
+    mode: Literal["required"]
+    token: AdapterConcurrencyToken
+    precondition: AdapterControlTarget
+
+
+class AdapterActionSafety(StrictAdapterModel):
+    """Non-optional production invariants for one mutating adapter route."""
+
+    idempotency: AdapterSourceKeyIdempotency
+    concurrency: AdapterRequiredConcurrency
+    transactional_outcome: Literal[True]
+    authorization: Literal["source_revalidated"]
+    max_request_bytes: Annotated[int, Field(ge=1, le=100 * 1024 * 1024)]
+    max_response_bytes: Annotated[int, Field(ge=1, le=100 * 1024 * 1024)]
+
+    @model_validator(mode="after")
+    def validate_control_targets(self) -> Self:
+        if self.idempotency.target == self.concurrency.precondition:
+            raise ValueError("idempotency and concurrency controls must use distinct targets")
+        return self
+
+
+class AdapterActionOperation(StrictAdapterModel):
+    """One fixed mutation route with complete production safety metadata."""
+
+    id: NonEmptyString
+    method: AdapterActionMethod
+    path: NonEmptyString
+    summary: NonEmptyString
+    safety: AdapterActionSafety
+
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, value: str) -> str:
+        return _validate_path(value, static=False)
+
+
 class AdapterHealth(StrictAdapterModel):
     """Health endpoint location and public, static service metadata."""
 
@@ -88,7 +230,7 @@ class AdapterContract(StrictAdapterModel):
     health: AdapterHealth = Field(
         default_factory=lambda: AdapterHealth(path="/healthz", metadata={})
     )
-    operations: list[AdapterOperation]
+    operations: list[AdapterOperation | AdapterActionOperation]
 
     @field_validator("base_path")
     @classmethod
@@ -115,10 +257,21 @@ class AdapterContract(StrictAdapterModel):
 
 
 __all__ = [
+    "AdapterActionMethod",
+    "AdapterActionOperation",
+    "AdapterActionSafety",
+    "AdapterBodyTarget",
+    "AdapterConcurrencyToken",
     "AdapterContract",
+    "AdapterControlTarget",
+    "AdapterHeaderTarget",
     "AdapterHealth",
     "AdapterMethod",
     "AdapterOperation",
+    "AdapterRequiredConcurrency",
+    "AdapterResponseBodyToken",
+    "AdapterResponseHeaderToken",
+    "AdapterSourceKeyIdempotency",
     "StrictAdapterModel",
     "join_adapter_path",
 ]

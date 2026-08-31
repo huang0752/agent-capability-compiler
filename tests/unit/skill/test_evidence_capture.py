@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from fs_links import create_link
+
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = ROOT / "skills" / "acc-engineer" / "scripts" / "evidence_capture.py"
 
@@ -77,7 +79,7 @@ def test_evidence_capture_rejects_traversal_secret_and_source_symlink(tmp_path: 
     secret = source / ".env"
     secret.write_text("never-open-production-secret", encoding="utf-8")
     secret.chmod(0)
-    (source / "linked.py").symlink_to(source / "app" / "routes.py")
+    create_link(source / "linked.py", source / "app" / "routes.py")
 
     traversing, traversal_payload = _run(
         "--source-workspace",
@@ -131,7 +133,7 @@ def test_evidence_capture_never_writes_outside_real_project_evidence_dir(
     source, project, _ = _base(tmp_path)
     outside = tmp_path / "outside"
     outside.mkdir()
-    (project / "evidence").symlink_to(outside, target_is_directory=True)
+    create_link(project / "evidence", outside, target_is_directory=True)
 
     linked_dir, linked_payload = _run(
         "--source-workspace",

@@ -373,7 +373,17 @@ def test_branching_detail_call_retains_an_empty_list_success_path() -> None:
             _call("finance.list_invoices", {}, step_id="listed"),
             {
                 "branch": {
-                    "condition": "$.steps.listed",
+                    "condition": {
+                        "operator": "not",
+                        "condition": {
+                            "operator": "eq",
+                            "left": {
+                                "kind": "reference",
+                                "value": "$.steps.listed",
+                            },
+                            "right": {"kind": "literal", "value": []},
+                        },
+                    },
                     "then": [
                         _call(
                             "finance.get_invoice",

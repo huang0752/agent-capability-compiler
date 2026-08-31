@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from fs_links import create_link
+
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = ROOT / "skills" / "acc-engineer" / "scripts" / "preflight.py"
 
@@ -64,7 +66,7 @@ def test_preflight_stops_on_secret_and_symlink_without_reading_targets(tmp_path:
     sensitive.chmod(0)
     outside = tmp_path / "outside.txt"
     outside.write_text("outside-secret-never-output", encoding="utf-8")
-    (source / "linked.txt").symlink_to(outside)
+    create_link(source / "linked.txt", outside)
 
     completed, payload = _run(
         "--source-workspace",
@@ -134,7 +136,7 @@ def test_preflight_scans_only_explicit_include_boundaries(tmp_path: Path) -> Non
     (source / "large.bin").write_bytes(b"x" * 100)
     outside = tmp_path / "outside.txt"
     outside.write_text("must-not-be-followed", encoding="utf-8")
-    (source / "linked.txt").symlink_to(outside)
+    create_link(source / "linked.txt", outside)
 
     completed, payload = _run(
         "--source-workspace",

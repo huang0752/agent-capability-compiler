@@ -13,6 +13,7 @@ import pytest
 import yaml
 from pydantic import TypeAdapter, ValidationError
 
+from acc_core.intents import IntentPlan
 from acc_core.models import Capability, Eval, Operation, Policy
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -185,6 +186,43 @@ def test_skill_requires_explicit_scope_audit_and_validation_level() -> None:
     assert "artifact-manifest.json" in guides
     assert (SKILL / "scripts" / "scope_audit.py").is_file()
     assert (SKILL / "scripts" / "artifact_manifest.py").is_file()
+
+
+def test_system_complete_contract_cannot_collapse_to_read_only() -> None:
+    skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+    harness = (SKILL / "HARNESS.md").read_text(encoding="utf-8")
+    preflight = (SKILL / "guides" / "01-preflight.md").read_text(encoding="utf-8")
+    validate = (SKILL / "guides" / "06-validate.md").read_text(encoding="utf-8")
+    handoff = (SKILL / "guides" / "09-handoff.md").read_text(encoding="utf-8")
+    scope_audit = (SKILL / "scripts" / "scope_audit.py").read_text(encoding="utf-8")
+    public = (ROOT / "README.md").read_text(encoding="utf-8")
+    contract = "\n".join((skill, harness, preflight, validate, handoff, public))
+
+    for surface in (
+        "Read",
+        "Create",
+        "Update",
+        "Delete",
+        "transition",
+        "execute",
+        "composite",
+    ):
+        assert surface in contract
+    for gate in (
+        "blocked_on_evidence",
+        "write-sandbox",
+        "idempotency",
+        "concurrency",
+        "approval",
+        "system_complete",
+    ):
+        assert gate in skill + harness
+    assert "Read-only subset" in skill + harness
+    assert "eligible Action intent cannot be completed by exclusion" in harness
+    assert "只有用户明确要求 Action 时" not in preflight
+    assert "blocked_on_evidence=0" in validate
+    assert "不能使用 complete 措辞" in handoff
+    assert "ACC_SCOPE_ACTION_EXCLUSION_FORBIDDEN" in scope_audit
 
 
 def test_guides_reserve_mvp_language_for_explicit_pilot_scope() -> None:
@@ -456,6 +494,61 @@ def test_skill_requires_evidence_backed_quality_contracts_without_tool_count_bia
     assert "工具数量" in refine
 
 
+def test_skill_intent_planner_is_evidence_derived_and_model_validated() -> None:
+    skill = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+    harness = (SKILL / "HARNESS.md").read_text(encoding="utf-8")
+    guides = "\n".join(
+        (SKILL / "guides" / name).read_text(encoding="utf-8")
+        for name in (
+            "02-analyze.md",
+            "04-plan.md",
+            "06-validate.md",
+            "08-refine.md",
+            "09-handoff.md",
+        )
+    )
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    workflow = "\n".join((skill, harness, guides, readme))
+
+    for contract in (
+        "AI Domain Intent Planner",
+        "intent-plan.yaml",
+        "route-per-tool",
+        "DomainPolicy",
+        "Evidence",
+        "merge",
+        "split",
+        "compose",
+        "blocked_on_evidence",
+    ):
+        assert contract in workflow
+    assert "固定工具数量目标" in workflow or "Fixed tool-count goals" in workflow
+    assert "用户只确认" in workflow
+    assert "不指定工具数量" in workflow
+
+    template = _yaml(SKILL / "templates" / "intent-plan.yaml")
+    example = _yaml(SKILL / "references" / "examples" / "evidence-derived-intent-plan.yaml")
+    assert set(template) == {"schema_version", "intents", "relationships"}
+    TypeAdapter(IntentPlan).validate_python(template)
+    parsed = TypeAdapter(IntentPlan).validate_python(example)
+
+    by_id = {intent.id: intent for intent in parsed.intents}
+    assert by_id["work_items.search"].route_ids == ["GET /work-items"]
+    assert by_id["work_items.inspect"].route_ids == ["GET /work-items/{work_item_id}"]
+    assert by_id["work_items.set_processing_state"].recommendation == "compose"
+    assert len(by_id["work_items.set_processing_state"].route_ids) == 2
+    assert by_id["work_items.delete"].recommendation == "blocked_on_evidence"
+    assert by_id["work_items.delete"].capability_ids == []
+    serialized = (SKILL / "templates" / "intent-plan.yaml").read_text(encoding="utf-8")
+    for forbidden_key in (
+        "planning_contract:",
+        "route_accounting:",
+        "portfolio_projection:",
+        "fixed_tool_quota:",
+    ):
+        assert forbidden_key not in serialized
+
+
 def test_plan_requires_constructible_selectors_empty_paths_failure_isolation_and_budgets() -> None:
     harness = (SKILL / "HARNESS.md").read_text(encoding="utf-8")
     plan_guide = (SKILL / "guides" / "04-plan.md").read_text(encoding="utf-8")
@@ -596,6 +689,7 @@ def test_skill_ships_platform_neutral_domain_and_action_templates() -> None:
         "domain-map.yaml",
         "capability-candidates.yaml",
         "domain-decision.yaml",
+        "intent-plan.yaml",
         "action-operation.yaml",
         "action-capability.yaml",
     }

@@ -94,6 +94,30 @@ class ActionCommitExecution:
     idempotent_result: JsonValue = field(default=None, repr=False)
 
 
+@dataclass(frozen=True, slots=True)
+class ActionOutcomeRecovery:
+    """Result of a read-only source-ledger recovery attempt."""
+
+    resolved: bool
+    result: JsonValue = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.resolved, bool):
+            raise TypeError("resolved must be bool")
+        if not self.resolved and self.result is not None:
+            raise ValueError("unresolved recovery cannot contain a result")
+
+
+@runtime_checkable
+class ActionOutcomeResolver(Protocol):
+    async def resolve_unknown_outcome(
+        self,
+        capability: ActionCapabilityV2,
+        execution: ActionCommitExecution,
+        principal_context: PrincipalContext,
+    ) -> ActionOutcomeRecovery: ...
+
+
 @runtime_checkable
 class ActionWorkflowExecutor(Protocol):
     def verified_definition(self, capability_id: str) -> CompiledActionDefinition: ...
@@ -280,7 +304,11 @@ class ActionCoordinator:
         except BaseException as error:
             await span.finish(status=None, result_category=_audit_error_category(error))
             raise
-        await span.finish(status=result.status, result_category="success")
+        await span.finish(
+            status=result.status,
+            result_category="success",
+            action_digest=_action_handle_digest(result.action_handle),
+        )
         return result
 
     async def _prepare(
@@ -394,9 +422,16 @@ class ActionCoordinator:
         principal_context: PrincipalContext,
     ) -> ActionStatusPublic:
         existing = await self._resolve(action_handle, principal_context)
-        span = await self._start_audit("approve", existing.record.capability_id, principal_context)
+        span = await self._start_audit(
+            "approve",
+            existing.record.capability_id,
+            principal_context,
+            action_digest=existing.record.handle_digest,
+        )
         try:
-            result = await self._approve(action_handle, approval_handle, principal_context)
+            result, approval_decision_id = await self._approve(
+                action_handle, approval_handle, principal_context
+            )
         except asyncio.CancelledError:
             await _finish_cancelled_audit(span, status=existing.record.status)
             raise
@@ -406,7 +441,11 @@ class ActionCoordinator:
                 result_category=_audit_error_category(error),
             )
             raise
-        await span.finish(status=result.status, result_category="success")
+        await span.finish(
+            status=result.status,
+            result_category="success",
+            approval_decision_id=approval_decision_id,
+        )
         return result
 
     async def _approve(
@@ -414,7 +453,7 @@ class ActionCoordinator:
         action_handle: str | SecretValue,
         approval_handle: str | SecretValue,
         principal_context: PrincipalContext,
-    ) -> ActionStatusPublic:
+    ) -> tuple[ActionStatusPublic, str]:
         state = await self._resolve(action_handle, principal_context)
         definition = self._definition(state.record.capability_id)
         self._authorize(definition, principal_context)
@@ -422,7 +461,7 @@ class ActionCoordinator:
             raise ActionStateConflictError("Action does not require approval")
         if state.record.status is not PreparedActionStatus.PREPARED:
             raise ActionStateConflictError("Action is not awaiting approval")
-        await self._approval_authority.verify(
+        grant = await self._approval_authority.verify(
             approval_handle,
             ApprovalBinding.from_record(state.record),
         )
@@ -434,7 +473,9 @@ class ActionCoordinator:
             expected=PreparedActionStatus.PREPARED,
             target=PreparedActionStatus.APPROVED,
         )
-        return _public_status(approved, result=None)
+        return _public_status(approved, result=None), (
+            grant.decision_id if grant.decision_id is not None else grant.approval_digest
+        )
 
     async def commit(
         self,
@@ -442,7 +483,12 @@ class ActionCoordinator:
         principal_context: PrincipalContext,
     ) -> ActionCommitResult:
         existing = await self._resolve(action_handle, principal_context)
-        span = await self._start_audit("commit", existing.record.capability_id, principal_context)
+        span = await self._start_audit(
+            "commit",
+            existing.record.capability_id,
+            principal_context,
+            action_digest=existing.record.handle_digest,
+        )
         try:
             result = await self._commit(action_handle, principal_context)
         except asyncio.CancelledError:
@@ -559,7 +605,12 @@ class ActionCoordinator:
         principal_context: PrincipalContext,
     ) -> ActionStatusPublic:
         existing = await self._resolve(action_handle, principal_context)
-        span = await self._start_audit("status", existing.record.capability_id, principal_context)
+        span = await self._start_audit(
+            "status",
+            existing.record.capability_id,
+            principal_context,
+            action_digest=existing.record.handle_digest,
+        )
         try:
             result = await self._status(action_handle, principal_context)
         except asyncio.CancelledError:
@@ -583,6 +634,57 @@ class ActionCoordinator:
         definition = self._definition(state.record.capability_id)
         self._authorize(definition, principal_context)
         result: JsonValue = None
+        if state.record.status is PreparedActionStatus.OUTCOME_UNKNOWN and isinstance(
+            self._executor, ActionOutcomeResolver
+        ):
+            preview_value, token, idempotency_key, idempotent_terminal, idempotent_result = (
+                _unseal_preview(state.preview_value)
+            )
+            execution = ActionCommitExecution(
+                input_value=_canonical_copy(state.input_value, error_type=ActionStateConflictError),
+                preview_value=preview_value,
+                concurrency_token=token,
+                idempotency_key=SecretValue(idempotency_key),
+                idempotent_terminal=idempotent_terminal,
+                idempotent_result=idempotent_result,
+            )
+            try:
+                recovery = await self._executor.resolve_unknown_outcome(
+                    definition.capability,
+                    execution,
+                    principal_context,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                recovery = ActionOutcomeRecovery(resolved=False)
+            if not isinstance(recovery, ActionOutcomeRecovery):
+                raise ActionStateConflictError("Action outcome recovery result is invalid")
+            if recovery.resolved:
+                safe_result = _canonical_copy(recovery.result, error_type=ActionStateConflictError)
+                if next(
+                    Draft202012Validator(definition.capability.output_schema).iter_errors(
+                        safe_result
+                    ),
+                    None,
+                ):
+                    raise ActionStateConflictError("Action outcome recovery result is invalid")
+                try:
+                    state = await self._store.transition(
+                        action_handle,
+                        principal_id=principal_context.principal_id,
+                        session_id=principal_context.gateway_session_id,
+                        pack_digest=self._pack_digest,
+                        expected=PreparedActionStatus.OUTCOME_UNKNOWN,
+                        target=PreparedActionStatus.SUCCEEDED,
+                        result_value=safe_result,
+                    )
+                except ActionStateConflictError:
+                    # Another status caller may have won the same recovery CAS.
+                    # Accept only its already-validated durable success result.
+                    state = await self._resolve(action_handle, principal_context)
+                    if state.record.status is not PreparedActionStatus.SUCCEEDED:
+                        raise
         if state.record.status is PreparedActionStatus.SUCCEEDED:
             result = copy.deepcopy(state.result_value)
         return _public_status(state, result=result)
@@ -592,6 +694,8 @@ class ActionCoordinator:
         lifecycle: ActionAuditLifecycle,
         capability_id: str,
         principal_context: PrincipalContext,
+        *,
+        action_digest: str | None = None,
     ) -> ActionAuditSpan:
         return await start_action_audit_span(
             sink=self._action_audit_sink,
@@ -602,6 +706,7 @@ class ActionCoordinator:
             pack_digest=self._pack_digest,
             principal_id=principal_context.principal_id,
             session_id=principal_context.gateway_session_id,
+            action_digest=action_digest,
         )
 
     async def _resolved_status_or_none(
@@ -688,6 +793,7 @@ class ActionCoordinator:
         if (
             not isinstance(value, str)
             or not value
+            or len(value.encode("utf-8")) > 200
             or value != value.strip()
             or any(unicodedata.category(character) in {"Cc", "Cs"} for character in value)
         ):
@@ -756,6 +862,10 @@ async def _finish_cancelled_audit(
         return
 
 
+def _action_handle_digest(handle: SecretValue) -> str:
+    return hashlib.sha256(handle.get_secret_value().encode("ascii")).hexdigest()
+
+
 __all__ = [
     "ActionCapabilityNotFoundError",
     "ActionCommitExecution",
@@ -764,6 +874,8 @@ __all__ = [
     "ActionDeploymentConfigurationError",
     "ActionDeploymentDeniedError",
     "ActionInputInvalidError",
+    "ActionOutcomeRecovery",
+    "ActionOutcomeResolver",
     "ActionPreviewExecution",
     "ActionPreviewInvalidError",
     "ActionScopeDeniedError",

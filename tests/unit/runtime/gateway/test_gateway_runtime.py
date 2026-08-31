@@ -20,6 +20,7 @@ from acc_runtime.gateway.runtime import (
     create_gateway_runtime,
 )
 from acc_runtime.gateway.service import GatewaySessionService
+from acc_runtime.providers import HttpProvider, JsonApplicationSuccessPolicy
 from acc_runtime.runtime import GenericRuntime
 
 
@@ -84,11 +85,14 @@ class _CloseCounter:
 
 
 class _StoreCloseCounter:
-    def __init__(self) -> None:
+    def __init__(self, failure: BaseException | None = None) -> None:
         self.close_calls = 0
+        self.failure = failure
 
     async def close(self) -> tuple[()]:
         self.close_calls += 1
+        if self.failure is not None:
+            raise self.failure
         return ()
 
 
@@ -108,6 +112,31 @@ async def test_owned_gateway_closes_transferred_action_store_exactly_once() -> N
 
     assert service.close_calls == 1
     assert runtime.close_calls == 1
+    assert store.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_owned_gateway_closes_all_action_resources_in_reverse_even_after_failure() -> None:
+    service = _CloseCounter()
+    runtime = _CloseCounter()
+    store = _StoreCloseCounter()
+    authority = _StoreCloseCounter(RuntimeError("authority close failed"))
+    audit = _StoreCloseCounter()
+    owned = _OwnedGatewayService(
+        cast(GatewaySessionService, service),
+        cast(GenericRuntime, runtime),
+        action_store=cast(Any, store),
+        action_resources=(authority, audit),
+    )
+
+    with pytest.raises(RuntimeError, match="authority close failed"):
+        await owned.aclose()
+    await owned.aclose()
+
+    assert service.close_calls == 1
+    assert runtime.close_calls == 1
+    assert audit.close_calls == 1
+    assert authority.close_calls == 1
     assert store.close_calls == 1
 
 
@@ -187,6 +216,11 @@ def test_create_gateway_runtime_dispatches_a_v2_project_document(
         "provider": {
             "kind": "http",
             "base_url_ref": "SOURCE_BASE_URL",
+            "application_success": {
+                "kind": "json_pointer",
+                "pointer": "/code",
+                "allowed_values": [200],
+            },
             "auth": {
                 "kind": "password_bearer",
                 "credentials": {"kind": "gateway_session"},
@@ -206,11 +240,14 @@ def test_create_gateway_runtime_dispatches_a_v2_project_document(
         verification=SimpleNamespace(sha256="a" * 64),
     )
 
+    captured: dict[str, object] = {}
+
     class FakeGenericRuntime:
         interaction_sha256 = "c" * 64
 
         def __init__(self, *args: object, **kwargs: object) -> None:
-            del args, kwargs
+            del args
+            captured.update(kwargs)
 
         def tools(self) -> list[dict[str, object]]:
             return []
@@ -237,6 +274,11 @@ def test_create_gateway_runtime_dispatches_a_v2_project_document(
     assert composition.runtime_info().project_id == "gateway-v2"
     assert composition.runtime_info().transport == "streamable_http"
     assert composition.runtime_info().interaction_sha256 == "c" * 64
+    provider = captured["provider"]
+    assert isinstance(provider, HttpProvider)
+    assert provider._application_success_policy == JsonApplicationSuccessPolicy(
+        pointer="/code", allowed_values=(200,)
+    )
 
 
 @pytest.mark.asyncio

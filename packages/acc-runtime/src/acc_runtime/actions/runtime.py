@@ -10,6 +10,7 @@ from typing import Any
 from acc_runtime.actions.approval import ApprovalAuthority
 from acc_runtime.actions.audit import ActionAuditSink
 from acc_runtime.actions.coordinator import ActionCoordinator
+from acc_runtime.actions.resource_lock import ActionResourceLock
 from acc_runtime.actions.runtime_executor import (
     ActionOperationProvider,
     ActionRuntimeConfigurationError,
@@ -28,6 +29,48 @@ class ActionRuntimeDependencies:
     approval_authority: ApprovalAuthority
     audit_sink: ActionAuditSink
     audit_salt: bytes = field(repr=False)
+    resource_lock: ActionResourceLock | None = None
+
+    def validate_production(self, *, session_vault: object) -> None:
+        """Reject development substitutes in the built-in single-node production profile."""
+
+        from acc_runtime.actions.sqlite_approval import SQLiteApprovalAuthority
+        from acc_runtime.actions.sqlite_audit import SQLiteActionAuditSink
+        from acc_runtime.actions.sqlite_store import SQLiteActionStore
+        from acc_runtime.gateway.sqlite_vault import GatewaySessionVaultConfig
+
+        policy = self.deployment_policy
+        if not isinstance(self.store, SQLiteActionStore) or self.store.is_durable is not True:
+            raise ActionRuntimeConfigurationError(
+                "Production Actions require the durable SQLite Action Store"
+            )
+        if (
+            not isinstance(self.approval_authority, SQLiteApprovalAuthority)
+            or self.approval_authority.is_durable is not True
+        ):
+            raise ActionRuntimeConfigurationError(
+                "Production Actions require the durable SQLite Approval Authority"
+            )
+        if (
+            not isinstance(self.audit_sink, SQLiteActionAuditSink)
+            or self.audit_sink.is_durable is not True
+        ):
+            raise ActionRuntimeConfigurationError(
+                "Production Actions require the durable SQLite Action audit sink"
+            )
+        if not isinstance(session_vault, GatewaySessionVaultConfig):
+            raise ActionRuntimeConfigurationError(
+                "Production Actions require an encrypted SQLite Gateway session vault"
+            )
+        if (
+            policy.require_durable_action_store is not True
+            or policy.action_audit_mode != "required"
+            or policy.action_sandbox_mode != "disabled"
+            or self.resource_lock is not None
+        ):
+            raise ActionRuntimeConfigurationError(
+                "Production Action deployment policy cannot use development safety modes"
+            )
 
 
 def create_runtime_action_coordinator(
@@ -41,7 +84,12 @@ def create_runtime_action_coordinator(
 
     if not isinstance(dependencies, ActionRuntimeDependencies):
         raise TypeError("dependencies must be ActionRuntimeDependencies")
-    executor = RuntimeActionWorkflowExecutor(compiled_ir, provider=provider)
+    executor = RuntimeActionWorkflowExecutor(
+        compiled_ir,
+        provider=provider,
+        action_sandbox_mode=dependencies.deployment_policy.action_sandbox_mode,
+        resource_lock=dependencies.resource_lock,
+    )
     definitions = {
         capability_id: executor.verified_definition(capability_id)
         for capability_id in _compiled_action_capability_ids(compiled_ir)

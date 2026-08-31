@@ -220,6 +220,88 @@ def test_password_bearer_auth_validates_paths_pointers_and_distinct_fields() -> 
         models.PasswordBearerAuthConfig.model_validate(auth)
 
 
+def test_password_bearer_login_request_accepts_only_nonsecret_scalars_without_overrides() -> None:
+    base = {
+        "kind": "password_bearer",
+        "credentials": {"kind": "gateway_session"},
+        "login_path": "/auth/login",
+        "identity_field": "username",
+        "password_field": "password",
+        "login_request": {
+            "static_fields": {
+                "clientId": "public-client-id",
+                "grantType": "password",
+                "enabled": True,
+            }
+        },
+        "token_pointer": "/data/access_token",
+    }
+    parsed = models.PasswordBearerAuthConfig.model_validate(base)
+    assert parsed.login_request.static_fields["clientId"] == "public-client-id"
+
+    for static_fields in (
+        {"username": "override"},
+        {"password": "override"},
+        {"clientSecret": "embedded"},
+        {"api_key": "embedded"},
+        {"authorization": "embedded"},
+        {"nested": {"not": "scalar"}},
+        {"items": ["not", "scalar"]},
+        {"\tbad": "value"},
+    ):
+        document = deepcopy(base)
+        document["login_request"] = {"static_fields": static_fields}
+        with pytest.raises(ValidationError):
+            models.PasswordBearerAuthConfig.model_validate(document)
+
+
+def test_space_delimited_scope_format_requires_a_pointer_and_default_is_array() -> None:
+    base = {
+        "kind": "password_bearer",
+        "credentials": {"kind": "gateway_session"},
+        "login_path": "/auth/login",
+        "identity_field": "username",
+        "password_field": "password",
+        "token_pointer": "/data/access_token",
+    }
+    assert models.PasswordBearerAuthConfig.model_validate(base).scopes_format == "json_array"
+    with pytest.raises(ValidationError, match="require scopes_pointer"):
+        models.PasswordBearerAuthConfig.model_validate({**base, "scopes_format": "space_delimited"})
+    parsed = models.PasswordBearerAuthConfig.model_validate(
+        {
+            **base,
+            "scopes_pointer": "/data/scope",
+            "scopes_format": "space_delimited",
+        }
+    )
+    assert parsed.scopes_format == "space_delimited"
+
+
+def test_scope_discovery_rejects_cross_origin_paths_and_sensitive_or_nested_query() -> None:
+    base = {
+        "kind": "password_bearer",
+        "credentials": {"kind": "gateway_session"},
+        "login_path": "/auth/login",
+        "identity_field": "username",
+        "password_field": "password",
+        "token_pointer": "/data/access_token",
+    }
+    valid = {
+        "path": "/system/user/getInfo",
+        "static_query_fields": {"clientid": "public-client"},
+        "scopes_pointer": "/data/permissions",
+    }
+    models.PasswordBearerAuthConfig.model_validate({**base, "scope_discovery": valid})
+    for invalid in (
+        {**valid, "path": "https://evil.example/scopes"},
+        {**valid, "static_query_fields": {"token": "embedded"}},
+        {**valid, "static_query_fields": {"cookie": "embedded"}},
+        {**valid, "static_query_fields": {"nested": {"bad": True}}},
+    ):
+        with pytest.raises(ValidationError):
+            models.PasswordBearerAuthConfig.model_validate({**base, "scope_discovery": invalid})
+
+
 def test_operation_mapping_and_evidence_are_strict() -> None:
     document = operation_document()
     http = deepcopy(document["http"])

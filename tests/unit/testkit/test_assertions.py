@@ -7,6 +7,7 @@ import pytest
 from pydantic import JsonValue
 
 from acc_runtime.errors import RuntimeError as AccRuntimeError
+from acc_runtime.providers import JsonApplicationSuccessPolicy
 from acc_testkit.assertions import (
     E2EAssertionError,
     assert_e2e,
@@ -64,6 +65,38 @@ def test_output_schema_uses_draft_2020_12() -> None:
     assert_output_schema({"name": "Example"}, schema)
     with pytest.raises(E2EAssertionError, match="output schema mismatch"):
         assert_output_schema({"name": "Example", "internal": True}, schema)
+
+
+def test_assert_output_schema_rejects_configured_application_error() -> None:
+    schema = {
+        "type": "object",
+        "required": ["code", "message", "data"],
+        "properties": {
+            "code": {"type": "integer"},
+            "message": {"type": "string"},
+            "data": {},
+        },
+    }
+
+    with pytest.raises(E2EAssertionError, match="application success contract mismatch"):
+        assert_output_schema(
+            {"code": 403, "message": "forbidden", "data": None},
+            schema,
+            application_success_policy=JsonApplicationSuccessPolicy(
+                pointer="/code", allowed_values=(200,)
+            ),
+        )
+
+
+def test_assert_output_schema_leaves_non_envelope_apis_unchanged_by_default() -> None:
+    assert_output_schema(
+        {"code": 500},
+        {
+            "type": "object",
+            "required": ["code"],
+            "properties": {"code": {"type": "integer"}},
+        },
+    )
 
 
 def test_stable_error_accepts_runtime_errors_and_mcp_structured_content() -> None:

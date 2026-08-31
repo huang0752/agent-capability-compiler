@@ -69,6 +69,8 @@ class ApprovalGrant:
     binding: ApprovalBinding
     approved_at: float
     expires_at: float
+    decision_id: str | None = None
+    approver_id: str | None = None
 
     def __post_init__(self) -> None:
         validate_digest(self.approval_digest, field_name="approval_digest")
@@ -76,6 +78,11 @@ class ApprovalGrant:
         expires = finite_time(self.expires_at, field_name="expires_at")
         if expires <= approved or expires > self.binding.action_expires_at:
             raise ValueError("approval expiry must be within the prepared Action lifetime")
+        if (self.decision_id is None) != (self.approver_id is None):
+            raise ValueError("decision_id and approver_id must be provided together")
+        if self.decision_id is not None:
+            exact_identifier(self.decision_id, field_name="decision_id")
+            exact_identifier(self.approver_id, field_name="approver_id")
 
 
 @runtime_checkable

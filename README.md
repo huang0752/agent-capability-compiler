@@ -64,16 +64,30 @@ Capability Pack 是 AI 辅助编译期与无 LLM 运行期之间仅包含数据�
 
 ## AI 领域向导式能力发现
 
-全局 AI 扫描由 ACC Engineer Skill 所在的 Coding Agent 执行；ACC Core 与 Runtime 都不调用 LLM。Agent 先对后端、OpenAPI、客户端交互、默认值、选项、条件和关联数据做全局浅扫，生成平台中立的 `DomainMap` 与 `CapabilityCandidateLedger`。这一步是编译期分析工作，不表示 ACC Runtime 内置了扫描模型，也不表示任何生产系统已被扫描或验证。
+全局 AI 扫描由 ACC Engineer Skill 所在的 Coding Agent 执行；ACC Core 与 Runtime 都不调用 LLM。Agent 先对后端、OpenAPI、客户端交互、默认值、选项、条件和关联数据做全局浅扫，生成平台中立的 `DomainMap`、`CapabilityCandidateLedger` 与 `IntentPlan`（项目文件为 `intent-plan.yaml`）。这一步是编译期分析工作，不表示 ACC Runtime 内置了扫描模型，也不表示任何生产系统已被扫描或验证。
+
+Coding Agent 同时承担 AI Domain Intent Planner：它从 Evidence 自主判断哪些接口保持独立业务意图、哪些状态变化可参数化、哪些接口存在可证明的数据流组合，以及哪些候选必须 `blocked_on_evidence`。Intent 数量与最终 MCP 数量都是物化后的派生结果，不设固定配额，也不以“约 N 个工具”为目标。禁止 route-per-tool 默认生成、无证据合并、为了接近某个数字而拆分/删除，以及把不同权限、风险、审批、失败或结果语义塞进万能 `manage` 工具。ACC 的确定性模型与校验器负责结构、引用、安全和矛盾检查，但不会替 AI 制造业务语义。
+
+已有系统未声明范围时默认采用 `system_complete`。这里的“完整”是完整业务表面，不是 Read-only 子集：Read、Create、Update、Delete、transition、execute 以及跨接口 composite intent 都必须进入发现与决策分母。缺少写沙箱授权，或缺少 effect/risk/retry/idempotency/concurrency/approval/outcome Evidence 时，对应 Action 只能保留为 `undetermined`、`blocked_on_evidence`，并阻止领域与系统 complete；不能把它标为 excluded/ineligible 或从分母删除后宣称闭合。若用户只需要只读交付，应明确确认 `pilot`，而不是改写 `system_complete` 的含义。
 
 向导随后按依赖和显式优先顺序，一次只激活一个已就绪的业务领域：
 
-1. 用户确认业务目标与策略，不逐条选择 route，也不逐条审核全部接口。
-2. Coding Agent 深扫当前领域，把证据清晰的 Read、Action 和纯客户端候选自动分类；涉及默认数据、关联数据或展示条件时同时保留前端证据。
-3. 无法由 Evidence 闭合的例外一次只问一个问题。`unknown` 候选不能被伪装为 `ineligible` 或消失；只有独立 Evidence 支持的不可用结论才允许排除。
-4. 当前领域形成版本化的 `DomainDecision`，绑定候选、依赖和 Evidence 快照；完成并确认后才进入下一个领域。
+1. 用户确认业务目标与策略，但只确认 `DomainPolicy`、用户控制的测试边界及异常/高风险选择；不逐条选择 route，不指定工具数量，也不逐条审核普通候选。
+2. Coding Agent 深扫当前领域，把证据清晰的 Read、Action 和纯客户端候选自动分类，并在 `intent-plan.yaml` 中为每个 merge、split 或 compose 决定记录 Evidence 与理由；涉及默认数据、关联数据或展示条件时同时保留前端证据。
+3. 无法由 Evidence 闭合的例外一次只问一个问题。`unknown` 候选不能被伪装为 `ineligible` 或消失；只有独立 Evidence 支持的客观不可用结论才允许判为 ineligible。Eligible Action intent 不能靠 exclusion 闭合；重复 route 只有在 replacement materialize 相同 mutation intent 和完整 Action lifecycle 时才可 composed。
+4. 当前领域形成版本化的 `DomainDecision`，绑定已确认的 DomainPolicy、显式异常/高风险决定、候选、依赖和 Evidence 快照；AI 规划的工具数量不是用户确认项，领域复核完成后才进入下一个领域。
 
 用户选择的是业务目标、允许的效果、风险上限、需审批的业务意图和明确排除项。route、接口字段、Candidate 分类与安全声明由 Evidence 和确定性校验闭合，不能通过用户随手勾选获得真实性。
+
+Coding Agent 可先取得不含固定数量目标的完整规划输入，再审计其生成的计划：
+
+```bash
+acc intents brief /path/to/acc-project --json
+acc intents brief /path/to/acc-project --domain system --json
+acc intents audit /path/to/acc-project --json
+```
+
+`brief` 输出当前 route denominator、领域、Candidate、已物化 Capability、Operation 依赖和 Evidence 定位；它不调用模型，也不生成工具数量。Coding Agent 按 ACC Engineer Skill 生成 `intent-plan.yaml` 后，`audit` 才确定性检查完整分母、引用闭包、权限/风险/生命周期兼容性、Action safety、万能工具和 route-per-tool 碎片化，并报告由当前 Capability 实际投影出的 MCP 工具数量。缺计划、漏 route、无证据合并或把 blocked Candidate 提升为可用都会 fail closed。
 
 源 JWT 与源 API 是最终授权者。ACC Scope 只能收窄源系统可能允许的范围，不能创建角色、授予权限或替代源系统逐请求鉴权；Action approval 只批准一次已证明的业务变更，也不是源权限。
 
@@ -114,6 +128,8 @@ flowchart TB
 Usage Release 保留六个相互独立的事实：`source_usage_traced`、`usage_contract_verified`、`headless_agent_verified`、`host_adapter_verified`、`real_mcp_verified` 和 `user_accepted`，不计算总分，也不从一个轴推导另一个轴。缺少真实 MCP 轨迹、宿主适配验证或其他证据时必须保留为 `limited`；只有发布所需的核心轴全部成立时才是 `released`。手写 Evidence、文件名或自我声明的连接标签都不能把 `real_mcp_verified` 设为 true；该轴只能来自专用 real MCP runner 的受信结果，而且不能据此冒充生产源连接。
 
 `.accusage` 只包含已发布领域中用户选定的业务目标和 route 闭包、精确 Decision/Release、Scenario 与必要 Evidence 身份元数据；不嵌入源文件、`.accpkg`、JWT、请求 payload 或未发布领域。核心输出是平台中立合同，Generic Markdown、MCP Resources/Prompts 或其他宿主格式都是可选 Adapter，不能增加工具、权限或 Action 快捷路径。
+
+CLI 发布和构建只接受独立受信 runner 生成的签名 verification artifact，不把 Usage 工程中的序列化 verification 声明升级为证据。artifact 绑定当前 Project、accepted MCP、Pack/IR/Tool Schema/测试报告、Domain、Decision、Scenario 与 release bundle，含 nonce 和最长 24 小时的有效期；篡改、过期、stale 或摘要不匹配均 fail-closed。HMAC trust-store 必须位于 source workspace、ACC project 和 Usage project 三根目录之外且不得经过 symlink/junction，artifact 自身只携带 `key_id`；包签名 Secret 通过环境 SecretRef 名称提供，不能作为 CLI 明文参数。
 
 ## 产品边界
 
@@ -331,6 +347,22 @@ acc run example-crm-0.1.0.accpkg
 
 以上命令均已在当前检出版本实现；开发仓库中可以统一写成 `uv run acc ...`。Coverage 只报告相互独立的事实轴，并要求项目根存在合法 `scope-inventory.yaml`。
 
+真实 Gateway 联调只有通过 `acc test live` 的完整 source-connected 门禁后，才能生成 Coverage 可消费的机器证据：Profile 中每个计入 Coverage 的成功用例必须显式声明 `capability_id`，命令通过 `--observations-output` 写出规范 JSON；Coverage 再通过 `--live-observations` 显式加载。产物绑定已校验 Pack、Pack 内 compiled IR、Project id/version、Profile 与原始 Live Report，并有 24 小时有效期。内容摘要不符、过期、Project/IR 不匹配、非规范 JSON 或符号链接都会被拒绝；普通 `test-report.json`、`coverage-report.json` 和手写摘要不会被接受。未提供产物时仍报告 `not_observed`。
+
+```bash
+acc test live build/my-system.accpkg \
+  --gateway-url http://127.0.0.1:8000 \
+  --profile live-tests.yaml \
+  --allow-source-connect \
+  --observations-output build/live-observations.json \
+  --json
+
+acc coverage . \
+  --live-observations build/live-observations.json \
+  --live-pack build/my-system.accpkg \
+  --json
+```
+
 ### 运行多用户 Gateway
 
 仅当 Pack 声明 `runtime.transport: [streamable_http]`，且 Provider 使用 `password_bearer + gateway_session` 时，`acc run` 才会启动 Gateway。最小的本机明文示例是：
@@ -352,6 +384,111 @@ uv run acc run build/my-system.accpkg \
 `--allowed-host` 至少给出一个精确值；`--allowed-origin` 也是精确清单，不支持通配符。端口、TTL、容量、MCP idle timeout 和请求体上限均由部署方显式限定。Gateway 只支持单进程 `--workers 1`，因为 Gateway Session 与 MCP Session 均是进程内状态。明文 HTTP 只允许绑定 loopback；绑定非 loopback IP 必须同时提供 `--tls-certfile` 和 `--tls-keyfile`，或在受信反向代理后仅监听 loopback。
 
 Gateway 的 `acc run` 不加 `--json` 时启动并持续服务；加 `--json` 时只加载 Pack、验证 Gateway 组合并返回脱敏配置，不启动监听器。
+
+需要由 CLI 运行可恢复的单节点生产 Action Gateway 时，必须一次性显式提供四组互相独立的
+SQLite 边界：Action Store、加密 Session Vault、Approval Authority 和 required Action Audit：
+
+```bash
+uv run acc run build/my-action-system.accpkg \
+  --host 127.0.0.1 --allowed-host 127.0.0.1:8000 --scope orders.write \
+  --production-actions \
+  --action-store-path ./var/actions.db \
+  --action-store-secret-ref ACC_STORE_SECRET --action-store-salt-ref ACC_STORE_SALT \
+  --session-vault-path ./var/sessions.db \
+  --session-vault-key-ref ACC_VAULT_KEY --session-vault-salt-ref ACC_VAULT_SALT \
+  --approval-db-path ./var/approvals.db \
+  --approval-secret-ref ACC_APPROVAL_SECRET --approval-salt-ref ACC_APPROVAL_SALT \
+  --audit-db-path ./var/action-audit.db \
+  --audit-secret-ref ACC_AUDIT_SECRET --audit-salt-ref ACC_AUDIT_SALT \
+  --action-capability orders.update --action-effect update --action-max-risk medium
+```
+
+所有 SecretRef 都只允许引用环境变量；八个引用名、解析后的值及四个数据库路径必须分别唯一，
+缺一项即拒绝启动。生产模式固定要求 durable Store、durable Approval Authority、required durable
+Audit、加密 Vault 和关闭的 sandbox，不允许与 `--development-actions`、本地 guard 或本地 operator
+混用。Gateway lifespan 对全部资源执行幂等关闭，保留持久状态。`--json` inspection 只报告
+`production_single_node`、`sqlite` 和 `durable` 等非敏感属性，不显示路径、引用名或 secret。
+这是单节点参考部署，不是多节点 HA 或外部审批控制面。
+
+含 Action 的 Pack 默认拒绝由 CLI 启动，因为生产部署必须由宿主通过 Runtime API 注入 durable Action Store、可信 ApprovalAuthority、required AuditSink 与 operator-owned DeploymentPolicy。仅开发和测试时，可以显式启用进程内依赖，并同时给出 capability、effect、risk 三层 ceiling：
+
+```bash
+uv run acc run build/my-action-system.accpkg \
+  --host 127.0.0.1 \
+  --allowed-host 127.0.0.1:8000 \
+  --scope orders.write \
+  --development-actions \
+  --action-capability orders.update \
+  --action-effect update \
+  --action-max-risk medium
+```
+
+`--development-actions` 不会从 Pack 推导或扩大授权；缺少任一 ceiling 都会拒绝启动。它默认使用 non-durable in-memory Store，并固定使用仅测试用 in-memory ApprovalAuthority 和 required logging audit，不得用于生产。此 CLI 模式支持 `approval: not_required` 的 `prepare -> commit -> status`；`approval: required` 仍要求 trusted host 通过独立审批边界签发 approval handle，或另行显式启用下述本地操作者入口。
+
+默认 Store 仍为 `memory`。需要在开发 Gateway 重启后保留经过认证的 Action 行时，可显式选择
+SQLite，并分别配置独立 SecretRef：
+
+```bash
+export ACC_ACTION_STORE_SECRET='<at-least-32-byte-secret>'
+export ACC_ACTION_STORE_SALT='<at-least-16-byte-independent-salt>'
+uv run acc run build/my-action-system.accpkg \
+  --host 127.0.0.1 \
+  --allowed-host 127.0.0.1:8000 \
+  --scope orders.write \
+  --development-actions \
+  --development-action-store sqlite \
+  --action-store-path ./var/actions.db \
+  --action-store-secret-ref ACC_ACTION_STORE_SECRET \
+  --action-store-salt-ref ACC_ACTION_STORE_SALT \
+  --action-capability orders.update \
+  --action-effect update \
+  --action-max-risk low
+```
+
+SQLite 的 path、secret ref、salt ref 必须同时给出；两个引用名和值都必须不同，也不得复用本地
+operator approval 的引用名或 secret 值。数据库路径继续由 `SQLiteActionStore` 的非链接、常规文件、
+父链和权限检查 fail closed；inspection 只显示 `store: sqlite` 与 `store_durable: true`，不显示路径、
+SecretRef 或 secret。Gateway lifespan 关闭 Store 但保留认证数据库行。
+
+持久化 Store 不等于持久化 Gateway 会话或本地 operator registry。SQLite 可以恢复已 approved、
+committing、succeeded 等绑定状态，但 Gateway 重启后 session ID 会改变：旧 handle 的 `status`、
+commit 或其他绑定操作仍会因原 principal/session 绑定不匹配而拒绝。尤其是重启前仍为 prepared 的
+handle，无法通过重启后新建的本地 operator endpoint 审批，因为其仅存于进程内的摘要 registry 已
+清空；必须由原用户在新会话重新 prepare。不得据此承诺 RuoYi 等系统重启后可继续查询或审批旧 handle。
+
+若 Action Operation 如实声明源端 `concurrency.mode: not_supported`，且 Capability 使用
+`action.local_development_state_guard`，还必须在上述开发开关之外再次显式加入
+`--local-development-action-guards`。该选项注入有界、进程内的资源锁，并在 commit 前用
+密封的 prepare input 重跑声明的 Read：状态漂移即拒绝、terminal 状态幂等返回、上游读取失败
+即 fail closed。它只防止同一 ACC 进程内的协作者竞争，不能阻止外部客户端写入，也不提供或
+暗示源系统原子并发保证；因此生产策略默认禁止，`--workers 1` 和隔离本地/测试源仍是硬边界。
+`acc run --json` 的 inspection 仅显示 `process_local_only` 或 `disabled`，不会输出锁键、资源值或
+锁表内容。
+
+开发环境中，`approval: required` 可选用与 MCP 用户面完全分离的本地操作者入口。先在环境中
+配置至少 32 字节的独立 secret，再显式启用：
+
+```bash
+export ACC_ACTION_OPERATOR_SECRET='<high-entropy-local-secret>'
+uv run acc run build/my-action-system.accpkg \
+  --host 127.0.0.1 \
+  --allowed-host 127.0.0.1:8000 \
+  --scope orders.write \
+  --development-actions \
+  --development-action-operator-approval \
+  --action-operator-secret-ref ACC_ACTION_OPERATOR_SECRET \
+  --action-capability orders.update \
+  --action-effect update \
+  --action-max-risk low
+```
+
+操作者向 `POST /operator/actions/approve` 提交严格 JSON `{"action_handle":"..."}`，并用
+`X-ACC-Operator-Authorization: Bearer <secret>` 认证。入口只在 loopback、单进程、development
+Action 依赖同时启用时存在；请求体上限 1 KiB。它重新绑定 prepare 时保存的受信会话身份、
+短期签发 approval 并内部完成 approve，响应只含 capability ID 与 `approved` 状态，不返回
+action handle、approval handle 或 binding。它不会出现在 MCP `tools/list`，也不会 commit。
+当前首版仅随 `streamable_http` Gateway 提供；`stdio` Pack 明确不支持此 HTTP operator 入口，
+且传入相关 CLI 参数会拒绝启动。缺 secret、非 loopback、默认/生产模式均 fail closed。
 
 客户端先向 `POST /runtime/sessions` 一次性提交当前用户的账号和密码，然后用响应中的 opaque Gateway token 作为 `Authorization: Bearer ...` 调用 `/mcp`。密码在登录边界使用后即丢弃；源 JWT 只存在当前进程的认证状态中；客户端持有的是另一枚短期、不透明 Gateway token，服务端会话索引只保存其摘要。用户 A/B/C 各自登录，得到独立 Gateway Session 和独立 MCP Session；Agent 无需再把用户标识放入工具参数。
 
@@ -463,6 +600,10 @@ runtime:
 provider:
   kind: http
   base_url_ref: CRM_BASE_URL
+  application_success:
+    kind: json_pointer
+    pointer: /code
+    allowed_values: [200]
   auth:
     kind: bearer_secret
     token_ref: CRM_USER_TOKEN
@@ -476,7 +617,26 @@ quality:
 - `bearer_secret`：从 `token_ref` 指向的部署环境变量读取既有 Bearer Secret；适合本地 `stdio` 的服务账号或测试账号。
 - `password_bearer`：调用配置的登录端点换取 JWT。`stdio` 只能使用环境中的账号/密码引用；`streamable_http` 只能使用 Gateway 会话提交的一次性登录材料，Pack 不保存用户账密或 JWT。
 
+若登录端点除账号密码外还要求公开的协议字段，可声明
+`auth.login_request.static_fields`，例如 `clientId` 或 `grantType`。这些字段仅接受有限数量的
+JSON scalar，并随 Pack 公开；不能覆盖 `identity_field`/`password_field`，也不能使用
+password、token、secret、authorization、key 等敏感字段名。客户端密钥不能放在这里，未来
+如需支持必须使用单独的 SecretRef 合同。序列化后的登录请求固定限制为 64 KiB。
+
+`scopes_pointer` 默认要求源响应为 JSON string array。若上游遵循 OAuth 的空格分隔 scope
+字符串，可显式声明 `scopes_format: space_delimited`；解析只接受 ASCII whitespace，限制为
+8 KiB/1024 项并去重，Unicode whitespace、控制字符和错误类型都会令登录失败。空字符串
+表示已验证的空权限集；最终权限仍同时受 `scope_mapping` 与 Gateway deployment ceiling 限制。
+
+若登录响应本身不含权限，可声明可选 `scope_discovery`：Runtime 用刚换取的 Bearer token
+执行一次同源、禁止重定向的 GET，再从有界 JSON 响应读取 scopes。首版只支持公开 scalar
+`static_query_fields`，不支持静态 header；authorization/cookie/token/key/secret 等名称仍被拒绝。
+Discovery 可独立限定 timeout、响应字节数及业务成功码，任何 HTTP、业务 envelope、类型、大小
+或超时错误都会让整个登录失败，token 不会进入缓存。
+
 Operation 不得保存 `credential_ref`；认证只能通过 `provider.auth` 表达。Project 必须选择质量 profile，并为每个 Operation 配套 SourceContract、为每个 Capability 配套 CapabilityQuality。旧格式文档和 Pack 会被稳定拒绝，不做隐式迁移。
+
+`provider.application_success` 是可选的 JSON envelope 业务成功合同。像 mall 这类无论成功或失败都返回 HTTP 200 的系统，应声明业务码 JSON Pointer 与精确成功值；Runtime 会在输出 Schema 校验前拒绝业务 401/403/500 或缺失业务码，避免把“接口可达”误报成“业务成功”。普通非 envelope API 不声明该字段，ACC 不会猜测名为 `code` 的领域字段含义。
 
 ### Operation、Evidence 与 SourceContract
 
@@ -520,6 +680,8 @@ Evidence 可以定位到文件和行号、JSON Pointer 或 OpenAPI Operation，�
 
 SourceContract 将证据归一化为 `request_schema`、`response_schema`、完整性和 JSON Pointer 级 provenance。Action Operation 还必须提供证据绑定的 `action_semantics`，逐字段证明 method、effect、risk、reversibility、retry、idempotency 与 concurrency；仅运行观测不能作为安全降级依据。Operation 输入必须是源系统可接受请求的安全子集；Operation 输出必须覆盖源系统可能返回的响应。无法证明的 Schema 关系报告 `unknown`，证据冲突报告错误；运行观测不能用来伪造 `maxItems`、`maxLength` 等上界。
 
+UI Interaction 的 `complete` 也不是 API wrapper 清单。每个 surface 必须用嵌入式 immutable Evidence 证明平台中立的 entry 与 usage context；同一 endpoint 在多个 page/dialog/flow 中的业务语境不得折叠为一个 interaction。每个 interaction 对 input bindings、defaults、option sources、conditions、related data、result consumption、states 七个维度逐项声明 `applicable` 或 evidence-backed `not_applicable`。完整分母中的 interaction 必须被 Capability adopt，或以明确 authority 与 Evidence omitted；裸空数组、虚构 router/surface 或 route-only Evidence 不能闭合 `system_complete`。
+
 如果源接口需要可信身份或租户值，Operation 用 `context_bindings` 声明注入位置，例如把 `tenant_id` 绑定到 `tenant_context.tenant_id`。绑定值只能由 Runtime 的不可变 `PrincipalContext` 提供，Agent 输入和 Workflow 参数都不能覆盖；Provider 还必须通过 `context_binding_allowlist` 显式允许租户路径。`PrincipalContext` 保存 principal、目标系统、有效 Scope 和受限租户上下文，但不公开 JWT、密码、Authorization Header 或内部认证状态。
 
 ### Capability、Policy 与 Eval
@@ -549,7 +711,9 @@ Action 使用显式生命周期：`prepare` 生成并密封只读预览；proof 
 
 部署 Scope ceiling 只会收紧 Pack 的 Scope 要求。`acc run` 在监听前报告每个 Capability 的 `callable`、`conditional`、`denied` 或 `unknown`；空 ceiling 默认拒绝，`--strict-scope` 可拒绝确定不可调用的部署，`--scope-ceiling-from-pack` 也不代表 Pack 自动获得源权限。登录前未知的用户源权限保持 `unknown`，登录后仍由源 JWT 与源 API 对每次请求执行最终授权。
 
-Coverage 直接消费平台中立的 Scope Inventory、DomainMap 和 Candidate Ledger。除 `route_disposition`、`operation_trace`、`scenario_coverage`、`constructability`、`discoverability_graph`、`composition`、`schema_fidelity`、`output_budget` 和 `live_observations` 外，还独立报告十个交互轴，以及 `domain_disposition`、`business_goals`、`candidate_classification`、`semantics_provenance`、`identity_authorization`、`action_lifecycle`、`conflict_control`、`idempotency`、`outcome_resolution`、`verification`、`cross_domain_dependency`、`user_decision_trace` 十二个领域与 Action 轴。它不生成总分，也不把“路由已分类”“候选已确认”或“源已连接”解释为 Capability 可用或 Action 安全。
+Coverage 直接消费平台中立的 Scope Inventory、DomainMap 和 Candidate Ledger。除 `route_disposition`、`operation_trace`、`scenario_coverage`、`constructability`、`discoverability_graph`、`composition`、`tool_portfolio`、`schema_fidelity`、`output_budget` 和 `live_observations` 外，还独立报告十个交互轴，以及 `domain_disposition`、`business_goals`、`candidate_classification`、`semantics_provenance`、`identity_authorization`、`action_lifecycle`、`conflict_control`、`idempotency`、`outcome_resolution`、`verification`、`cross_domain_dependency`、`user_decision_trace` 十二个领域与 Action 轴。它不生成总分，也不把“路由已分类”“候选已确认”或“源已连接”解释为 Capability 可用或 Action 安全。
+
+`tool_portfolio` 按 Capability 的业务 intent 审计 Agent 工具组合，而不是要求一条 route 对应一个工具；同时用 `projected_mcp_tool_count` 报告实际 `tools/list` 投影。Read Capability 各产生一个同名工具，Action Capability 各产生一个 `<id>.prepare`，只要存在 Action 还会增加共享的 `acc_action_approve`、`acc_action_commit`、`acc_action_status` 三个工具。轴会阻止 Read 名称与 Action prepare 或共享生命周期保留名碰撞。`IntentPlan` 先给出 Evidence 驱动的用户目标、route/interaction/candidate/capability 关联、merge/split/compose rationale、Action safety 与 gap；Capability 和 MCP 数量随后派生，不能作为规划输入或验收配额。核心默认不设置绝对数量上限；项目或部署只有显式传入 review budget 时才按实际 MCP 投影数量产生 warning。同一 intent 下，只有 input/output/selector 接口证据等价且 Operation 依赖完全重复或 Jaccard 重叠度至少 0.75，才提示合并或补充独立业务结果证据；空 Operation 依赖保持“证据不完整”，不会被当作重复。它还报告缺少同资源 Read selector 的孤立 mutation、未绑定现存 Capability 的 planned/composed route，以及完整范围中保留的 evidence-blocked route。减少工具数量不能抹去业务分母，堆叠工具数量也不能把 blocked route 变成已覆盖。
 
 交互验证等级分别为 `contract_declared`、`static_verified`、`headless_verified`、`runtime_offline_verified`、`source_connected_verified` 和 `client_adapter_verified`，等级之间不自动升级。尤其是连通真实或隔离测试源，只证明所执行的源请求路径；没有与当前 interaction digest 绑定、且所有 required scenarios 均通过的客户端适配报告时，仍不得声明 `client_adapter_verified`。Runtime 公开只读、去 Evidence 的交互 manifest 并执行安全公共默认值，但它不是浏览器、移动端渲染器或 UI 引擎。
 

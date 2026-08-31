@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from typing import Annotated, Literal
 from urllib.parse import unquote, urlsplit
@@ -234,6 +235,85 @@ type PasswordBearerCredentials = Annotated[
     Field(discriminator="kind"),
 ]
 
+type JsonScalar = str | int | float | bool | None
+
+
+class JsonPointerApplicationSuccessConfig(StrictModel):
+    """Declare exact application-level success for a JSON envelope."""
+
+    kind: Literal["json_pointer"]
+    pointer: NonEmptyString
+    allowed_values: Annotated[list[JsonScalar], Field(min_length=1)]
+
+    @field_validator("pointer")
+    @classmethod
+    def validate_pointer(cls, value: str) -> str:
+        return _validate_absolute_json_pointer(value)
+
+    @field_validator("allowed_values")
+    @classmethod
+    def validate_allowed_values(cls, value: list[JsonScalar]) -> list[JsonScalar]:
+        seen: set[tuple[type[object], JsonScalar]] = set()
+        for item in value:
+            if isinstance(item, float) and not math.isfinite(item):
+                raise ValueError("allowed_values must contain finite JSON scalars")
+            key = (type(item), item)
+            if key in seen:
+                raise ValueError("allowed_values entries must be unique by JSON scalar type")
+            seen.add(key)
+        return value
+
+
+class LoginRequestConfig(StrictModel):
+    """Public, non-secret scalar fields added to a password login JSON object."""
+
+    static_fields: dict[str, JsonScalar] = Field(default_factory=dict, max_length=32)
+
+    @field_validator("static_fields")
+    @classmethod
+    def validate_static_fields(cls, value: dict[str, JsonScalar]) -> dict[str, JsonScalar]:
+        for name, item in value.items():
+            if not name or name != name.strip() or any(ord(char) < 0x20 for char in name):
+                raise ValueError("login static field names must be nonempty exact text")
+            words = frozenset(_context_segment_words(name))
+            compact = re.sub(r"[^A-Za-z0-9]", "", name).casefold()
+            if (
+                words & _SENSITIVE_CONTEXT_WORDS
+                or "key" in words
+                or any(marker in compact for marker in _COMPACT_SENSITIVE_CONTEXT_MARKERS)
+            ):
+                raise ValueError("login static fields cannot contain secret-bearing names")
+            if isinstance(item, float) and not math.isfinite(item):
+                raise ValueError("login static fields must contain finite JSON scalars")
+        return value
+
+
+class ScopeDiscoveryConfig(StrictModel):
+    """Discover source-authorized scopes with one bounded bearer GET."""
+
+    path: NonEmptyString
+    static_query_fields: dict[str, JsonScalar] = Field(default_factory=dict, max_length=16)
+    scopes_pointer: NonEmptyString
+    scopes_format: Literal["json_array", "space_delimited"] = "json_array"
+    application_success: JsonPointerApplicationSuccessConfig | None = None
+    timeout_seconds: Annotated[int, Field(ge=1, le=30)] = 5
+    max_response_bytes: Annotated[int, Field(ge=1, le=262_144)] = 65_536
+
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, value: str) -> str:
+        return _validate_origin_relative_path(value, field_name="scope_discovery.path")
+
+    @field_validator("scopes_pointer")
+    @classmethod
+    def validate_scopes_pointer(cls, value: str) -> str:
+        return _validate_absolute_json_pointer(value)
+
+    @field_validator("static_query_fields")
+    @classmethod
+    def validate_static_query_fields(cls, value: dict[str, JsonScalar]) -> dict[str, JsonScalar]:
+        return LoginRequestConfig.validate_static_fields(value)
+
 
 class PasswordBearerAuthConfig(StrictModel):
     """Exchange a bounded credential source for a bearer token."""
@@ -243,11 +323,14 @@ class PasswordBearerAuthConfig(StrictModel):
     login_path: NonEmptyString
     identity_field: NonEmptyString
     password_field: NonEmptyString
+    login_request: LoginRequestConfig = Field(default_factory=LoginRequestConfig)
     token_pointer: NonEmptyString
     token_type_pointer: NonEmptyString | None = None
     expires_in_pointer: NonEmptyString | None = None
     principal_pointer: NonEmptyString | None = None
     scopes_pointer: NonEmptyString | None = None
+    scopes_format: Literal["json_array", "space_delimited"] = "json_array"
+    scope_discovery: ScopeDiscoveryConfig | None = None
     tenant_pointer: NonEmptyString | None = None
     scope_mapping: dict[
         NonEmptyString,
@@ -280,6 +363,12 @@ class PasswordBearerAuthConfig(StrictModel):
     def validate_distinct_login_fields(self) -> PasswordBearerAuthConfig:
         if self.identity_field == self.password_field:
             raise ValueError("identity_field and password_field must be distinct")
+        if {self.identity_field, self.password_field} & self.login_request.static_fields.keys():
+            raise ValueError("login static fields cannot override credential fields")
+        if self.scopes_format == "space_delimited" and self.scopes_pointer is None:
+            raise ValueError("space_delimited scopes require scopes_pointer")
+        if self.scope_discovery is not None and self.scopes_pointer is not None:
+            raise ValueError("inline scopes and scope_discovery are mutually exclusive")
         return self
 
 
@@ -295,6 +384,7 @@ class ProviderConfig(StrictModel):
     kind: Literal["http"]
     base_url_ref: EnvironmentReference
     auth: ProviderAuthConfig | None = None
+    application_success: JsonPointerApplicationSuccessConfig | None = None
     context_binding_allowlist: list[TenantContextBindingReference] = Field(
         default_factory=list,
         json_schema_extra={"uniqueItems": True},
@@ -515,12 +605,90 @@ class EmitStep(WorkflowStepBase):
     emit: EmitAction
 
 
+class WorkflowReferenceOperand(StrictModel):
+    """A statically validated workflow reference used by a condition."""
+
+    kind: Literal["reference"]
+    value: NonEmptyString
+
+
+class WorkflowLiteralOperand(StrictModel):
+    """An inert JSON literal used by a workflow condition."""
+
+    kind: Literal["literal"]
+    value: JsonValue
+
+
+type WorkflowConditionOperand = Annotated[
+    WorkflowReferenceOperand | WorkflowLiteralOperand,
+    Field(discriminator="kind"),
+]
+
+
+class WorkflowEqCondition(StrictModel):
+    operator: Literal["eq"]
+    left: WorkflowConditionOperand
+    right: WorkflowConditionOperand
+
+
+class WorkflowInCondition(StrictModel):
+    operator: Literal["in"]
+    item: WorkflowConditionOperand
+    values: WorkflowConditionOperand
+
+
+class WorkflowAllCondition(StrictModel):
+    operator: Literal["all"]
+    conditions: Annotated[list[WorkflowCondition], Field(min_length=1, max_length=16)]
+
+
+class WorkflowAnyCondition(StrictModel):
+    operator: Literal["any"]
+    conditions: Annotated[list[WorkflowCondition], Field(min_length=1, max_length=16)]
+
+
+class WorkflowNotCondition(StrictModel):
+    operator: Literal["not"]
+    condition: WorkflowCondition
+
+
+type WorkflowCondition = Annotated[
+    WorkflowEqCondition
+    | WorkflowInCondition
+    | WorkflowAllCondition
+    | WorkflowAnyCondition
+    | WorkflowNotCondition,
+    Field(discriminator="operator"),
+]
+
+
+def _workflow_condition_size(condition: WorkflowCondition, *, depth: int = 1) -> tuple[int, int]:
+    if isinstance(condition, (WorkflowAllCondition, WorkflowAnyCondition)):
+        sizes = [_workflow_condition_size(item, depth=depth + 1) for item in condition.conditions]
+        return 1 + sum(size for size, _ in sizes), max(level for _, level in sizes)
+    if isinstance(condition, WorkflowNotCondition):
+        size, max_depth = _workflow_condition_size(condition.condition, depth=depth + 1)
+        return 1 + size, max_depth
+    return 1, depth
+
+
 class BranchAction(StrictModel):
     """Choose between two statically declared workflow branches."""
 
-    condition: NonEmptyString
+    condition: NonEmptyString | WorkflowCondition
     then_steps: Annotated[list[WorkflowStep], Field(min_length=1)] = Field(alias="then")
     else_steps: Annotated[list[WorkflowStep], Field(min_length=1)] = Field(alias="else")
+
+    @model_validator(mode="after")
+    def validate_condition_bounds(self) -> BranchAction:
+        """Keep recursive conditions small enough for deterministic evaluation."""
+
+        if isinstance(self.condition, str):
+            return self
+        nodes, depth = _workflow_condition_size(self.condition)
+        if nodes > 64 or depth > 16:
+            raise ValueError("branch condition exceeds the limit of 64 nodes or depth 16")
+        return self
 
 
 class BranchStep(WorkflowStepBase):
@@ -561,6 +729,9 @@ type WorkflowStep = (
 
 
 _RECURSIVE_MODELS = (
+    WorkflowAllCondition,
+    WorkflowAnyCondition,
+    WorkflowNotCondition,
     BranchAction,
     BranchStep,
     ParallelStep,
@@ -568,7 +739,12 @@ _RECURSIVE_MODELS = (
     ForeachStep,
 )
 for _model in _RECURSIVE_MODELS:
-    _model.model_rebuild(_types_namespace={"WorkflowStep": WorkflowStep})
+    _model.model_rebuild(
+        _types_namespace={
+            "WorkflowCondition": WorkflowCondition,
+            "WorkflowStep": WorkflowStep,
+        }
+    )
 
 from acc_core.models.v2 import (  # noqa: E402  # import after recursive workflow rebuild
     ActionCapabilityV2,
@@ -615,6 +791,8 @@ __all__ = [
     "ForeachAction",
     "ForeachStep",
     "GatewaySessionCredentials",
+    "JsonPointerApplicationSuccessConfig",
+    "LoginRequestConfig",
     "MapAction",
     "MapStep",
     "NoAuthConfig",
@@ -639,9 +817,19 @@ __all__ = [
     "RedactStep",
     "RedactionRule",
     "RuntimeConfig",
+    "ScopeDiscoveryConfig",
     "SourceWorkspace",
     "StrictModel",
     "TenantContextBindingReference",
+    "WorkflowAllCondition",
+    "WorkflowAnyCondition",
+    "WorkflowCondition",
+    "WorkflowConditionOperand",
+    "WorkflowEqCondition",
+    "WorkflowInCondition",
+    "WorkflowLiteralOperand",
+    "WorkflowNotCondition",
+    "WorkflowReferenceOperand",
     "WorkflowStep",
     "load_project_document",
 ]

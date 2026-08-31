@@ -16,10 +16,11 @@
 5. 将敏感字段限制落实到 Policy、redact 和 Eval 的 `forbidden_fields`。
 6. 每次修改后检查写入路径和原系统只读基线。
 7. 为 CapabilityQuality 落实 selector acquisition、producer graph、failure isolation、output budget 与长文本披露。Capability 输出收紧必须由工作流的 pick/map/filter/redact/dataflow 可证明，不能靠手写 Schema 假设。
-8. Read Operation 必须显式声明 `read` effect，不能从 HTTP 方法推断；仅在显式 Action 项目中实现 `prepare → approve → commit → status`。commit 使用不透明 approval handle，并落实 idempotency、concurrency 和 retry 合同。不得简单放开 POST。
+8. Read Operation 必须显式声明 `read` effect，不能从 HTTP 方法推断；对已获沙箱授权且 Evidence 闭合的 Action 实现 `prepare → approve → commit → status`。commit 使用不透明 approval handle，并落实 idempotency、concurrency、retry 和 outcome 合同。未闭合 Action 留在 ledger 的 `blocked_on_evidence`，不得实现、静默排除或简单放开 POST。
 9. 将 adopted bindings/defaults/options/conditions/related data/states 转为受限 InteractionContract；`hidden/disabled` 不是授权。只有 Compiler 可证明的 public default 才进入确定性规范化，前端默认值和前端条件不能修改 SourceContract。
 10. 只实现版本化 `DomainDecision` 中 accepted 且证据闭合的当前领域候选；deferred、blocked、rejected 和未激活领域都不生成 MCP。
 11. optimistic conflict 使用 Runtime 持有的 token/precondition；server-serialized transition 使用已证明的状态谓词、`retry: never` 和显式 status/outcome query。两者都保留 `prepare → approve → commit → status`。
+12. 只有显式授权的本地/开发沙箱可对低风险、`runtime_deduplicate`、`retry: never` 且源端 `concurrency: not_supported` 的 update/delete/transition 声明 `action.local_development_state_guard`。资源键必须来自 required scalar Capability input，状态 Read 必须在 preview 中且状态字段公开未改写。不得把该 guard 写成源端并发 Evidence。
 
 ## 门禁
 
@@ -32,6 +33,7 @@
 - 每个实现的 Operation 都可经 `scope_route_ids` 回溯到 `planned`/`composed` 路由。
 - Schema fidelity 无 evidence conflict；unknown 保持诊断，不通过伪造上界消除。
 - Action 的 approval、幂等、并发、重试和状态查询合同完整，且没有把 Secret/Principal/approval grant 暴露为 Agent 输入。
+- 当前实现没有把 Read-only 子集标成 `system_complete`；任何未实现 Action/composite intent 都仍以阻断状态出现在计划、Coverage 和风险报告中。
 - InteractionContract 没有任意客户端表达式，trusted binding 不进入公共输入，unknown 没有被伪装为通过。
 - 源 JWT/接口最终裁决权限；Scope 只能收窄，approval 不是授权且不能使源端拒绝变为允许。
 

@@ -2,6 +2,14 @@
 
 from acc_core.coverage.analyze import analyze_coverage
 from acc_core.coverage.domains import analyze_domain_coverage
+from acc_core.coverage.live_artifact import (
+    LiveObservationArtifact,
+    LiveObservationArtifactError,
+    LiveObservationSample,
+    artifact_observations,
+    create_live_observation_artifact,
+    load_live_observation_artifact,
+)
 from acc_core.coverage.models import (
     BusinessGoalCoverage,
     CandidateClassificationCoverage,
@@ -31,6 +39,8 @@ from acc_core.coverage.models import (
     SchemaFidelityCoverage,
     StateScenarioCoverage,
     SurfaceDispositionCoverage,
+    ToolPortfolioCoverage,
+    ToolPortfolioOverlapCoverage,
     UserDecisionTraceCoverage,
     VerificationCoverage,
 )
@@ -54,7 +64,10 @@ __all__ = [
     "InteractionFidelityAxisCoverage",
     "InteractionTraceCoverage",
     "LiveObservation",
+    "LiveObservationArtifact",
+    "LiveObservationArtifactError",
     "LiveObservationCoverage",
+    "LiveObservationSample",
     "OperationTraceCoverage",
     "OutputBudgetCoverage",
     "RelatedDataEdgeCoverage",
@@ -64,8 +77,13 @@ __all__ = [
     "SchemaFidelityCoverage",
     "StateScenarioCoverage",
     "SurfaceDispositionCoverage",
+    "ToolPortfolioCoverage",
+    "ToolPortfolioOverlapCoverage",
     "UserDecisionTraceCoverage",
     "VerificationCoverage",
     "analyze_coverage",
     "analyze_domain_coverage",
+    "artifact_observations",
+    "create_live_observation_artifact",
+    "load_live_observation_artifact",
 ]

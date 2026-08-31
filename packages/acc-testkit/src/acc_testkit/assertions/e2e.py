@@ -9,6 +9,8 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 from pydantic import JsonValue
 
+from acc_runtime.providers import JsonApplicationSuccessPolicy
+
 _UNSET = object()
 
 
@@ -42,8 +44,13 @@ def assert_expected_calls(
             raise E2EAssertionError(f"call {index} arguments mismatch")
 
 
-def assert_output_schema(output: JsonValue, schema: Mapping[str, object]) -> None:
-    """Validate an output with the Draft 2020-12 validator."""
+def assert_output_schema(
+    output: JsonValue,
+    schema: Mapping[str, object],
+    *,
+    application_success_policy: JsonApplicationSuccessPolicy | None = None,
+) -> None:
+    """Validate an output and an optional JSON-envelope success contract."""
 
     try:
         Draft202012Validator.check_schema(schema)
@@ -57,6 +64,8 @@ def assert_output_schema(output: JsonValue, schema: Mapping[str, object]) -> Non
         first = errors[0]
         path = _json_path(tuple(str(part) for part in first.absolute_path))
         raise E2EAssertionError(f"output schema mismatch at {path}")
+    if application_success_policy is not None and not application_success_policy.matches(output):
+        raise E2EAssertionError("application success contract mismatch")
 
 
 def assert_stable_error(actual: object, expected: object) -> None:
@@ -94,6 +103,7 @@ def assert_e2e(
     calls: Sequence[object],
     output: object = _UNSET,
     error: object = _UNSET,
+    application_success_policy: JsonApplicationSuccessPolicy | None = None,
 ) -> None:
     """Apply an Eval-like expected-call and success/error contract in one step."""
 
@@ -114,7 +124,11 @@ def assert_e2e(
     schema = _field(scenario, "expected_output_schema", None)
     if not isinstance(schema, Mapping):
         raise E2EAssertionError("scenario expected_output_schema must be an object")
-    assert_output_schema(cast(JsonValue, output), cast(Mapping[str, object], schema))
+    assert_output_schema(
+        cast(JsonValue, output),
+        cast(Mapping[str, object], schema),
+        application_success_policy=application_success_policy,
+    )
     forbidden = _field(scenario, "forbidden_fields", ())
     if not isinstance(forbidden, Sequence) or isinstance(forbidden, (str, bytes)):
         raise E2EAssertionError("scenario forbidden_fields must be a sequence")

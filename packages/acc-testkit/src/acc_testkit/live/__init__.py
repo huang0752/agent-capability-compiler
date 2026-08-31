@@ -11,7 +11,12 @@ from acc_testkit.live.models import (
     LiveStepStatus,
     SecretRef,
 )
-from acc_testkit.live.runner import LiveGatewayRunner, McpClientFactory, SessionClientFactory
+from acc_testkit.live.runner import (
+    LiveGatewayRunner,
+    McpClientFactory,
+    OperatorApprovalConfig,
+    SessionClientFactory,
+)
 
 __all__ = [
     "LiveGatewayAccount",
@@ -24,6 +29,7 @@ __all__ = [
     "LiveStepResult",
     "LiveStepStatus",
     "McpClientFactory",
+    "OperatorApprovalConfig",
     "SecretRef",
     "SessionClientFactory",
 ]

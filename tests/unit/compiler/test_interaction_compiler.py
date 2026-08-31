@@ -417,6 +417,7 @@ def test_compiler_emits_canonical_interaction_attestation_without_evidence_body(
         }
     )
     assert wire["inventory"] == {
+        "dimension_dispositions": {"customers.initial-load": {}},
         "evidence_sha256": _canonical_digest(["frontend-tree"]),
         "interaction_ids": ["customers.initial-load"],
         "scope_mode": "discovered",
@@ -424,6 +425,13 @@ def test_compiler_emits_canonical_interaction_attestation_without_evidence_body(
         "status": "declared",
         "summary": {"interactions": 1, "surfaces": 1, "unresolved": 0},
         "surface_ids": ["customers"],
+        "surface_contexts": {
+            "customers": {
+                "kind": "page",
+                "route_or_entry": "/customers",
+                "usage_context": None,
+            }
+        },
     }
     compiled_contract = wire["contracts"]["get_customer"]
     assert compiled_contract["defaults"][0]["value"] == "zh-CN"

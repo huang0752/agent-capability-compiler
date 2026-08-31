@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from fs_links import create_link
+
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = ROOT / "skills" / "acc-engineer" / "scripts" / "artifact_manifest.py"
 
@@ -54,7 +56,7 @@ def test_manifest_rejects_symlinks_without_reading_the_target(tmp_path: Path) ->
     secret = "outside-secret-never-output"
     outside = tmp_path / "outside.txt"
     outside.write_text(secret, encoding="utf-8")
-    (project / "linked.txt").symlink_to(outside)
+    create_link(project / "linked.txt", outside)
 
     completed, payload = _run(project)
 

@@ -10,6 +10,8 @@ from typing import Any
 import pytest
 import yaml
 
+from fs_links import create_link
+
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = ROOT / "skills" / "acc-engineer" / "scripts" / "scope_audit.py"
 
@@ -595,6 +597,54 @@ def test_evidence_backed_objective_ineligibility_closes_action_route(tmp_path: P
     assert payload["ok"] is True
 
 
+def test_content_summary_cannot_make_an_action_objectively_ineligible(
+    tmp_path: Path,
+) -> None:
+    project = _write_project(
+        tmp_path,
+        routes=[
+            _route(
+                "customer.update",
+                method="POST",
+                kind="action",
+                effect="update",
+                eligibility="ineligible",
+                disposition="excluded",
+                operation_id=None,
+                capability_ids=[],
+                candidate_id="candidate.customer.update",
+                reason="A generated summary claims the source route is unavailable.",
+            )
+        ],
+        candidates=[
+            _candidate(
+                "candidate.customer.update",
+                ["customer.update"],
+                gaps=["idempotency"],
+                ineligibility_claim={
+                    "status": "proven",
+                    "evidence_refs": ["generated-summary"],
+                },
+            )
+        ],
+        evidence=[
+            {
+                "source_id": "generated-summary",
+                "kind": "content_summary",
+                "summary": "The Action is outside a chosen read-only delivery boundary.",
+                "digest": "sha256:" + "2" * 64,
+            }
+        ],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert "ACC_SCOPE_ACTION_INELIGIBILITY_UNPROVEN" in {
+        item["code"] for item in payload["diagnostics"]
+    }
+
+
 def test_declared_malformed_candidate_ledger_is_an_explicit_error(tmp_path: Path) -> None:
     project = _write_project(tmp_path)
     secret = "malformed-candidate-secret-never-output"
@@ -621,6 +671,32 @@ def test_declared_malformed_evidence_artifact_is_an_explicit_error(tmp_path: Pat
         "ACC_SCOPE_EVIDENCE_ARTIFACT_INVALID"
     }
     assert payload["diagnostics"][0]["path"] == "evidence/evidence-0.yaml"
+
+
+def test_system_complete_cannot_exclude_an_eligible_action(tmp_path: Path) -> None:
+    route = _route(
+        "customer.update",
+        method="POST",
+        kind="action",
+        effect="update",
+        disposition="excluded",
+        operation_id=None,
+        reason="Product owner chose not to expose writes",
+        exclusion_rule_id="exclude-update",
+        exclusion_decision=_decision("Do not expose this otherwise eligible update"),
+    )
+    project = _write_project(
+        tmp_path,
+        routes=[route],
+        exclusion_rules=[_rule("exclude-update", ["customer.update"])],
+    )
+
+    completed, payload = _run(project)
+
+    assert completed.returncode == 3
+    assert "ACC_SCOPE_ACTION_EXCLUSION_FORBIDDEN" in {
+        item["code"] for item in payload["diagnostics"]
+    }
 
 
 def test_duplicate_evidence_source_id_is_not_trusted_for_action_ineligibility(
@@ -757,7 +833,7 @@ def test_broken_evidence_symlink_returns_a_stable_path_diagnostic(tmp_path: Path
     project = _write_project(tmp_path)
     evidence_dir = project / "evidence"
     evidence_dir.mkdir()
-    (evidence_dir / "broken.yaml").symlink_to(project / "does-not-exist.yaml")
+    create_link(evidence_dir / "broken.yaml", project / "does-not-exist.yaml")
 
     completed, payload = _run(project)
 

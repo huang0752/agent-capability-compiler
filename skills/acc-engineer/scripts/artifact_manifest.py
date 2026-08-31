@@ -19,6 +19,7 @@ from verify_read_only_workspace import (
     diagnostic,
     emit,
     hash_file,
+    is_path_link,
     is_sensitive_path,
     iter_workspace,
     reject_parent_segments,
@@ -85,7 +86,9 @@ def reject_nested_workspaces(project: Path) -> None:
                     "Git workspaces are not accepted by the non-Git manifest helper",
                     path=relative,
                 )
-            if entry.is_dir(follow_symlinks=False) and not entry.is_symlink():
+            if entry.is_dir(follow_symlinks=False) and not (
+                entry.is_symlink() or bool(getattr(entry, "is_junction", lambda: False)())
+            ):
                 visit(Path(entry.path), relative)
 
     visit(project, "")
@@ -165,14 +168,15 @@ def atomic_write_json(target: Path, value: dict[str, object]) -> None:
     ).encode("utf-8")
     descriptor, temporary = tempfile.mkstemp(prefix=".acc-manifest-", dir=target.parent)
     try:
-        os.fchmod(descriptor, 0o600)
+        if hasattr(os, "fchmod"):
+            os.fchmod(descriptor, 0o600)
         offset = 0
         while offset < len(payload):
             offset += os.write(descriptor, payload[offset:])
         os.fsync(descriptor)
         os.close(descriptor)
         descriptor = -1
-        if target.is_symlink():
+        if is_path_link(target):
             raise SafePathError(
                 "ACC_SKILL_SYMLINK_REJECTED",
                 "manifest output became a symlink",

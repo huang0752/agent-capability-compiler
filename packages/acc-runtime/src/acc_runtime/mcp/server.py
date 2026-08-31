@@ -61,6 +61,17 @@ class PrincipalResolver(Protocol):
     async def resolve(self, access_token: AccessToken | None = None) -> PrincipalContext: ...
 
 
+class ActionPrepareObserver(Protocol):
+    async def observe_prepared(
+        self,
+        action_handle: SecretValue,
+        principal: PrincipalContext,
+        *,
+        approval_required: bool,
+        expires_at: float,
+    ) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class _McpCancelled:
     pass
@@ -220,7 +231,7 @@ class CapabilityMcpServer:
 class PrincipalCapabilityMcpServer:
     """Expose capabilities using the Principal authenticated by the current request."""
 
-    __slots__ = ("action_coordinator", "resolver", "runtime")
+    __slots__ = ("action_coordinator", "action_prepare_observer", "resolver", "runtime")
 
     def __init__(
         self,
@@ -228,12 +239,14 @@ class PrincipalCapabilityMcpServer:
         *,
         resolver: PrincipalResolver,
         action_coordinator: ActionCoordinator | None = None,
+        action_prepare_observer: ActionPrepareObserver | None = None,
     ) -> None:
         if action_coordinator is not None and not isinstance(action_coordinator, ActionCoordinator):
             raise TypeError("action_coordinator must be ActionCoordinator")
         self.runtime = runtime
         self.resolver = resolver
         self.action_coordinator = action_coordinator
+        self.action_prepare_observer = action_prepare_observer
 
     def list_tools(self) -> list[types.Tool]:
         """Reuse the stable public tool projection without adding identity inputs."""
@@ -314,6 +327,7 @@ class PrincipalCapabilityMcpServer:
                     cast(Mapping[str, JsonValue], dict(arguments or {})),
                     principal,
                     prepare_capability_id=prepare_capability_id,
+                    prepare_observer=self.action_prepare_observer,
                 )
             else:
                 result = await self.runtime.call_with_context(
@@ -585,9 +599,17 @@ async def _call_action_lifecycle(
     principal: PrincipalContext,
     *,
     prepare_capability_id: str | None,
+    prepare_observer: ActionPrepareObserver | None = None,
 ) -> JsonValue:
     if prepare_capability_id is not None:
         prepared = await coordinator.prepare(prepare_capability_id, arguments, principal)
+        if prepare_observer is not None:
+            await prepare_observer.observe_prepared(
+                prepared.action_handle,
+                principal,
+                approval_required=prepared.approval_required,
+                expires_at=prepared.expires_at,
+            )
         return {
             "action_handle": prepared.action_handle.get_secret_value(),
             "capability_id": prepared.capability_id,

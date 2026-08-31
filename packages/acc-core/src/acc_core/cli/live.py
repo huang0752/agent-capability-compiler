@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import ipaddress
+import os
+import tempfile
 from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlsplit
@@ -13,13 +17,21 @@ import anyio
 import yaml
 from pydantic import ValidationError
 
+from acc_core.coverage import (
+    LiveObservationArtifact,
+    LiveObservationSample,
+    create_live_observation_artifact,
+)
 from acc_core.diagnostics import Diagnostic, ResultEnvelope
-from acc_core.packaging import CapabilityPackError, verify_pack
+from acc_core.quality.output_size import canonical_json_bytes
+from acc_runtime.errors import RuntimeError as AccRuntimeError
+from acc_runtime.loader import LoadedPack, load_pack
 from acc_testkit.live import LiveGatewayProfile, LiveGatewayReport, LiveGatewayRunner
 
 _EXIT_SUCCESS = 0
 _EXIT_TEST = 5
 _MAX_PROFILE_BYTES = 1_048_576
+_OBSERVATION_VALIDITY = timedelta(hours=24)
 
 
 def run_live_command(
@@ -62,8 +74,9 @@ def run_live_command(
         )
 
     try:
-        verification = verify_pack(Path(str(arguments.pack)))
-    except (CapabilityPackError, OSError, ValueError):
+        loaded_pack = load_pack(Path(str(arguments.pack)))
+        verification = loaded_pack.verification
+    except (AccRuntimeError, OSError, ValueError):
         return _fail("ACC_LIVE_PACK_INVALID", "The live-test Pack is invalid.")
     try:
         profile = _load_profile(Path(str(arguments.profile)), gateway_url=gateway_url)
@@ -93,8 +106,29 @@ def run_live_command(
     except Exception:
         return _fail("ACC_LIVE_RUN_FAILED", "The live Gateway test could not complete.")
 
-    result = report.model_dump(mode="json")
     if report.verified:
+        result = report.model_dump(mode="json")
+        observations_output = getattr(arguments, "observations_output", None)
+        if observations_output is not None:
+            try:
+                artifact = _build_observation_artifact(
+                    loaded_pack,
+                    profile,
+                    report,
+                    observed_at=datetime.now(UTC),
+                )
+                output_path = Path(str(observations_output)).expanduser().resolve(strict=False)
+                _write_observation_artifact(output_path, artifact.model_dump(mode="json"))
+            except (OSError, TypeError, ValueError):
+                return _fail(
+                    "ACC_LIVE_OBSERVATIONS_OUTPUT_FAILED",
+                    "The verified live observations could not be written safely.",
+                )
+            result["live_observations"] = {
+                "path": str(output_path),
+                "sha256": artifact.artifact_sha256,
+                "expires_at": artifact.expires_at.isoformat().replace("+00:00", "Z"),
+            }
         return _EXIT_SUCCESS, ResultEnvelope(
             ok=True,
             command="test live",
@@ -115,6 +149,85 @@ def run_live_command(
             )
         ],
     )
+
+
+def _build_observation_artifact(
+    loaded_pack: LoadedPack,
+    profile: LiveGatewayProfile,
+    report: LiveGatewayReport,
+    *,
+    observed_at: datetime,
+) -> LiveObservationArtifact:
+    capabilities = loaded_pack.ir.get("capabilities")
+    if not isinstance(capabilities, dict):
+        raise ValueError("compiled IR has no capability map")
+    steps = {step.id: step for step in report.steps}
+    samples: list[LiveObservationSample] = []
+    for case in profile.cases:
+        if case.capability_id is None or case.expect_error:
+            continue
+        if case.capability_id not in capabilities:
+            raise ValueError("live case references an unknown Pack capability")
+        if case.tool not in {case.capability_id, f"{case.capability_id}.prepare"}:
+            raise ValueError("live case tool does not match its capability binding")
+        step = steps.get(f"case.{case.id}")
+        response_bytes = None if step is None else step.evidence.get("response_bytes")
+        if step is None or step.status.value != "passed" or not isinstance(response_bytes, int):
+            continue
+        samples.append(
+            LiveObservationSample(
+                capability_id=case.capability_id,
+                case_id=case.id,
+                response_bytes=response_bytes,
+            )
+        )
+    if not samples:
+        raise ValueError("no successful capability-bound live cases")
+    ir_record = next(
+        (item for item in loaded_pack.verification.files if item.path == "compiled/ir.json"),
+        None,
+    )
+    if ir_record is None:
+        raise ValueError("Pack has no compiled IR record")
+    profile_sha256 = hashlib.sha256(
+        canonical_json_bytes(profile.model_dump(mode="json"))
+    ).hexdigest()
+    report_sha256 = hashlib.sha256(canonical_json_bytes(report.model_dump(mode="json"))).hexdigest()
+    return create_live_observation_artifact(
+        project_id=loaded_pack.manifest.project_id,
+        project_version=loaded_pack.manifest.project_version,
+        pack_sha256=loaded_pack.verification.sha256,
+        compiled_ir_sha256=ir_record.sha256,
+        profile_sha256=profile_sha256,
+        report_sha256=report_sha256,
+        observed_at=observed_at,
+        expires_at=observed_at + _OBSERVATION_VALIDITY,
+        samples=tuple(sorted(samples, key=lambda item: (item.capability_id, item.case_id))),
+    )
+
+
+def _write_observation_artifact(path: Path, value: object) -> None:
+    if path.is_symlink():
+        raise ValueError("observation output cannot be a symbolic link")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    contents = canonical_json_bytes(value) + b"\n"
+    temporary_path: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary:
+            temporary_path = temporary.name
+            temporary.write(contents)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_path, path)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            Path(temporary_path).unlink(missing_ok=True)
 
 
 async def _execute_live_profile(

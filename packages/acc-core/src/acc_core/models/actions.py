@@ -253,13 +253,21 @@ class StatusQueryRequestBindingV2(StrictModel):
     """Map one sealed Action value into a declared status-query input."""
 
     target: NonEmptyString
-    source: Literal["capability_input", "prepared_preview"]
-    source_pointer: NonEmptyString
+    source: Literal["capability_input", "prepared_preview", "runtime_idempotency_key"]
+    source_pointer: NonEmptyString | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
-    @field_validator("source_pointer")
-    @classmethod
-    def validate_source_pointer(cls, value: str) -> str:
-        return _validate_json_pointer(value)
+    @model_validator(mode="after")
+    def validate_source(self) -> Self:
+        if self.source == "runtime_idempotency_key":
+            if self.source_pointer is not None:
+                raise ValueError("runtime idempotency key binding cannot use a source pointer")
+        elif self.source_pointer is None:
+            raise ValueError("sealed value binding requires a source pointer")
+        else:
+            _validate_json_pointer(self.source_pointer)
+        return self
 
 
 class StatusQueryOutcomeResolutionV2(StrictModel):
@@ -271,6 +279,26 @@ class StatusQueryOutcomeResolutionV2(StrictModel):
         default_factory=list,
         exclude_if=lambda value: not value,
     )
+    success_pointer: NonEmptyString | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    success_values: list[JsonValue] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
+    @field_validator("success_pointer")
+    @classmethod
+    def validate_success_pointer(cls, value: str | None) -> str | None:
+        return None if value is None else _validate_json_pointer(value)
+
+    @field_validator("success_values")
+    @classmethod
+    def validate_success_values(cls, value: list[JsonValue] | None) -> list[JsonValue] | None:
+        if value is None:
+            return None
+        if not value:
+            raise ValueError("success values must not be empty")
+        return _validate_state_values(value)
 
     @field_validator("request_bindings")
     @classmethod

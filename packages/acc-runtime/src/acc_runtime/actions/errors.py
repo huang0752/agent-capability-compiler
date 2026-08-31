@@ -33,6 +33,11 @@ class ActionApprovalExpiredError(RuntimeError):
     status = 410
 
 
+class ApprovalAuthorityIntegrityError(RuntimeError):
+    code = "ACC_RUNTIME_APPROVAL_AUTHORITY_INTEGRITY"
+    status = 500
+
+
 __all__ = [
     "ActionApprovalExpiredError",
     "ActionApprovalInvalidError",
@@ -40,4 +45,5 @@ __all__ = [
     "ActionExpiredError",
     "ActionHandleInvalidError",
     "ActionStateConflictError",
+    "ApprovalAuthorityIntegrityError",
 ]

@@ -22,6 +22,7 @@ from acc_core.packaging import PackManifest
 from acc_core.quality import CapabilityQuality
 from acc_core.scope import ScopeInventory
 from acc_core.validation import ValidationReport
+from fs_links import create_link
 
 
 def _operation(identifier: str) -> Operation:
@@ -238,6 +239,7 @@ def test_coverage_reports_independent_axes_without_a_total_score() -> None:
         "constructability",
         "discoverability_graph",
         "composition",
+        "tool_portfolio",
         "schema_fidelity",
         "output_budget",
         "live_observations",
@@ -802,7 +804,7 @@ def test_freeze_rejects_locator_traversal_without_writing(tmp_path: Path) -> Non
 def test_freeze_rejects_source_symlinks_without_writing(tmp_path: Path) -> None:
     project = _write_freeze_project(tmp_path, "api/linked.py#L1")
     source_file = tmp_path / "source" / "api" / "customers.py"
-    (tmp_path / "source" / "api" / "linked.py").symlink_to(source_file)
+    create_link(tmp_path / "source" / "api" / "linked.py", source_file)
     operation_file = project / "operations" / "get-customer.yaml"
     before = operation_file.read_bytes()
 

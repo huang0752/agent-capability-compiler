@@ -12,6 +12,7 @@ import pytest
 import yaml
 
 from acc_core.usage import validate_usage_project
+from fs_links import create_link
 
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = ROOT / "skills" / "acc-usage-engineer" / "scripts" / "usage_evidence_capture.py"
@@ -150,7 +151,7 @@ def test_capture_rejects_traversal_symlink_secret_and_oversize(tmp_path: Path) -
     secret.write_text("never-open-production-secret", encoding="utf-8")
     secret.chmod(0)
     linked = source / "linked.ts"
-    linked.symlink_to(source_file)
+    create_link(linked, source_file)
     common = _common(source, acc, usage)
     source_index = common.index("frontend/pages/finance.ts")
 
@@ -182,7 +183,7 @@ def test_capture_cannot_write_outside_fixed_source_layer_directory(tmp_path: Pat
     outside.mkdir()
     evidence = usage / "usage-evidence"
     evidence.mkdir()
-    (evidence / "client").symlink_to(outside, target_is_directory=True)
+    create_link(evidence / "client", outside, target_is_directory=True)
     common = _common(source, acc, usage)
 
     linked, linked_payload = _run(*common)

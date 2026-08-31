@@ -109,6 +109,17 @@
           "minimum": 1,
           "title": "Expires In Seconds",
           "type": "integer"
+        },
+        "local_development_state_guard": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LocalDevelopmentStateGuardV2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -191,9 +202,16 @@
       "description": "Choose between two statically declared workflow branches.",
       "properties": {
         "condition": {
-          "minLength": 1,
-          "title": "Condition",
-          "type": "string"
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/WorkflowCondition"
+            }
+          ],
+          "title": "Condition"
         },
         "else": {
           "items": {
@@ -460,6 +478,58 @@
       "type": "object"
     },
     "JsonValue": {},
+    "LocalDevelopmentStateGuardV2": {
+      "additionalProperties": false,
+      "description": "Runtime-only state guard for an explicitly local development sandbox.\n\nThis declaration does not assert source-system atomicity. It only permits\ncooperating ACC runtime calls to lock, re-read, and deduplicate locally.",
+      "properties": {
+        "allowed_values": {
+          "items": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "minItems": 1,
+          "title": "Allowed Values",
+          "type": "array"
+        },
+        "mode": {
+          "const": "local_development_runtime_guard",
+          "title": "Mode",
+          "type": "string"
+        },
+        "read_operation_id": {
+          "minLength": 1,
+          "title": "Read Operation Id",
+          "type": "string"
+        },
+        "resource_key_pointer": {
+          "minLength": 1,
+          "title": "Resource Key Pointer",
+          "type": "string"
+        },
+        "state_pointer": {
+          "minLength": 1,
+          "title": "State Pointer",
+          "type": "string"
+        },
+        "terminal_values": {
+          "items": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "minItems": 1,
+          "title": "Terminal Values",
+          "type": "array"
+        }
+      },
+      "required": [
+        "mode",
+        "resource_key_pointer",
+        "read_operation_id",
+        "state_pointer",
+        "allowed_values",
+        "terminal_values"
+      ],
+      "title": "LocalDevelopmentStateGuardV2",
+      "type": "object"
+    },
     "MapAction": {
       "additionalProperties": false,
       "description": "Apply a bounded declarative mapping expression to a collection.",
@@ -725,6 +795,209 @@
         "redact"
       ],
       "title": "RedactStep",
+      "type": "object"
+    },
+    "WorkflowAllCondition": {
+      "additionalProperties": false,
+      "properties": {
+        "conditions": {
+          "items": {
+            "$ref": "#/$defs/WorkflowCondition"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Conditions",
+          "type": "array"
+        },
+        "operator": {
+          "const": "all",
+          "title": "Operator",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operator",
+        "conditions"
+      ],
+      "title": "WorkflowAllCondition",
+      "type": "object"
+    },
+    "WorkflowAnyCondition": {
+      "additionalProperties": false,
+      "properties": {
+        "conditions": {
+          "items": {
+            "$ref": "#/$defs/WorkflowCondition"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "title": "Conditions",
+          "type": "array"
+        },
+        "operator": {
+          "const": "any",
+          "title": "Operator",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operator",
+        "conditions"
+      ],
+      "title": "WorkflowAnyCondition",
+      "type": "object"
+    },
+    "WorkflowCondition": {
+      "discriminator": {
+        "mapping": {
+          "all": "#/$defs/WorkflowAllCondition",
+          "any": "#/$defs/WorkflowAnyCondition",
+          "eq": "#/$defs/WorkflowEqCondition",
+          "in": "#/$defs/WorkflowInCondition",
+          "not": "#/$defs/WorkflowNotCondition"
+        },
+        "propertyName": "operator"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/WorkflowEqCondition"
+        },
+        {
+          "$ref": "#/$defs/WorkflowInCondition"
+        },
+        {
+          "$ref": "#/$defs/WorkflowAllCondition"
+        },
+        {
+          "$ref": "#/$defs/WorkflowAnyCondition"
+        },
+        {
+          "$ref": "#/$defs/WorkflowNotCondition"
+        }
+      ]
+    },
+    "WorkflowConditionOperand": {
+      "discriminator": {
+        "mapping": {
+          "literal": "#/$defs/WorkflowLiteralOperand",
+          "reference": "#/$defs/WorkflowReferenceOperand"
+        },
+        "propertyName": "kind"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/WorkflowReferenceOperand"
+        },
+        {
+          "$ref": "#/$defs/WorkflowLiteralOperand"
+        }
+      ]
+    },
+    "WorkflowEqCondition": {
+      "additionalProperties": false,
+      "properties": {
+        "left": {
+          "$ref": "#/$defs/WorkflowConditionOperand"
+        },
+        "operator": {
+          "const": "eq",
+          "title": "Operator",
+          "type": "string"
+        },
+        "right": {
+          "$ref": "#/$defs/WorkflowConditionOperand"
+        }
+      },
+      "required": [
+        "operator",
+        "left",
+        "right"
+      ],
+      "title": "WorkflowEqCondition",
+      "type": "object"
+    },
+    "WorkflowInCondition": {
+      "additionalProperties": false,
+      "properties": {
+        "item": {
+          "$ref": "#/$defs/WorkflowConditionOperand"
+        },
+        "operator": {
+          "const": "in",
+          "title": "Operator",
+          "type": "string"
+        },
+        "values": {
+          "$ref": "#/$defs/WorkflowConditionOperand"
+        }
+      },
+      "required": [
+        "operator",
+        "item",
+        "values"
+      ],
+      "title": "WorkflowInCondition",
+      "type": "object"
+    },
+    "WorkflowLiteralOperand": {
+      "additionalProperties": false,
+      "description": "An inert JSON literal used by a workflow condition.",
+      "properties": {
+        "kind": {
+          "const": "literal",
+          "title": "Kind",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/JsonValue"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "title": "WorkflowLiteralOperand",
+      "type": "object"
+    },
+    "WorkflowNotCondition": {
+      "additionalProperties": false,
+      "properties": {
+        "condition": {
+          "$ref": "#/$defs/WorkflowCondition"
+        },
+        "operator": {
+          "const": "not",
+          "title": "Operator",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operator",
+        "condition"
+      ],
+      "title": "WorkflowNotCondition",
+      "type": "object"
+    },
+    "WorkflowReferenceOperand": {
+      "additionalProperties": false,
+      "description": "A statically validated workflow reference used by a condition.",
+      "properties": {
+        "kind": {
+          "const": "reference",
+          "title": "Kind",
+          "type": "string"
+        },
+        "value": {
+          "minLength": 1,
+          "title": "Value",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "title": "WorkflowReferenceOperand",
       "type": "object"
     },
     "WorkflowStep": {

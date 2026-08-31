@@ -36,6 +36,14 @@ from acc_core.models import (
     ReadCapabilityV2,
     RedactStep,
     StrictModel,
+    WorkflowAllCondition,
+    WorkflowAnyCondition,
+    WorkflowCondition,
+    WorkflowEqCondition,
+    WorkflowInCondition,
+    WorkflowLiteralOperand,
+    WorkflowNotCondition,
+    WorkflowReferenceOperand,
     WorkflowStep,
 )
 from acc_core.scope import (
@@ -238,6 +246,71 @@ def _validate_value(
             )
 
 
+def _validate_condition(
+    condition: str | WorkflowCondition,
+    *,
+    available_steps: set[str],
+    allow_item: bool,
+    allow_input: bool,
+    allow_prepared: bool,
+    path: str,
+    pointer: str,
+    diagnostics: list[Diagnostic],
+) -> None:
+    if isinstance(condition, str):
+        _validate_value(
+            condition,
+            available_steps=available_steps,
+            allow_item=allow_item,
+            allow_input=allow_input,
+            allow_prepared=allow_prepared,
+            require_reference=True,
+            path=path,
+            pointer=pointer,
+            diagnostics=diagnostics,
+        )
+        return
+    if isinstance(condition, (WorkflowEqCondition, WorkflowInCondition)):
+        operands = (
+            (("left", condition.left), ("right", condition.right))
+            if isinstance(condition, WorkflowEqCondition)
+            else (("item", condition.item), ("values", condition.values))
+        )
+        for name, operand in operands:
+            if isinstance(operand, WorkflowLiteralOperand):
+                continue
+            assert isinstance(operand, WorkflowReferenceOperand)
+            _validate_value(
+                operand.value,
+                available_steps=available_steps,
+                allow_item=allow_item,
+                allow_input=allow_input,
+                allow_prepared=allow_prepared,
+                require_reference=True,
+                path=path,
+                pointer=f"{pointer}/{name}/value",
+                diagnostics=diagnostics,
+            )
+        return
+    nested = (
+        condition.conditions
+        if isinstance(condition, (WorkflowAllCondition, WorkflowAnyCondition))
+        else [condition.condition]
+    )
+    assert isinstance(condition, (WorkflowAllCondition, WorkflowAnyCondition, WorkflowNotCondition))
+    for index, child in enumerate(nested):
+        _validate_condition(
+            child,
+            available_steps=available_steps,
+            allow_item=allow_item,
+            allow_input=allow_input,
+            allow_prepared=allow_prepared,
+            path=path,
+            pointer=f"{pointer}/conditions/{index}",
+            diagnostics=diagnostics,
+        )
+
+
 def _register_step_id(
     step: WorkflowStep,
     *,
@@ -396,13 +469,12 @@ def _validate_step(
             diagnostics=diagnostics,
         )
     elif isinstance(step, BranchStep):
-        _validate_value(
+        _validate_condition(
             step.branch.condition,
             available_steps=available_steps,
             allow_item=allow_item,
             allow_input=allow_input,
             allow_prepared=allow_prepared,
-            require_reference=True,
             path=path,
             pointer=f"{pointer}/branch/condition",
             diagnostics=diagnostics,
@@ -881,14 +953,15 @@ def compile_project(project_root: str | Path = ".") -> CompilationReport:
                     for scope in validation.operations[operation_id].http.scopes
                 }
                 if (policy_scopes or operation_scopes) and (
-                    auth.scopes_pointer is None or not auth.scope_mapping
+                    (auth.scopes_pointer is None and auth.scope_discovery is None)
+                    or not auth.scope_mapping
                 ):
                     _diagnostic(
                         diagnostics,
                         code="ACC_COMPILE_SOURCE_SCOPE_MAPPING_REQUIRED",
                         message=(
-                            "A scoped streamable_http capability requires scopes_pointer "
-                            "and a non-empty scope_mapping."
+                            "A scoped streamable_http capability requires inline or "
+                            "discovered source scopes and a non-empty scope_mapping."
                         ),
                         path=f"capabilities/{capability_id}.yaml",
                         pointer="/policy",

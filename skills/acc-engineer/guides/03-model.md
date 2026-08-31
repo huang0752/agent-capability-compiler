@@ -9,10 +9,10 @@
 
 ## 动作
 
-1. 一次只激活一个依赖已就绪领域。先向用户展示业务摘要并确认业务目标、允许 effect、最大 risk、需审批目标与排除意图，形成 `DomainPolicy`；不得先深扫再替用户决定策略。
+1. 一次只激活一个依赖已就绪领域。先向用户展示完整业务摘要并确认业务目标、允许 effect、最大 risk、需审批目标、写沙箱授权与排除意图，形成 `DomainPolicy`；不得先深扫再替用户决定策略。Read-only 偏好只能形成明确 `pilot` 或未完成决策，不能闭合默认 `system_complete`。
 2. 仅深扫当前激活领域。AI 自动处理证据清晰候选；缺证据、证据冲突或语义不确定项保留 typed claim/gap。
 3. 一次只问一个问题，且仅限证据冲突、业务歧义、高风险策略或缺失的用户控制测试边界；绝不逐 route 让用户分类。
-4. 建立业务领域、实体、关系，以及 Read/Action 数据与状态流。
+4. 建立业务领域、实体、关系，以及 Read/Create/Update/Delete/transition/execute 数据与状态流和 composite intent；任何包含 mutation 的 composite 仍按 Action 建模。
 5. 建立候选 Operation 目录，每项添加非空 `scope_route_ids`，且只指向 eligible 且 disposition 为 `planned` 或 `composed` 的路由；同时标明对应 API、权限、Scope、租户边界、错误和 Evidence。
 6. 记录 API 调用关系、原系统已有测试及可复用的安全测试数据。
 7. 把环境变量名称建模为引用；不得记录凭据值、动态 Host 或调用方可覆盖的认证 Header。
@@ -24,7 +24,7 @@
 
 - 每个候选 Operation 均可回溯到 Analyze Evidence；Read 与 Action 的 kind/effect 精确一致且不从 HTTP 方法猜测。
 - 权限、租户和错误模型来自原系统证据，不由 ACC 推断或放宽。
-- 模型不包含生产 Secret、生产地址或原系统改造方案；Action 仅建模有完整安全合同的既有业务操作。
+- 模型不包含生产 Secret、生产地址或原系统改造方案；证据闭合的 Action 才可进入可实现模型，缺安全合同或沙箱授权的既有 Action 必须保留为 `blocked_on_evidence` 候选并阻止 system-complete completion。
 - 原系统只读基线无变化。
 - 每个候选 Operation 的 `scope_route_ids` 都存在于 `scope-inventory.yaml`，且不指向 excluded、ineligible 或 blocked 路由。
 - 不存在用样本 observation 收紧数组、长文本、枚举或对象字段的人工 Schema；限制必须有 provenance。

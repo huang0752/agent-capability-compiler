@@ -26,11 +26,18 @@ from acc_core.cli.domains import (
     show_domain,
     status_domains,
 )
+from acc_core.cli.intents import audit_project_intents, build_intent_brief
 from acc_core.cli.scope_diagnostics import analyze_run_scope_configuration
 from acc_core.cli.usage import handle_usage_command
 from acc_core.compiler import compile_project
 from acc_core.compiler.diff import semantic_diff
-from acc_core.coverage import analyze_coverage
+from acc_core.coverage import (
+    LiveObservation,
+    LiveObservationArtifactError,
+    analyze_coverage,
+    artifact_observations,
+    load_live_observation_artifact,
+)
 from acc_core.diagnostics import Diagnostic, ResultEnvelope
 from acc_core.evals import ContractEvalRunner
 from acc_core.evidence import EvidenceFreezeError, freeze_operation_evidence
@@ -168,8 +175,34 @@ def _parser() -> AccArgumentParser:
 
     coverage_parser = subparsers.add_parser("coverage", help="analyze capability coverage")
     coverage_parser.add_argument("path", nargs="?", default=".")
+    coverage_parser.add_argument(
+        "--live-observations",
+        help="canonical machine artifact emitted by `acc test live --observations-output`",
+    )
+    coverage_parser.add_argument(
+        "--live-pack",
+        help="verified Pack identified by --live-observations (required with that option)",
+    )
     _add_json_argument(coverage_parser)
     coverage_parser.set_defaults(handler=_coverage_command)
+
+    intents_parser = subparsers.add_parser(
+        "intents", help="prepare and audit evidence-driven business intent plans"
+    )
+    intents_subparsers = intents_parser.add_subparsers(dest="intents_command", required=True)
+    intents_brief_parser = intents_subparsers.add_parser(
+        "brief", help="emit bounded facts for the Coding Agent planner"
+    )
+    intents_brief_parser.add_argument("path", nargs="?", default=".")
+    intents_brief_parser.add_argument("--domain")
+    _add_json_argument(intents_brief_parser)
+    intents_brief_parser.set_defaults(handler=_intents_command)
+    intents_audit_parser = intents_subparsers.add_parser(
+        "audit", help="audit intent-plan.yaml against the current project"
+    )
+    intents_audit_parser.add_argument("path", nargs="?", default=".")
+    _add_json_argument(intents_audit_parser)
+    intents_audit_parser.set_defaults(handler=_intents_command)
 
     domains_parser = subparsers.add_parser("domains", help="inspect deterministic domain workflow")
     domains_subparsers = domains_parser.add_subparsers(dest="domains_command", required=True)
@@ -241,6 +274,12 @@ def _parser() -> AccArgumentParser:
     usage_build_parser.add_argument("--domain", required=True)
     usage_build_parser.add_argument("--project", default=".")
     usage_build_parser.add_argument("--output", required=True)
+    usage_build_parser.add_argument("--verification-artifact")
+    usage_build_parser.add_argument("--verification-trust-store")
+    usage_build_parser.add_argument("--accepted-pack")
+    usage_build_parser.add_argument("--accepted-tools")
+    usage_build_parser.add_argument("--accepted-test-report")
+    usage_build_parser.add_argument("--package-signing-secret-env")
     _add_json_argument(usage_build_parser)
     usage_build_parser.set_defaults(handler=handle_usage_command)
     usage_test_parser = usage_subparsers.add_parser(
@@ -265,6 +304,11 @@ def _parser() -> AccArgumentParser:
     usage_release_parser.add_argument("--domain", required=True)
     usage_release_parser.add_argument("--project", default=".")
     usage_release_parser.add_argument("--check", action="store_true", required=True)
+    usage_release_parser.add_argument("--verification-artifact")
+    usage_release_parser.add_argument("--verification-trust-store")
+    usage_release_parser.add_argument("--accepted-pack")
+    usage_release_parser.add_argument("--accepted-tools")
+    usage_release_parser.add_argument("--accepted-test-report")
     _add_json_argument(usage_release_parser)
     usage_release_parser.set_defaults(handler=handle_usage_command)
     usage_export_parser = usage_subparsers.add_parser(
@@ -340,6 +384,97 @@ def _parser() -> AccArgumentParser:
     run_parser.add_argument("--workers", type=int, default=1)
     run_parser.add_argument("--tls-certfile")
     run_parser.add_argument("--tls-keyfile")
+    run_parser.add_argument(
+        "--development-actions",
+        action="store_true",
+        help="explicitly enable non-durable Action dependencies for development/tests only",
+    )
+    run_parser.add_argument(
+        "--production-actions",
+        action="store_true",
+        help="enable the explicit durable single-node Action deployment profile",
+    )
+    run_parser.add_argument(
+        "--local-development-action-guards",
+        action="store_true",
+        help=(
+            "enable process-local Action resource guards; requires --development-actions "
+            "and never supplies source atomicity"
+        ),
+    )
+    run_parser.add_argument(
+        "--development-action-operator-approval",
+        action="store_true",
+        help="enable the loopback-only trusted Action approval endpoint for development",
+    )
+    run_parser.add_argument(
+        "--action-operator-secret-ref",
+        help="environment SecretRef for the independent development operator secret",
+    )
+    run_parser.add_argument(
+        "--production-action-operator-approval",
+        action="store_true",
+        help="enable the loopback-only durable production Action approval endpoint",
+    )
+    run_parser.add_argument(
+        "--production-action-operator-secret-ref",
+        help="environment SecretRef for the independent production operator secret",
+    )
+    run_parser.add_argument(
+        "--action-capability",
+        action="append",
+        default=[],
+        help="allow one Action capability in development mode (repeatable)",
+    )
+    run_parser.add_argument(
+        "--development-action-store",
+        choices=("memory", "sqlite"),
+        default="memory",
+        help="development Action Store backend (default: memory)",
+    )
+    run_parser.add_argument("--action-store-path", help="SQLite Action Store database path")
+    run_parser.add_argument(
+        "--action-store-secret-ref",
+        help="environment SecretRef for SQLite row authentication",
+    )
+    run_parser.add_argument(
+        "--action-store-salt-ref",
+        help="environment SecretRef for SQLite deployment binding salt",
+    )
+    run_parser.add_argument("--session-vault-path", help="SQLite Gateway session vault path")
+    run_parser.add_argument(
+        "--session-vault-key-ref", help="environment SecretRef for the session vault KEK"
+    )
+    run_parser.add_argument(
+        "--session-vault-salt-ref",
+        help="environment SecretRef for the session vault deployment salt",
+    )
+    run_parser.add_argument("--approval-db-path", help="SQLite approval authority path")
+    run_parser.add_argument(
+        "--approval-secret-ref", help="environment SecretRef for approval authentication"
+    )
+    run_parser.add_argument(
+        "--approval-salt-ref", help="environment SecretRef for approval deployment binding"
+    )
+    run_parser.add_argument("--audit-db-path", help="SQLite Action audit path")
+    run_parser.add_argument(
+        "--audit-secret-ref", help="environment SecretRef for audit authentication"
+    )
+    run_parser.add_argument(
+        "--audit-salt-ref", help="environment SecretRef for audit deployment binding"
+    )
+    run_parser.add_argument(
+        "--action-effect",
+        action="append",
+        choices=("create", "update", "delete", "transition", "execute"),
+        default=[],
+        help="allow one Action effect in development mode (repeatable)",
+    )
+    run_parser.add_argument(
+        "--action-max-risk",
+        choices=("low", "medium", "high", "critical"),
+        help="maximum Action risk accepted in development mode",
+    )
     _add_json_argument(run_parser)
     run_parser.set_defaults(handler=_run_command)
 
@@ -368,6 +503,10 @@ def _parser() -> AccArgumentParser:
     live_parser.add_argument("--gateway-url", required=True)
     live_parser.add_argument("--profile", required=True)
     live_parser.add_argument("--allow-source-connect", action="store_true")
+    live_parser.add_argument(
+        "--observations-output",
+        help="write a canonical, Pack-bound live-observation artifact after verification",
+    )
     live_parser.add_argument(
         "--allowed-gateway-host",
         action="append",
@@ -638,7 +777,7 @@ def _compile_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope
 
 
 def _coverage_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope]:
-    project_root = Path(str(arguments.path))
+    project_root = Path(str(arguments.path)).resolve()
     report = validate_project(project_root)
     if not report.ok or report.project is None:
         return EXIT_INPUT, _compilation_failure("coverage", report.diagnostics)
@@ -657,8 +796,114 @@ def _coverage_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelop
                 pointer=None,
             ),
         )
-    result = analyze_coverage(report, inventory).model_dump(mode="json")
+    live_observations: Sequence[LiveObservation] = ()
+    artifact_path = getattr(arguments, "live_observations", None)
+    if artifact_path is not None:
+        live_pack_path = getattr(arguments, "live_pack", None)
+        if live_pack_path is None:
+            return EXIT_INPUT, _failure(
+                "coverage",
+                Diagnostic(
+                    code="ACC_COVERAGE_LIVE_PACK_REQUIRED",
+                    severity="error",
+                    message="Coverage requires the verified Pack for live observations.",
+                    path=None,
+                    pointer=None,
+                ),
+            )
+        compilation = compile_project(project_root)
+        if not compilation.ok or compilation.ir is None or report.project is None:
+            return EXIT_INPUT, _compilation_failure("coverage", compilation.diagnostics)
+        compiled_capabilities = compilation.ir.get("capabilities")
+        if not isinstance(compiled_capabilities, dict):
+            return EXIT_INPUT, _compilation_failure("coverage", compilation.diagnostics)
+        ir_digest = hashlib.sha256(_canonical_json(compilation.ir)).hexdigest()
+        try:
+            from acc_runtime.errors import RuntimeError as AccRuntimeError
+            from acc_runtime.loader import load_pack
+
+            loaded_pack = load_pack(Path(str(live_pack_path)).expanduser().resolve(strict=False))
+            ir_record = next(
+                (
+                    item
+                    for item in loaded_pack.verification.files
+                    if item.path == "compiled/ir.json"
+                ),
+                None,
+            )
+            if ir_record is None or ir_record.sha256 != ir_digest:
+                raise LiveObservationArtifactError(
+                    "ACC_COVERAGE_LIVE_OBSERVATIONS_MISMATCH",
+                    "The verified live Pack does not match the current Project IR.",
+                )
+            artifact = load_live_observation_artifact(
+                Path(str(artifact_path)).expanduser().resolve(strict=False),
+                project_id=report.project.project.id,
+                project_version=report.project.project.version,
+                pack_sha256=loaded_pack.verification.sha256,
+                compiled_ir_sha256=ir_digest,
+                capability_ids=compiled_capabilities,
+            )
+            live_observations = artifact_observations(artifact)
+        except AccRuntimeError:
+            return EXIT_INPUT, _failure(
+                "coverage",
+                Diagnostic(
+                    code="ACC_COVERAGE_LIVE_PACK_INVALID",
+                    severity="error",
+                    message="The Pack for live observations is invalid.",
+                    path=None,
+                    pointer=None,
+                ),
+            )
+        except LiveObservationArtifactError as exc:
+            return EXIT_INPUT, _failure(
+                "coverage",
+                Diagnostic(
+                    code=exc.code,
+                    severity="error",
+                    message=str(exc),
+                    path=None,
+                    pointer=None,
+                ),
+            )
+    result = analyze_coverage(
+        report,
+        inventory,
+        live_observations=live_observations,
+    ).model_dump(mode="json")
     return EXIT_SUCCESS, _success("coverage", result, report.diagnostics)
+
+
+def _intents_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope]:
+    command = f"intents {arguments.intents_command}"
+    project = Path(str(arguments.path)).expanduser().resolve()
+    if arguments.intents_command == "brief":
+        result, diagnostics = build_intent_brief(
+            project,
+            domain_id=cast(str | None, getattr(arguments, "domain", None)),
+        )
+    else:
+        result, diagnostics = audit_project_intents(project)
+    if result is None or any(item.severity == "error" for item in diagnostics):
+        errors = [item for item in diagnostics if item.severity == "error"]
+        if not errors:
+            errors = [
+                Diagnostic(
+                    code="ACC_INTENT_AUDIT_FAILED",
+                    severity="error",
+                    message="Intent planning did not produce a valid result.",
+                    path=None,
+                    pointer=None,
+                )
+            ]
+        return EXIT_INPUT, ResultEnvelope(
+            ok=False,
+            command=command,
+            result=None,
+            diagnostics=errors,
+        )
+    return EXIT_SUCCESS, _success(command, result, diagnostics)
 
 
 def _domains_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope]:
@@ -1231,6 +1476,34 @@ def _run_command(arguments: argparse.Namespace) -> tuple[int, ResultEnvelope]:
             for diagnostic in scope_configuration.diagnostics:
                 print(f"{diagnostic.code}: {diagnostic.message}", file=sys.stderr)
         transport = project.runtime.transport[0]
+        action_cli_requested = bool(
+            getattr(arguments, "development_actions", False)
+            or getattr(arguments, "production_actions", False)
+            or getattr(arguments, "local_development_action_guards", False)
+            or getattr(arguments, "development_action_operator_approval", False)
+            or getattr(arguments, "action_operator_secret_ref", None)
+            or getattr(arguments, "development_action_store", "memory") != "memory"
+            or getattr(arguments, "action_store_path", None)
+            or getattr(arguments, "action_store_secret_ref", None)
+            or getattr(arguments, "action_store_salt_ref", None)
+            or getattr(arguments, "session_vault_path", None)
+            or getattr(arguments, "session_vault_key_ref", None)
+            or getattr(arguments, "session_vault_salt_ref", None)
+            or getattr(arguments, "approval_db_path", None)
+            or getattr(arguments, "approval_secret_ref", None)
+            or getattr(arguments, "approval_salt_ref", None)
+            or getattr(arguments, "audit_db_path", None)
+            or getattr(arguments, "audit_secret_ref", None)
+            or getattr(arguments, "audit_salt_ref", None)
+            or getattr(arguments, "action_capability", ())
+            or getattr(arguments, "action_effect", ())
+            or getattr(arguments, "action_max_risk", None)
+        )
+        if transport != "streamable_http" and action_cli_requested:
+            raise RuntimeConfigurationError(
+                "Action deployment dependencies require a streamable HTTP Gateway.",
+                details={"reason": "actions_gateway_required"},
+            )
         if transport == "stdio":
             tools = _run_stdio_runtime(
                 arguments,
@@ -1349,14 +1622,52 @@ def _run_streamable_http_gateway(
             "Gateway deployment settings are invalid.",
             details={"reason": "gateway_settings_invalid"},
         ) from None
-    composition = create_gateway_runtime(
-        pack_path=pack_path,
-        settings=settings,
-        environment=os.environ,
-        deployment_scope_ceiling=deployment_scope_ceiling,
-        mcp_session_idle_timeout_seconds=arguments.mcp_idle_timeout,
-        max_request_body_size=arguments.body_limit,
+    production_only_requested = any(
+        getattr(arguments, name, None) is not None
+        for name in (
+            "approval_db_path",
+            "approval_secret_ref",
+            "approval_salt_ref",
+            "audit_db_path",
+            "audit_secret_ref",
+            "audit_salt_ref",
+        )
     )
+    if production_only_requested and not bool(getattr(arguments, "production_actions", False)):
+        raise RuntimeConfigurationError(
+            "Approval and Action audit SQLite options require --production-actions.",
+            details={"reason": "production_actions_opt_in_required"},
+        )
+    operator_approval, operator_configuration = _development_operator_approval(arguments)
+    production_operator_approval, production_operator_configuration = _production_operator_approval(
+        arguments
+    )
+    if bool(getattr(arguments, "production_actions", False)):
+        action_dependencies, action_configuration, session_vault = _production_action_dependencies(
+            arguments
+        )
+    else:
+        action_dependencies, action_configuration = _development_action_dependencies(arguments)
+        session_vault, vault_configuration = _gateway_session_vault(arguments)
+        action_configuration = {**action_configuration, **vault_configuration}
+    try:
+        composition = create_gateway_runtime(
+            pack_path=pack_path,
+            settings=settings,
+            environment=os.environ,
+            deployment_scope_ceiling=deployment_scope_ceiling,
+            mcp_session_idle_timeout_seconds=arguments.mcp_idle_timeout,
+            max_request_body_size=arguments.body_limit,
+            action_dependencies=action_dependencies,
+            operator_approval=operator_approval,
+            production_operator_approval=production_operator_approval,
+            session_vault=session_vault,
+        )
+    except BaseException:
+        if action_dependencies is not None:
+            with contextlib.suppress(BaseException):
+                anyio.run(_close_untransferred_action_dependencies, action_dependencies)
+        raise
     safe_configuration: dict[str, object] = {
         "gateway": {
             "host": settings.listen_host,
@@ -1370,7 +1681,10 @@ def _run_streamable_http_gateway(
             "workers": settings.worker_count,
             "tls_enabled": settings.tls_enabled,
             "scope_mode": "deployment_ceiling",
-        }
+        },
+        **action_configuration,
+        **operator_configuration,
+        **production_operator_configuration,
     }
     if bool(arguments.json_output):
         try:
@@ -1400,6 +1714,487 @@ def _run_streamable_http_gateway(
         raise
     anyio.run(composition.aclose)
     return composition.tools(), safe_configuration
+
+
+async def _close_untransferred_action_dependencies(dependencies: Any) -> None:
+    """Reverse-close CLI-created resources if Gateway composition never takes ownership."""
+
+    resources = (
+        dependencies.audit_sink,
+        dependencies.approval_authority,
+        dependencies.store,
+    )
+    for resource in resources:
+        close = getattr(resource, "close", None)
+        if close is not None:
+            with contextlib.suppress(BaseException):
+                await close()
+
+
+def _development_action_dependencies(
+    arguments: argparse.Namespace,
+) -> tuple[Any | None, dict[str, object]]:
+    """Build explicitly bounded, non-production Action dependencies or return none."""
+
+    import secrets
+
+    from acc_runtime.actions import (
+        ActionRuntimeDependencies,
+        InMemoryActionResourceLock,
+        InMemoryActionStore,
+        InMemoryApprovalAuthority,
+        LoggingActionAuditSink,
+        SQLiteActionStore,
+    )
+    from acc_runtime.credentials import SecretRef, resolve_secret
+    from acc_runtime.deployment import DeploymentPolicy
+    from acc_runtime.runtime import RuntimeConfigurationError
+
+    enabled = bool(getattr(arguments, "development_actions", False))
+    local_guards = bool(getattr(arguments, "local_development_action_guards", False))
+    capabilities = tuple(cast(Sequence[str], getattr(arguments, "action_capability", ())))
+    effects = tuple(cast(Sequence[str], getattr(arguments, "action_effect", ())))
+    maximum_risk = cast(str | None, getattr(arguments, "action_max_risk", None))
+    store_mode = cast(str, getattr(arguments, "development_action_store", "memory"))
+    store_path = cast(str | None, getattr(arguments, "action_store_path", None))
+    store_secret_ref = cast(str | None, getattr(arguments, "action_store_secret_ref", None))
+    store_salt_ref = cast(str | None, getattr(arguments, "action_store_salt_ref", None))
+    store_options = (store_path, store_secret_ref, store_salt_ref)
+    if not enabled:
+        if (
+            local_guards
+            or capabilities
+            or effects
+            or maximum_risk is not None
+            or store_mode != "memory"
+            or any(value is not None for value in store_options)
+        ):
+            raise RuntimeConfigurationError(
+                "Action deployment ceilings require --development-actions.",
+                details={"reason": "development_actions_opt_in_required"},
+            )
+        return None, {}
+    if not capabilities or not effects or maximum_risk is None:
+        raise RuntimeConfigurationError(
+            "Development Actions require explicit capability, effect, and risk ceilings.",
+            details={"reason": "development_actions_ceiling_incomplete"},
+        )
+
+    if store_mode == "memory":
+        if any(value is not None for value in store_options):
+            raise RuntimeConfigurationError(
+                "SQLite Action Store options require --development-action-store sqlite.",
+                details={"reason": "development_action_store_mode_required"},
+            )
+        action_store: Any = InMemoryActionStore(
+            development_only=True,
+            deployment_salt=secrets.token_bytes(32),
+        )
+        store_label = "in_memory"
+        store_durable = False
+    elif store_mode == "sqlite":
+        if any(value is None for value in store_options):
+            raise RuntimeConfigurationError(
+                "SQLite Action Store requires path, secret SecretRef, and salt SecretRef.",
+                details={"reason": "development_action_store_configuration_incomplete"},
+            )
+        assert (
+            store_path is not None and store_secret_ref is not None and store_salt_ref is not None
+        )
+        operator_ref = cast(str | None, getattr(arguments, "action_operator_secret_ref", None))
+        try:
+            secret_reference = SecretRef(store_secret_ref)
+            salt_reference = SecretRef(store_salt_ref)
+            store_secret = resolve_secret(secret_reference, os.environ)
+            salt_secret = resolve_secret(salt_reference, os.environ)
+            salt_value = salt_secret.get_secret_value()
+            operator_value = (
+                None
+                if operator_ref is None
+                else resolve_secret(SecretRef(operator_ref), os.environ)
+            )
+            reference_names = {store_secret_ref, store_salt_ref}
+            if operator_ref is not None:
+                reference_names.add(operator_ref)
+            raw_values = [store_secret.get_secret_value(), salt_value]
+            if operator_value is not None:
+                raw_values.append(operator_value.get_secret_value())
+            secret_values = set(raw_values)
+            if len(reference_names) != (2 if operator_ref is None else 3) or len(secret_values) != (
+                2 if operator_value is None else 3
+            ):
+                raise ValueError("Action secrets must be independent")
+            action_store = SQLiteActionStore(
+                store_path,
+                operator_secret=store_secret,
+                deployment_salt=salt_value.encode("utf-8"),
+            )
+        except (TypeError, ValueError, OSError):
+            raise RuntimeConfigurationError(
+                "SQLite Action Store configuration is invalid.",
+                details={"reason": "development_action_store_invalid"},
+            ) from None
+        store_label = "sqlite"
+        store_durable = True
+    else:
+        raise RuntimeConfigurationError(
+            "Development Action Store mode is invalid.",
+            details={"reason": "development_action_store_invalid"},
+        )
+
+    policy = DeploymentPolicy(
+        allowed_effects=frozenset(cast(Any, effects)),
+        max_risk=cast(Any, maximum_risk),
+        capability_allowlist=frozenset(capabilities),
+        require_durable_action_store=store_durable,
+        action_audit_mode="required",
+        action_sandbox_mode=("local_development" if local_guards else "disabled"),
+    )
+    dependencies = ActionRuntimeDependencies(
+        deployment_policy=policy,
+        store=action_store,
+        approval_authority=InMemoryApprovalAuthority(development_only=True),
+        audit_sink=LoggingActionAuditSink(),
+        audit_salt=secrets.token_bytes(32),
+        resource_lock=(InMemoryActionResourceLock() if local_guards else None),
+    )
+    return dependencies, {
+        "actions": {
+            "mode": "development_test_only",
+            "store": store_label,
+            "store_durable": store_durable,
+            "approval_authority": "in_memory_trusted_host",
+            "audit": "logging_required",
+            "local_development_action_guards": (
+                "process_local_only" if local_guards else "disabled"
+            ),
+            "allowed_capabilities": sorted(policy.capability_allowlist or ()),
+            "allowed_effects": sorted(policy.allowed_effects),
+            "max_risk": policy.max_risk,
+        }
+    }
+
+
+def _resolve_independent_cli_secrets(
+    references: Mapping[str, str],
+) -> dict[str, Any]:
+    """Resolve env-only SecretRefs and reject shared names or secret material."""
+
+    from acc_runtime.credentials import SecretRef, resolve_secret
+
+    names = list(references.values())
+    if len(set(names)) != len(names):
+        raise ValueError("deployment SecretRefs must be independent")
+    resolved = {
+        field: resolve_secret(SecretRef(reference), os.environ)
+        for field, reference in references.items()
+    }
+    values = [secret.get_secret_value() for secret in resolved.values()]
+    if len(set(values)) != len(values):
+        raise ValueError("deployment secret values must be independent")
+    return resolved
+
+
+def _gateway_session_vault(
+    arguments: argparse.Namespace,
+) -> tuple[Any | None, dict[str, object]]:
+    """Build an explicitly configured single-node session vault."""
+
+    from acc_runtime.gateway import GatewaySessionVaultConfig
+    from acc_runtime.runtime import RuntimeConfigurationError
+
+    path = cast(str | None, getattr(arguments, "session_vault_path", None))
+    key_ref = cast(str | None, getattr(arguments, "session_vault_key_ref", None))
+    salt_ref = cast(str | None, getattr(arguments, "session_vault_salt_ref", None))
+    options = (path, key_ref, salt_ref)
+    if all(value is None for value in options):
+        return None, {}
+    if any(value is None for value in options):
+        raise RuntimeConfigurationError(
+            "SQLite session vault requires path, key SecretRef, and salt SecretRef.",
+            details={"reason": "session_vault_configuration_incomplete"},
+        )
+    assert path is not None and key_ref is not None and salt_ref is not None
+    references = {"session_vault_key": key_ref, "session_vault_salt": salt_ref}
+    for field, attribute in (
+        ("action_store_secret", "action_store_secret_ref"),
+        ("action_store_salt", "action_store_salt_ref"),
+        ("operator_secret", "action_operator_secret_ref"),
+    ):
+        reference = cast(str | None, getattr(arguments, attribute, None))
+        if reference is not None:
+            references[field] = reference
+    try:
+        secrets_by_field = _resolve_independent_cli_secrets(references)
+        config = GatewaySessionVaultConfig(
+            db_path=path,
+            kek=secrets_by_field["session_vault_key"],
+            deployment_salt=secrets_by_field["session_vault_salt"]
+            .get_secret_value()
+            .encode("utf-8"),
+        )
+    except (TypeError, ValueError, OSError, LookupError):
+        raise RuntimeConfigurationError(
+            "SQLite session vault configuration is invalid.",
+            details={"reason": "session_vault_configuration_invalid"},
+        ) from None
+    return config, {"session_vault": {"mode": "sqlite_single_node", "durable": True}}
+
+
+def _production_action_dependencies(
+    arguments: argparse.Namespace,
+) -> tuple[Any, dict[str, object], Any]:
+    """Build the explicit durable, single-node production Action profile."""
+
+    from acc_runtime.actions import (
+        ActionRuntimeDependencies,
+        SQLiteActionAuditSink,
+        SQLiteActionStore,
+        SQLiteApprovalAuthority,
+    )
+    from acc_runtime.deployment import DeploymentPolicy
+    from acc_runtime.gateway import GatewaySessionVaultConfig
+    from acc_runtime.runtime import RuntimeConfigurationError
+
+    forbidden = bool(
+        getattr(arguments, "development_actions", False)
+        or getattr(arguments, "local_development_action_guards", False)
+        or getattr(arguments, "development_action_operator_approval", False)
+        or getattr(arguments, "action_operator_secret_ref", None)
+        or getattr(arguments, "development_action_store", "memory") != "memory"
+    )
+    if forbidden:
+        raise RuntimeConfigurationError(
+            "Production Actions cannot use development Action or local operator modes.",
+            details={"reason": "production_actions_development_mode_forbidden"},
+        )
+    capabilities = tuple(cast(Sequence[str], getattr(arguments, "action_capability", ())))
+    effects = tuple(cast(Sequence[str], getattr(arguments, "action_effect", ())))
+    maximum_risk = cast(str | None, getattr(arguments, "action_max_risk", None))
+    if not capabilities or not effects or maximum_risk is None:
+        raise RuntimeConfigurationError(
+            "Production Actions require explicit capability, effect, and risk ceilings.",
+            details={"reason": "production_actions_ceiling_incomplete"},
+        )
+    fields = {
+        "action_store_path": "action_store_path",
+        "action_store_secret": "action_store_secret_ref",
+        "action_store_salt": "action_store_salt_ref",
+        "session_vault_path": "session_vault_path",
+        "session_vault_key": "session_vault_key_ref",
+        "session_vault_salt": "session_vault_salt_ref",
+        "approval_path": "approval_db_path",
+        "approval_secret": "approval_secret_ref",
+        "approval_salt": "approval_salt_ref",
+        "audit_path": "audit_db_path",
+        "audit_secret": "audit_secret_ref",
+        "audit_salt": "audit_salt_ref",
+    }
+    configured = {
+        field: cast(str | None, getattr(arguments, attribute, None))
+        for field, attribute in fields.items()
+    }
+    if any(value is None for value in configured.values()):
+        raise RuntimeConfigurationError(
+            "Production Actions require complete Store, session vault, approval, "
+            "and audit SQLite configuration.",
+            details={"reason": "production_actions_configuration_incomplete"},
+        )
+    values = cast(dict[str, str], configured)
+    references = {key: value for key, value in values.items() if not key.endswith("_path")}
+    production_operator_ref = cast(
+        str | None,
+        getattr(arguments, "production_action_operator_secret_ref", None),
+    )
+    if production_operator_ref is not None:
+        references["production_operator_secret"] = production_operator_ref
+    try:
+        resolved = _resolve_independent_cli_secrets(references)
+        paths = [str(Path(values[key]).resolve()) for key in fields if key.endswith("_path")]
+        if len(set(paths)) != len(paths):
+            raise ValueError("production SQLite databases must use distinct paths")
+        store = SQLiteActionStore(
+            values["action_store_path"],
+            operator_secret=resolved["action_store_secret"],
+            deployment_salt=resolved["action_store_salt"].get_secret_value().encode("utf-8"),
+        )
+        authority = SQLiteApprovalAuthority(
+            values["approval_path"],
+            authority_secret=resolved["approval_secret"],
+            deployment_salt=resolved["approval_salt"].get_secret_value().encode("utf-8"),
+        )
+        audit_sink = SQLiteActionAuditSink(
+            values["audit_path"],
+            operator_secret=resolved["audit_secret"],
+            deployment_salt=resolved["audit_salt"].get_secret_value().encode("utf-8"),
+        )
+        vault = GatewaySessionVaultConfig(
+            db_path=values["session_vault_path"],
+            kek=resolved["session_vault_key"],
+            deployment_salt=resolved["session_vault_salt"].get_secret_value().encode("utf-8"),
+        )
+    except (TypeError, ValueError, OSError, LookupError):
+        raise RuntimeConfigurationError(
+            "Production Action SQLite configuration is invalid.",
+            details={"reason": "production_actions_configuration_invalid"},
+        ) from None
+    policy = DeploymentPolicy(
+        allowed_effects=frozenset(cast(Any, effects)),
+        max_risk=cast(Any, maximum_risk),
+        capability_allowlist=frozenset(capabilities),
+        require_durable_action_store=True,
+        action_audit_mode="required",
+        action_sandbox_mode="disabled",
+    )
+    dependencies = ActionRuntimeDependencies(
+        deployment_policy=policy,
+        store=store,
+        approval_authority=authority,
+        audit_sink=audit_sink,
+        audit_salt=hashlib.sha256(
+            b"acc-action-audit-pseudonym-v1\0"
+            + resolved["audit_salt"].get_secret_value().encode("utf-8")
+        ).digest(),
+    )
+    dependencies.validate_production(session_vault=vault)
+    return (
+        dependencies,
+        {
+            "actions": {
+                "mode": "production_single_node",
+                "store": "sqlite",
+                "store_durable": True,
+                "approval_authority": "sqlite_durable",
+                "audit": "sqlite_durable_required",
+                "allowed_capabilities": sorted(policy.capability_allowlist or ()),
+                "allowed_effects": sorted(policy.allowed_effects),
+                "max_risk": policy.max_risk,
+            },
+            "session_vault": {"mode": "sqlite_single_node", "durable": True},
+        },
+        vault,
+    )
+
+
+def _development_operator_approval(
+    arguments: argparse.Namespace,
+) -> tuple[Any | None, dict[str, object]]:
+    from acc_runtime.credentials import SecretRef, resolve_secret
+    from acc_runtime.gateway.operator import (
+        OPERATOR_APPROVAL_BODY_LIMIT,
+        LocalDevelopmentOperatorApprovalConfig,
+    )
+    from acc_runtime.runtime import RuntimeConfigurationError
+
+    enabled = bool(getattr(arguments, "development_action_operator_approval", False))
+    reference = cast(str | None, getattr(arguments, "action_operator_secret_ref", None))
+    if not enabled:
+        if reference is not None:
+            raise RuntimeConfigurationError(
+                "Operator SecretRef requires explicit development operator approval.",
+                details={"reason": "operator_approval_opt_in_required"},
+            )
+        return None, {}
+    if not bool(getattr(arguments, "development_actions", False)) or reference is None:
+        raise RuntimeConfigurationError(
+            "Development operator approval requires --development-actions and a SecretRef.",
+            details={"reason": "operator_approval_configuration_incomplete"},
+        )
+    try:
+        checked_ref = SecretRef(reference)
+        secret = resolve_secret(checked_ref, os.environ)
+        config = LocalDevelopmentOperatorApprovalConfig(
+            secret=secret,
+            secret_ref=reference,
+        )
+    except (TypeError, ValueError):
+        raise RuntimeConfigurationError(
+            "Development operator approval SecretRef is invalid or unavailable.",
+            details={"reason": "operator_approval_secret_invalid"},
+        ) from None
+    return config, {
+        "operator_approval": {
+            "mode": "local_development_loopback_only",
+            "path": "/operator/actions/approve",
+            "secret_ref": reference,
+            "request_body_limit": OPERATOR_APPROVAL_BODY_LIMIT,
+        }
+    }
+
+
+def _production_operator_approval(
+    arguments: argparse.Namespace,
+) -> tuple[Any | None, dict[str, object]]:
+    from acc_runtime.credentials import SecretRef, resolve_secret
+    from acc_runtime.gateway.operator import (
+        OPERATOR_APPROVAL_BODY_LIMIT,
+        ProductionOperatorApprovalConfig,
+    )
+    from acc_runtime.runtime import RuntimeConfigurationError
+
+    enabled = bool(getattr(arguments, "production_action_operator_approval", False))
+    reference = cast(
+        str | None,
+        getattr(arguments, "production_action_operator_secret_ref", None),
+    )
+    if not enabled:
+        if reference is not None:
+            raise RuntimeConfigurationError(
+                "Production operator SecretRef requires explicit operator approval.",
+                details={"reason": "production_operator_opt_in_required"},
+            )
+        return None, {}
+    if (
+        not bool(getattr(arguments, "production_actions", False))
+        or reference is None
+        or bool(getattr(arguments, "development_action_operator_approval", False))
+        or getattr(arguments, "action_operator_secret_ref", None) is not None
+    ):
+        raise RuntimeConfigurationError(
+            "Production operator approval requires production Actions "
+            "and an independent SecretRef.",
+            details={"reason": "production_operator_configuration_incomplete"},
+        )
+    existing_refs = [
+        cast(str, value)
+        for name in (
+            "action_store_secret_ref",
+            "action_store_salt_ref",
+            "session_vault_key_ref",
+            "session_vault_salt_ref",
+            "approval_secret_ref",
+            "approval_salt_ref",
+            "audit_secret_ref",
+            "audit_salt_ref",
+        )
+        if (value := getattr(arguments, name, None)) is not None
+    ]
+    try:
+        if reference in existing_refs or len(existing_refs) != len(set(existing_refs)):
+            raise ValueError
+        checked_ref = SecretRef(reference)
+        secret = resolve_secret(checked_ref, os.environ)
+        existing_values = [
+            resolve_secret(SecretRef(item), os.environ).get_secret_value() for item in existing_refs
+        ]
+        if secret.get_secret_value() in existing_values or len(existing_values) != len(
+            set(existing_values)
+        ):
+            raise ValueError
+        config = ProductionOperatorApprovalConfig(secret=secret, secret_ref=reference)
+    except (TypeError, ValueError, LookupError):
+        raise RuntimeConfigurationError(
+            "Production operator approval SecretRef is invalid, unavailable, or reused.",
+            details={"reason": "production_operator_secret_invalid"},
+        ) from None
+    return config, {
+        "operator_approval": {
+            "mode": "production_loopback_process_bound",
+            "path": "/operator/actions/approve",
+            "request_body_limit": OPERATOR_APPROVAL_BODY_LIMIT,
+            "restart_behavior": "prepared_actions_must_be_reprepared",
+        }
+    }
 
 
 def _render(envelope: ResultEnvelope, *, json_output: bool) -> None:

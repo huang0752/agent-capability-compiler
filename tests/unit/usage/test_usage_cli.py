@@ -15,6 +15,7 @@ from acc_core.cli.main import EXIT_INPUT, EXIT_SUCCESS, main
 from acc_core.cli.usage import handle_usage_command
 from acc_core.usage.models import DomainUsageIndex
 from acc_core.usage.project import UsageProjectReport
+from fs_links import create_link
 
 FIXTURE = Path(__file__).parents[2] / "fixtures" / "usage" / "finance"
 
@@ -75,7 +76,7 @@ def test_usage_init_rejects_nonempty_and_symlink_destinations(
     real = tmp_path / "real"
     real.mkdir()
     linked = tmp_path / "linked"
-    linked.symlink_to(real, target_is_directory=True)
+    create_link(linked, real, target_is_directory=True)
     assert main(["usage", "init", str(linked), "--json"]) == EXIT_INPUT
     assert _payload(capsys)["diagnostics"][0]["code"] == "ACC_USAGE_PROJECT_SYMLINK"  # type: ignore[index]
 
@@ -200,8 +201,9 @@ def test_usage_scan_check_validates_prerequisites_and_manifest_without_writing(
     after = _file_snapshot(project)
     assert after == before
 
-    (project / "usage-evidence" / "client" / "broken.json").symlink_to(
-        project / "missing-evidence.json"
+    create_link(
+        project / "usage-evidence" / "client" / "broken.json",
+        project / "missing-evidence.json",
     )
     assert (
         main(

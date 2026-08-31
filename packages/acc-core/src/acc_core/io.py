@@ -13,6 +13,12 @@ import yaml
 DEFAULT_MAX_FILE_BYTES = 1_048_576
 
 
+def is_path_link(path: Path) -> bool:
+    """Return true for symbolic links and Windows directory junctions."""
+
+    return path.is_symlink() or bool(getattr(path, "is_junction", lambda: False)())
+
+
 class ProjectIOError(Exception):
     """Base class for explicit failures while reading an ACC project file."""
 
@@ -116,7 +122,7 @@ def _relative_path_text(relative_path: str | os.PathLike[str]) -> str:
 
 def _resolved_project_root(project_root: str | os.PathLike[str]) -> tuple[Path, Path]:
     root = Path(project_root)
-    if root.is_symlink():
+    if is_path_link(root):
         raise ProjectSymlinkError("project root cannot be a symbolic link", path=".")
     try:
         resolved_root = root.resolve(strict=True)
@@ -140,7 +146,7 @@ def resolve_project_path(
     candidate = root
     for part in relative.parts:
         candidate = candidate / part
-        if candidate.is_symlink():
+        if is_path_link(candidate):
             raise ProjectSymlinkError(
                 f"symbolic links are forbidden in project file paths: {relative_text}",
                 path=relative_text,
