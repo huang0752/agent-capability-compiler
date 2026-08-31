@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
@@ -56,7 +58,8 @@ def test_project_v2_requires_an_explicit_quality_profile() -> None:
 
 def test_project_provider_accepts_a_json_pointer_application_success_contract() -> None:
     document = _project()
-    document["provider"]["application_success"] = {
+    provider = cast(dict[str, object], document["provider"])
+    provider["application_success"] = {
         "kind": "json_pointer",
         "pointer": "/code",
         "allowed_values": [200, "OK", True, None],
@@ -84,7 +87,8 @@ def test_project_provider_rejects_invalid_application_success_values(
     allowed_values: list[object],
 ) -> None:
     document = _project()
-    document["provider"]["application_success"] = {
+    provider = cast(dict[str, object], document["provider"])
+    provider["application_success"] = {
         "kind": "json_pointer",
         "pointer": "/code",
         "allowed_values": allowed_values,
@@ -96,7 +100,8 @@ def test_project_provider_rejects_invalid_application_success_values(
 
 def test_application_success_values_use_type_exact_uniqueness() -> None:
     document = _project()
-    document["provider"]["application_success"] = {
+    provider = cast(dict[str, object], document["provider"])
+    provider["application_success"] = {
         "kind": "json_pointer",
         "pointer": "/code",
         "allowed_values": [1, True, 1.0],
@@ -104,7 +109,9 @@ def test_application_success_values_use_type_exact_uniqueness() -> None:
 
     project = ProjectV2.model_validate(document)
 
-    values = project.provider.application_success.allowed_values
+    application_success = project.provider.application_success
+    assert isinstance(application_success, JsonPointerApplicationSuccessConfig)
+    values = application_success.allowed_values
     assert [(type(value), value) for value in values] == [
         (int, 1),
         (bool, True),

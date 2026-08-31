@@ -256,7 +256,8 @@ def test_compiler_carries_provider_application_success_into_ir(tmp_path: Path) -
     report = compile_project(project)
 
     assert report.ir is not None, report.diagnostics
-    assert report.ir["project"]["provider"]["application_success"] == {
+    ir = cast(dict[str, Any], report.ir)
+    assert ir["project"]["provider"]["application_success"] == {
         "kind": "json_pointer",
         "pointer": "/code",
         "allowed_values": [200],

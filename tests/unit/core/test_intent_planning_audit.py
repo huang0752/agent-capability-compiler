@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 from pathlib import Path
+from typing import Any, cast
 
 import yaml
 from pydantic import TypeAdapter
@@ -82,7 +83,7 @@ def _inputs() -> tuple[
     dict[str, Capability],
     dict[str, CapabilityQuality],
 ]:
-    capability = TypeAdapter(Capability).validate_python(
+    capability: Capability = TypeAdapter(Capability).validate_python(
         _load("capabilities/content.transition.yaml")
     )
     quality = CapabilityQuality.model_validate(_load("capability-quality/content.transition.yaml"))
@@ -140,7 +141,7 @@ def test_audit_fails_closed_when_any_discovered_route_is_unassigned() -> None:
 
 def test_merge_requires_every_conflicting_permission_evidence_ref() -> None:
     scope, _ledger, domain_map, capabilities, qualities = _inputs()
-    ledger_document = copy.deepcopy(_load("capability-candidates.yaml"))
+    ledger_document = cast(dict[str, Any], copy.deepcopy(_load("capability-candidates.yaml")))
     alternate = copy.deepcopy(ledger_document["candidates"][0])
     alternate["id"] = "content.transition.secondary"
     alternate["claims"]["authorization_boundary"]["evidence_refs"] = [

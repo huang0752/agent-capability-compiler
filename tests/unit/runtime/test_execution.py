@@ -227,7 +227,7 @@ async def test_executor_evaluates_composed_safe_branch_conditions(
 ) -> None:
     reference = {"kind": "reference", "value": "$.input.include"}
     truth = {"kind": "literal", "value": True}
-    workflow = [
+    workflow: list[dict[str, Any]] = [
         {
             "id": "selected",
             "branch": {
@@ -273,7 +273,7 @@ async def test_executor_evaluates_composed_safe_branch_conditions(
 
 @pytest.mark.asyncio
 async def test_executor_fails_closed_when_in_values_is_not_an_array() -> None:
-    workflow = [
+    workflow: list[dict[str, Any]] = [
         {
             "id": "selected",
             "branch": {

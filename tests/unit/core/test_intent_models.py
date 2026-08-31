@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from typing import cast
 
 import pytest
 from pydantic import ValidationError
@@ -63,7 +64,7 @@ def test_intent_plan_accepts_blocked_read_without_prescribing_a_tool_count() -> 
     )
 
     assert plan.intents[0].recommendation == "blocked_on_evidence"
-    properties = schema_for("intent-plan")["properties"]
+    properties = cast(dict[str, object], schema_for("intent-plan")["properties"])
     assert "target_tool_count" not in properties
     assert "portfolio_projection" not in properties
 
@@ -90,7 +91,8 @@ def test_publishable_action_requires_closed_safety_and_capability_binding() -> N
     assert plan.intents[0].action_safety is not None
 
     unsafe = copy.deepcopy(action)
-    unsafe["action_safety"]["idempotency"] = {
+    unsafe_safety = cast(dict[str, object], unsafe["action_safety"])
+    unsafe_safety["idempotency"] = {
         "status": "missing",
         "rationale": "No source key.",
         "evidence_refs": [],
@@ -99,7 +101,8 @@ def test_publishable_action_requires_closed_safety_and_capability_binding() -> N
         IntentPlan.model_validate({"schema_version": "2", "intents": [unsafe], "relationships": []})
 
     unsafe = copy.deepcopy(action)
-    unsafe["action_safety"]["approval"] = {
+    unsafe_safety = cast(dict[str, object], unsafe["action_safety"])
+    unsafe_safety["approval"] = {
         "status": "not_applicable",
         "rationale": "No approval is claimed to be necessary.",
         "evidence_refs": [],
@@ -166,7 +169,11 @@ def test_shared_route_requires_an_explicit_relationship() -> None:
 
 
 def test_intent_plan_is_strict_and_deterministically_ordered() -> None:
-    document = {"schema_version": "2", "intents": [_blocked_read()], "relationships": []}
+    document: dict[str, object] = {
+        "schema_version": "2",
+        "intents": [_blocked_read()],
+        "relationships": [],
+    }
     document["target_tool_count"] = 15
     with pytest.raises(ValidationError, match="Extra inputs"):
         IntentPlan.model_validate(document)

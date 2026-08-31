@@ -49,6 +49,9 @@ class FakeSessionService:
         self.closed = False
         self.created = 0
 
+    async def startup(self) -> None:
+        return
+
     async def create_session(self, *, identity: str, password: str) -> SessionCreateResponse:
         if password != "correct-password" or identity not in {"a", "b", "c"}:
             raise ValueError("login failed")

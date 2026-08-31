@@ -711,16 +711,18 @@ async def test_reauth_wins_at_gateway_tie_but_expires_after_tie(
         clock=clock,
         token_generator=lambda: "a" * 43,
     )
-    source_arguments: dict[str, float] = {}
+    source_expires_at: float | None = None
+    source_refresh_at: float | None = None
     if boundary_kind == "expiry":
-        source_arguments["source_expires_at"] = 105.0
+        source_expires_at = 105.0
     elif boundary_kind == "refresh":
-        source_arguments["source_refresh_at"] = 105.0
-        source_arguments["source_expires_at"] = 110.0
+        source_refresh_at = 105.0
+        source_expires_at = 110.0
     token, _ = await store.create(
         session_id="session-a",
         principal_context=_context("a", "session-a"),
-        **source_arguments,
+        source_expires_at=source_expires_at,
+        source_refresh_at=source_refresh_at,
     )
     clock.value = 105.0
     if boundary_kind == "manual":

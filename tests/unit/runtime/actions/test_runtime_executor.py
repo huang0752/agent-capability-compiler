@@ -429,9 +429,10 @@ def _source_key_outcome_ir() -> dict[str, Any]:
         },
         "required": ["idempotency_key", "tenant_id"],
     }
-    status_document["http"]["path"] = "/action-outcomes/{idempotency_key}"
-    status_document["http"]["path_parameters"] = {"idempotency_key": "idempotency_key"}
-    status_document["http"]["query_parameters"] = {"tenant": "tenant_id"}
+    status_http = cast(dict[str, object], status_document["http"])
+    status_http["path"] = "/action-outcomes/{idempotency_key}"
+    status_http["path_parameters"] = {"idempotency_key": "idempotency_key"}
+    status_http["query_parameters"] = {"tenant": "tenant_id"}
     ir["operations"]["orders.outcome"] = status_document
     capability = ActionCapabilityV2.model_validate(
         ir["capabilities"]["orders.change"]["definition"]
@@ -977,7 +978,7 @@ async def test_local_development_guard_over_real_http_serializes_and_rechecks() 
                     self.send_response(503)
                     self.end_headers()
                     return
-                body = {
+                body: dict[str, JsonValue] = {
                     "order_id": "order-1",
                     "status": self.state,
                     "version": 3,
@@ -991,7 +992,7 @@ async def test_local_development_guard_over_real_http_serializes_and_rechecks() 
             with self.state_lock:
                 type(self).post_count += 1
                 type(self).state = "approved"
-                body = {
+                body: dict[str, JsonValue] = {
                     "order_id": "order-1",
                     "status": "approved",
                     "version": 4,

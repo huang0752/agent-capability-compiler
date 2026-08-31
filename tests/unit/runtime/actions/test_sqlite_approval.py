@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -58,8 +59,10 @@ def test_authority_requires_explicit_strong_distinct_material(tmp_path: Path) ->
     with pytest.raises(ValueError, match="at least 32"):
         SQLiteApprovalAuthority(path, authority_secret=SecretValue("short"), deployment_salt=SALT)
     with pytest.raises(TypeError, match="SecretValue"):
-        SQLiteApprovalAuthority(  # type: ignore[arg-type]
-            path, authority_secret=b"not-a-secret-value-at-all-00000000", deployment_salt=SALT
+        SQLiteApprovalAuthority(
+            path,
+            authority_secret=cast(Any, b"not-a-secret-value-at-all-00000000"),
+            deployment_salt=SALT,
         )
     with pytest.raises(ValueError, match="at least 16"):
         SQLiteApprovalAuthority(path, authority_secret=SECRET, deployment_salt=b"short")

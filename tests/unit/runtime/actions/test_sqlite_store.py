@@ -20,7 +20,7 @@ from acc_runtime.actions import (
     PreparedActionStatus,
     SQLiteActionStore,
 )
-from fs_links import create_link  # type: ignore[import-not-found]
+from fs_links import create_link
 
 PACK_DIGEST = "sha256:" + "a" * 64
 SECRET = b"operator-secret-for-sqlite-tests-32-bytes"

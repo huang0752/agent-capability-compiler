@@ -892,7 +892,8 @@ def test_run_json_dispatches_v2_stdio_pack_with_scope_analysis(
 
     runtime = _FakeRuntime()
     project = _v2_project(transport="stdio")
-    project["provider"]["application_success"] = {
+    provider = cast(dict[str, object], project["provider"])
+    provider["application_success"] = {
         "kind": "json_pointer",
         "pointer": "/code",
         "allowed_values": [200],

@@ -79,6 +79,9 @@ class _SessionService:
         self.store = store
         self.counts: dict[str, int] = {}
 
+    async def startup(self) -> None:
+        return
+
     async def create_session(self, *, identity: str, password: str) -> SessionCreateResponse:
         if identity not in {"a", "b"} or password != "correct-password":
             raise ValueError("login failed")

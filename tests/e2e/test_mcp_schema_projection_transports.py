@@ -169,6 +169,9 @@ class _SessionService:
     def __init__(self, store: InMemoryGatewaySessionStore) -> None:
         self.store = store
 
+    async def startup(self) -> None:
+        return
+
     async def create_session(self, *, identity: str, password: str) -> SessionCreateResponse:
         assert identity == "schema-user"
         assert password == "schema-password"
